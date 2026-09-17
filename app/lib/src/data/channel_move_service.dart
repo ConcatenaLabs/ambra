@@ -224,18 +224,21 @@ class ChannelMoveService {
       return started;
     }
 
-    ChannelJob job;
-    if ((record.pollPath ?? '').isEmpty) {
-      job = await issue();
-    } else {
+    // Where this move stands right now: poll the job we recorded, ask for one if we never got a job
+    // id, and ask again if the id we have turns out to be unknown. A single expression, so `job` is
+    // never a conditionally-assigned local.
+    Future<ChannelJob> firstJob() async {
+      if ((record.pollPath ?? '').isEmpty) return issue();
       try {
-        job = await LspClient.channelOpenPoll(record.pollPath!);
+        return await LspClient.channelOpenPoll(record.pollPath!);
       } catch (e) {
         if (!isUnknownJob(e)) rethrow;
         storeLog('channel move: ${record.id} job is gone - re-issuing /channel/open');
-        job = await issue();
+        return issue();
       }
     }
+
+    var job = await firstJob();
 
     final startedAt = DateTime.now();
     final deadline = startedAt.add(watchWindow);
