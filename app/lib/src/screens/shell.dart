@@ -8,6 +8,7 @@ import '../rust/api.dart' as core;
 import '../data/api_client.dart';
 import '../data/asset_picker.dart';
 import '../data/btc_state.dart';
+import '../data/channel_move_service.dart';
 import '../data/config.dart';
 import '../data/descriptor.dart';
 import '../data/format.dart';
@@ -73,6 +74,10 @@ class _ShellState extends State<Shell> {
     final m = await WalletRepository.instance.readMnemonic();
     if (m == null) return;
     await LightningService.instance.start(m);
+    // Finish any Move to Lightning whose deposit already landed: the funds are ON the user's hosted
+    // node with no channel, and before this there was no record that one was owed — the sheet polled
+    // for four minutes, said "check back shortly" and forgot. Re-drives from the persisted record.
+    unawaited(ChannelMoveService.resume());
     // Fund-recovery on cold start: resume any in-flight sub-asset swap so a locked BTC HTLC settles or
     // refunds (BUY) and an unclaimed BTC gets re-claimed (SELL) even if the user never re-opens Swap.
     // Fire-and-forget: each loads its own persisted record and no-ops when there is nothing to resume.
@@ -731,13 +736,6 @@ class _LnActionButton extends StatelessWidget {
   }
 }
 
-/// Human-readable channel-open phase copy for the Move-to-Lightning progress line.
-const Map<String, String> _movePhaseCopy = {
-  'pending_deposit': 'Waiting for the deposit to confirm on-chain…',
-  'opening': 'Opening the Lightning channel (your device is co-signing)…',
-  'awaiting_lockin': 'Channel funding broadcast; waiting for it to confirm…',
-};
-
 void _showMoveDialog(BuildContext context, _Leg leg, VoidCallback? onChanged) {
   showModalBottomSheet<void>(
     context: context,
@@ -809,6 +807,9 @@ class _MoveSheetState extends State<_MoveSheet> {
   final _amount = TextEditingController();
   bool _busy = false;
   bool _done = false;
+  /// Set once the deposit is broadcast AND persisted: from that point the move is finishable
+  /// without this sheet, so closing it abandons nothing and the ghost button says so.
+  bool _leaveable = false;
   String? _status;
   String? _error;
 
@@ -852,27 +853,26 @@ class _MoveSheetState extends State<_MoveSheet> {
       final addr = await LspClient.channelDeposit(chain: leg.chain, asset: leg.asset, node: nodeKey);
       _say('Signing and sending the on-chain deposit…');
       await _sendChannelDeposit(m, leg, atoms, addr);
-      _say('Opening the Lightning channel (your device is co-signing)…');
-      var job = await LspClient.channelOpen(chain: leg.chain, amount: atoms.toInt(), asset: leg.asset, node: nodeKey);
-      var pollErrs = 0;
-      for (var i = 0; i < 120 && !job.isActive && !job.isFailed; i++) {
-        await Future<void>.delayed(const Duration(seconds: 2));
-        final poll = job.poll ?? job.jobId;
-        if (poll == null) break;
-        try {
-          job = await LspClient.channelOpenPoll(poll);
-          pollErrs = 0; // a good poll clears the transient-error streak
-          final copy = _movePhaseCopy[job.status];
-          if (copy != null) _say(copy);
-        } catch (e) {
-          // The on-chain deposit already landed; a transient poll blip must NOT fail the whole move
-          // (the channel keeps opening server-side). Tolerate a bounded streak — mirrors the web's
-          // fundChannel maxPollErrors=24 — then surface the error so the user can retry/resume.
-          if (++pollErrs > 24) rethrow;
-        }
-      }
-      if (job.isFailed) throw Exception(job.error ?? 'the channel could not be opened');
-      if (!job.isActive) throw Exception('the channel is still opening; check back shortly');
+      // The deposit is now on the hosted node, so a channel is OWED. Write that down BEFORE asking
+      // for it: from here on the move is finishable by ChannelMoveService.resume() even if this
+      // sheet is closed or the app is killed, and re-asking never re-deposits (the LSP funds from
+      // the balance already on the node and adopts an opening channel rather than opening a second).
+      final rec = ChannelMove(
+        id: ChannelMoveService.idFor(nodeKey),
+        chain: leg.chain,
+        asset: leg.asset,
+        ticker: leg.ticker,
+        amountAtoms: atoms.toString(),
+        nodeKey: nodeKey,
+        pollPath: null,
+        startedMs: DateTime.now().millisecondsSinceEpoch,
+      );
+      await ChannelMoveStore.put(rec);
+      if (mounted) setState(() => _leaveable = true);
+      // The poll now lives in the service, on the server's own timescale. It used to run here for
+      // 120 * 2s and then report "the channel is still opening; check back shortly" — a four-minute
+      // verdict on an hour-long watch, for a deposit that confirms in the next block.
+      final job = await ChannelMoveService.drive(rec, onStep: _say);
       if (mounted) {
         setState(() {
           _done = true;
@@ -911,12 +911,27 @@ class _MoveSheetState extends State<_MoveSheet> {
             Padding(padding: const EdgeInsets.only(bottom: 10), child: Text(_error!, style: const TextStyle(color: AmbraColors.red)))
           else if (_status != null)
             Padding(padding: const EdgeInsets.only(bottom: 10), child: Text(_status!, style: AmbraText.sub)),
+          if (_leaveable && !_done)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 10),
+              child: Text(
+                'Your deposit is on your node. You can leave this screen — the channel keeps opening, '
+                'and Ambra picks it up again if you close the app.',
+                style: AmbraText.sub,
+              ),
+            ),
           if (_done)
             PrimaryButton(label: 'Done', onPressed: () => Navigator.pop(context))
           else ...[
             PrimaryButton(label: 'Move to Lightning', icon: Icons.bolt, busy: _busy, onPressed: _busy ? null : _move),
             const SizedBox(height: 6),
-            GhostButton(label: 'Cancel', onPressed: _busy ? null : () => Navigator.pop(context)),
+            // Cancel stays blocked only while the deposit is still being built and signed — there is
+            // genuinely nothing to come back to yet. Once it is broadcast and written down, closing the
+            // sheet is safe, so the button stops pretending otherwise.
+            GhostButton(
+              label: _leaveable ? 'Leave it running' : 'Cancel',
+              onPressed: (_busy && !_leaveable) ? null : () => Navigator.pop(context),
+            ),
           ],
         ]),
       ),
