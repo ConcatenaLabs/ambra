@@ -456,11 +456,7 @@ class _PoolSectionState extends State<_PoolSection> {
         final txid = await core.xchainSeqBroadcast(seqEsplora: Backend.esplora, txHex: raw);
         _snack('Moving pool · ${txid.substring(0, 16)}…');
       } else {
-        final txid = await authorizeBuildBroadcast((m) => core.buildDelegateTx(
-              mnemonic: m,
-              esploraUrl: Backend.esplora,
-              signerPubkey: target,
-            ));
+        final txid = await _join(target);
         _snack('Delegated · ${txid.substring(0, 16)}…');
       }
       await _load();
@@ -469,6 +465,26 @@ class _PoolSectionState extends State<_PoolSection> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// A first delegation. The network accepts a record only from a transaction
+  /// spending a coin of the staking key, so a join is the wallet's payment to
+  /// that key, signed like any payment, and the record created from the coin;
+  /// the core broadcasts both. A coin already at the staking key (a join whose
+  /// record never went out) is used instead of a new payment.
+  Future<String> _join(String target) async {
+    final ok = await WalletRepository.instance.requirePaymentAuth();
+    if (!ok) throw Exception('Authentication failed or cancelled.');
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m == null) throw Exception('wallet unavailable');
+    final resumed = await core.delegateWithKeyCoin(
+        mnemonic: m, esploraUrl: Backend.esplora, signerPubkey: target);
+    if (resumed != null) return resumed;
+    final pset = await core.buildDelegateTx(
+        mnemonic: m, esploraUrl: Backend.esplora, signerPubkey: target);
+    final signed = await core.signPset(mnemonic: m, pset: pset);
+    return core.broadcastDelegation(
+        mnemonic: m, esploraUrl: Backend.esplora, pset: signed, signerPubkey: target);
   }
 
   Future<void> _leave() async {

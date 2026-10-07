@@ -160,6 +160,13 @@ Generated bindings live in `app/lib/src/rust/`; the Rust source of truth is
 - Assets/staking: `build_issue_tx`, `build_reissue_tx`, `build_burn_tx`,
   `staker_public_key`, `build_stake_tx` (enforces the 40,000 tSEQ minimum and a
   time-based CSV of ~15 days).
+- Staking pools (chain-independent logic in `ambra_core/src/staking.rs`):
+  `build_delegate_tx` (the wallet pays its staking key m/2/0 a record's value
+  and fee) then `broadcast_delegation` (creates the record from that coin and
+  broadcasts both), `delegate_with_key_coin` (finishes a join whose record never
+  went out, from the coin its payment left at the staking key), `find_delegation`, `build_delegation_spend` (move or leave,
+  signed the way the next block's height requires; refuses when the chain tip
+  cannot be read).
 - Bitcoin (testnet4) wallet: `btc_sync`, `btc_prepare`, `btc_broadcast`.
 - SeqDEX same-chain swap: `seqdex_build_swap_request`, `seqdex_sign_accept`.
 - Cross-chain BTC->asset HTLC: `xchain_new_secret`, `xchain_seq_claim_pubkey`,

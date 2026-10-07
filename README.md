@@ -268,9 +268,14 @@ cargo test --test smoke --test signer_conformance
 
 # Network tests (hit the live public testnet; run explicitly)
 cargo test --test sync -- --nocapture
+
+# Staking pools against a local sequentiad on a private elementsregtest chain:
+# join, move and leave confirmed in blocks, wrong signatures refused by a block
+SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocapture
 ```
 
-A bare `cargo test` runs the network tests too, so prefer the explicit forms offline.
+A bare `cargo test` runs the network tests too, and fails `stake_records` unless
+`SEQUENTIAD_EXEC` is set, so prefer the explicit forms.
 
 Flutter (from `app/`):
 

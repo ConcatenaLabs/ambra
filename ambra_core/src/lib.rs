@@ -21,6 +21,9 @@ pub mod api;
 // implementation; api/mod.rs calls into it directly.
 /// SeqDEX same-chain atomic swap helpers (JSON serializer + bip32 strip).
 mod seqdex;
+/// Staking pools on any Sequentia chain: join, find, move and leave a
+/// delegation record. `api` wraps it for the testnet.
+pub mod staking;
 /// SeqOB passive-CLOB covenant DERIVATION (port of covenant.js: leaves, taptree,
 /// planFill, ceilPrice, rate math) — pinned to SWK's golden vectors.
 pub mod seqob_covenant_derive;

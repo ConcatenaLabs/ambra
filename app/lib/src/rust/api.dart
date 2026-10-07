@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_fee_and_finish`, `base64_encode`, `btc_params`, `clear_scan_marks`, `ct_str`, `ct_u64`, `delegation_scripthash`, `derive_maker_payout`, `derive_maker_secret`, `enclave_prevout_to_txout`, `enclave_prevouts_to_txouts`, `enclave_sighash_inner`, `err`, `esplora_client`, `fetch_utxo`, `hexbytes`, `hexstr_bytes`, `last_scan`, `maker_identity_priv`, `mark_scanned`, `openamp_keypair`, `order_from_terms`, `outpoint_is_spent`, `parse_openamp_tx`, `priv32`, `recoverable_signature`, `rerr`, `scan_into`, `scanned_recently`, `scripthash_utxos`, `select_taker_inputs`, `seq_addr_params`, `staker_secret`, `tip_height`, `tohex`, `with_synced_wollet`, `wollet_cache`
+// These functions are ignored because they are not marked as `pub`: `apply_fee_and_finish`, `base64_encode`, `btc_params`, `clear_scan_marks`, `controller_and_signer`, `ct_str`, `ct_u64`, `derive_maker_payout`, `derive_maker_secret`, `enclave_prevout_to_txout`, `enclave_prevouts_to_txouts`, `enclave_sighash_inner`, `err`, `esplora_client`, `fetch_utxo`, `fresh_unblinded_spk`, `hexbytes`, `hexstr_bytes`, `last_scan`, `maker_identity_priv`, `mark_scanned`, `openamp_keypair`, `order_from_terms`, `parse_openamp_tx`, `priv32`, `recoverable_signature`, `rerr`, `scan_into`, `scanned_recently`, `select_taker_inputs`, `seq_addr_params`, `tohex`, `with_synced_wollet`, `wollet_cache`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 
 /// The active Sequentia network's identifier, e.g. `"sequentia-testnet"`.
@@ -797,9 +797,10 @@ Future<String> buildStakeTx({
   feeAsset: feeAsset,
 );
 
-/// Lend this wallet's stake weight to `signer_pubkey` (33-byte hex) by funding a
-/// delegation record. Returns an unsigned PSET for the normal review-and-sign
-/// flow ([`finalize_and_broadcast`]).
+/// Join a pool, step one: an unsigned PSET in which this wallet pays its
+/// staking key (m/2/0) the record's value and the fee of the transaction that
+/// creates the record, for the normal review-and-sign flow. Hand the signed
+/// PSET to [`broadcast_delegation`], which creates the record from that coin.
 ///
 /// This creates a FIRST delegation. Moving to another pool must spend the old
 /// record and create the new one in one transaction, because consensus permits
@@ -818,26 +819,47 @@ Future<String> buildDelegateTx({
   feeAsset: feeAsset,
 );
 
+/// Join a pool, step two: finalize the signed PSET from [`build_delegate_tx`],
+/// build the record from the coin it pays the staking key, and broadcast both,
+/// the payment first. Returns the record transaction's id.
+///
+/// Nothing is broadcast unless the record can be built. Should the payment go
+/// out and the record not, [`delegate_with_key_coin`] finishes the join from
+/// the coin the payment left at the staking key.
+Future<String> broadcastDelegation({
+  required String mnemonic,
+  required String esploraUrl,
+  required String pset,
+  required String signerPubkey,
+}) => RustLib.instance.api.crateApiBroadcastDelegation(
+  mnemonic: mnemonic,
+  esploraUrl: esploraUrl,
+  pset: pset,
+  signerPubkey: signerPubkey,
+);
+
+/// Finish a join whose record never went out, from the coin its payment left
+/// at the staking key's `P2WPKH`. Returns the record transaction's id, or
+/// `None` when there is no such coin and the join starts with
+/// [`build_delegate_tx`].
+Future<String?> delegateWithKeyCoin({
+  required String mnemonic,
+  required String esploraUrl,
+  required String signerPubkey,
+}) => RustLib.instance.api.crateApiDelegateWithKeyCoin(
+  mnemonic: mnemonic,
+  esploraUrl: esploraUrl,
+  signerPubkey: signerPubkey,
+);
+
 /// This wallet's live delegation, or `None`.
 ///
-/// Two ways of looking, because neither alone is enough:
-///
-///  * the wallet's own history finds the record it FUNDED, since that
-///    transaction spent this wallet's coins. It cannot find one created by a
-///    MOVE: that transaction spends only the old bare record and pays only the
-///    new one, so nothing in it belongs to this wallet and no scan will ever
-///    download it.
-///  * asking the explorer for unspent outputs at the record script, for each
-///    signer worth trying, finds it whatever created it, and survives a restore
-///    onto a device that has never seen any of this.
-///
-/// `probe_signers` is what to try in the second pass: the pool board's signers,
-/// plus any this device has used before. They are a HINT, never a source of
-/// truth -- a pool with no weight and no announced policy is not on the board at
-/// all.
-///
-/// The record is a bare script, so the wallet cannot answer either question by
-/// itself.
+/// Looks in the wallet's own history, in the history of the staking key's
+/// `P2WPKH` (a join's record spends the coin paid there), and asks the explorer
+/// for an unspent record under each of `probe_signers`, in order, which finds
+/// the record a move created. `probe_signers` is a HINT (the pool board's
+/// signers, plus any this device has used before), never a source of truth.
+/// The details are in [`crate::staking::find_delegation_from`].
 Future<DelegationRecord?> findDelegation({
   required String mnemonic,
   required String esploraUrl,
@@ -856,6 +878,9 @@ Future<DelegationRecord?> findDelegation({
 /// Consensus permits at most one live record per staking key, so leaving and
 /// re-joining as two loose transactions could be mined in the order that leaves
 /// two live records, which invalidates the block carrying the second.
+///
+/// The spend is signed for the block after the explorer's tip, which decides
+/// the signature; a tip that cannot be read is a refusal.
 ///
 /// Leaving takes nobody's cooperation and has no notice period: the record's
 /// signature check names this wallet's staking key and nothing else. It does NOT
