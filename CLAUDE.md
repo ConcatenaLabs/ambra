@@ -53,9 +53,12 @@ Tests, from `ambra_core/`:
 ```sh
 cargo test --test smoke --test signer_conformance
 cargo test --test sync -- --nocapture
+SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocapture
 ```
 
-A bare `cargo test` runs the network tests too, so prefer the explicit forms offline.
+A bare `cargo test` runs the network tests too, and fails `stake_records` unless
+`SEQUENTIAD_EXEC` points at a `sequentiad` (it starts one on a private
+`elementsregtest` chain), so prefer the explicit forms.
 
 From `app/`:
 
