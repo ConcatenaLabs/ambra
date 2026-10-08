@@ -14,6 +14,10 @@ pub mod signer;
 /// desktop watching one staker's keys cannot disagree about that staker's coins.
 pub mod rewards;
 
+/// Leaves: join an operator, run the leaf wallet's commands, and the scheduled
+/// job that syncs while the app is closed.
+pub mod leaves;
+
 use std::str::FromStr;
 
 use anyhow::Result;

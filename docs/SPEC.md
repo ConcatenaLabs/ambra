@@ -84,6 +84,13 @@ row per held asset; zero balances are hidden for every asset alike, tSEQ include
 There is no "native asset" label anywhere: the Sequence token (tSEQ) is one row among
 equals, and its only special role is staking.
 
+In developer mode (More > Mode) each row's figure is on-chain plus leaves, with the
+split beneath it: "X on-chain · Y leaves · Z Lightning". BTC's line says it has no
+leaves (a tree on Sequentia holds no BTC). The headline counts leaves as it counts
+on-chain coins. More > Leaves shows the leaf wallet's own view: per asset, each state
+the library names (`live`, `operator-confirmed`, `pending`, …), and the leaf wallet's
+on-chain coins used for boards and exit fees.
+
 ## Navigation
 
 - Onboarding Navigator stack (no bottom bar): Boot > Welcome > {Create: word-grid >
@@ -94,7 +101,8 @@ equals, and its only special role is staking.
   Balance from any tab and only exits from Balance.
 - Swap tab: same-chain SeqDEX composer, plus entries to "Buy with Bitcoin
   (cross-chain)" and, when a hosted LSP is configured, "Instant (Lightning)".
-- More hub: Node (view/change backend), Testnet faucet, Security (app lock),
+- More hub: Node (view/change backend), Testnet faucet, Mode (developer mode, and in
+  it Leaves), Security (app lock),
   Wallet (reveal phrase / remove wallet), Assets & staking (issue/manage assets,
   stake tSEQ).
 - Modals = bottom sheets: review-&-sign, reference-currency picker, fee-asset
@@ -175,6 +183,13 @@ Generated bindings live in `app/lib/src/rust/`; the Rust source of truth is
   `xchain_seq_claim`, `xchain_seq_broadcast`, `xchain_btc_refund`.
 - OpenAMP: `openamp_xonly_pubkey`, `openamp_sign_sighash` (on-device Schnorr signer
   for the enclave's transfer approvals).
+- Leaves (`api/leaves.rs`, logic in `ambra_core/src/leaves.rs`, over the operator's
+  wallet library `bark::arca`): `leaves_exists`, `leaves_join` (create against an
+  operator and node, then restore), `leaves_open`, `leaves_run` (any of the library's
+  commands by name, `bark::arca::command`), `leaves_close`, `leaves_is_open`,
+  `leaves_job` (the scheduled pass: sync, what arrived, when to wake), and
+  `leaves_wake_in`. Answers are the library's JSON; a refusal is its
+  `{"error": {"kind", "message"}}`.
 - Lightning device signer (`api/signer.rs`): `SeqlnSigner` (from mnemonic or
   hsm_secret, `process_frame`, enforce/permissive policy), `NoiseSession`
   (Noise_XK initiator: handshake, encrypt/decrypt), `device_pubkey`,
@@ -183,7 +198,8 @@ Generated bindings live in `app/lib/src/rust/`; the Rust source of truth is
 ## Defaults
 
 Single wallet (mirrors the web wallet); opt-in device biometric/passcode lock;
-foreground + on-resume + pull-to-refresh sync (no push); testnet/faucet cues kept;
+foreground + on-resume + pull-to-refresh sync (no push), and for leaves a sync on the
+library's schedule while the app runs plus a scheduled job while it is closed; testnet/faucet cues kept;
 reference currency defaults to USD. Backend defaults to the public testnet node
 `https://sequentiatestnet.com` and is user-configurable (More > Node, optional HTTP auth);
 endpoints: `/api`, `/testnet4/api`, `/dex`, `/feerates`, `/prices`,
@@ -193,4 +209,4 @@ endpoints: `/api`, `/testnet4/api`, `/dex`, `/feerates`, `/prices`,
 
 - Unstaking/unbonding flow (staking is one-way in the app today).
 - iOS bring-up (scaffold exists; needs a macOS/Xcode machine).
-- Push/background sync.
+- Push/background sync for the on-chain wallet (leaves have their scheduled job).

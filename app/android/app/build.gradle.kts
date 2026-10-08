@@ -79,3 +79,9 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // The leaf wallet's scheduled pass while the app is closed (LeafSyncWorker).
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("androidx.core:core-ktx:1.13.1")
+}
