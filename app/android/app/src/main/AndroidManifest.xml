@@ -4,6 +4,11 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- QR scanning for the send recipient address. -->
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Leaves: a notification when a payment arrives as a leaf, and the foreground
+         service that keeps the leaf wallet syncing while the app runs (LeafSyncService). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <!-- allowBackup=false: trade records (holding swap preimages, the only handle to in-flight
          funds) are mirrored to app-internal files; auto-backup would (a) copy that material off the
          device and (b) restore EncryptedSharedPreferences without the keystore key that encrypted
@@ -47,6 +52,12 @@
                 <data android:scheme="ambra" android:host="oamp-send"/>
             </intent-filter>
         </activity>
+        <!-- Keeps the app's process, and with it the leaf wallet's schedule, alive while
+             the app runs with a leaf wallet open. LeafSyncWorker syncs once it is closed. -->
+        <service
+            android:name=".LeafSyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

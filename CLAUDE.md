@@ -19,7 +19,10 @@ Everything here is testnet. Node and consensus conventions live in the
 
 `ambra_core/Cargo.toml` takes a `path` dependency on `../../seqln/contrib/seqln-signer` and
 carries a `[patch.crates-io]` block redirecting `lwk_common`, `lwk_signer`, `lwk_wollet` and
-`elements` to `../../SWK/`. **SWK and seqln must be checked out as siblings of `ambra/`**, on
+`elements` to `../../SWK/`. The leaf wallet (`src/leaves.rs`) is `arca-wallet` from
+ConcatenaLabs/arca as a git dependency at a pinned revision; a second patch block points the
+kit crates it names from SWK's repository at the same `../../SWK/` checkout. Building it
+needs `protoc`. **SWK and seqln must be checked out as siblings of `ambra/`**, on
 the branches the README names:
 
 ```sh
@@ -54,7 +57,12 @@ Tests, from `ambra_core/`:
 cargo test --test smoke --test signer_conformance
 cargo test --test sync -- --nocapture
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocapture
+AMBRA_LEAVES_HARNESS=http://127.0.0.1:18640 cargo test --test leaves -- --nocapture
 ```
+
+The `leaves` test drives the leaf service against arca's long-running operator harness
+(`bark-cli/tests/arca_operator_for_browsers.rs` in the arca repo); without the variable it
+passes without running.
 
 A bare `cargo test` runs the network tests too, and fails `stake_records` unless
 `SEQUENTIAD_EXEC` points at a `sequentiad` (it starts one on a private

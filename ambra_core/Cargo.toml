@@ -52,6 +52,19 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Leaves (`src/leaves.rs`): the operator's wallet library, `bark::arca` from
+# ConcatenaLabs/arca, linked natively. `arca-core` builds it without a
+# transport of its own: the core registers reqwest (above) as its HTTP, so
+# there is one TLS stack. Its store is SQLite through rusqlite 0.31, built from
+# source for Android (`bundled`). Building it needs `protoc`, as every build
+# of the library does.
+arca-wallet = { git = "https://github.com/ConcatenaLabs/arca", rev = "83e26e610fee65b805c4e02796bd01d97ded1005", default-features = false, features = ["arca-core"] }
+arca-sequentia-ext = { git = "https://github.com/ConcatenaLabs/arca", rev = "83e26e610fee65b805c4e02796bd01d97ded1005", default-features = false }
+rusqlite = { version = "0.31", features = ["bundled"] }
+# The store's lock is flock(2): the standard library's `File::try_lock` is not
+# supported on Android.
+libc = "0.2"
+
 # The lwk_* crates are the unpublished SWK fork and depend on each other (and on
 # `elements`) BY VERSION; these path patches redirect those to the local SWK
 # checkout, and critically point `elements` at SWK's vendored rust-elements that
@@ -62,3 +75,12 @@ lwk_common = { path = "../../SWK/lwk_common" }
 lwk_signer = { path = "../../SWK/lwk_signer" }
 lwk_wollet = { path = "../../SWK/lwk_wollet" }
 elements   = { path = "../../SWK/rust-elements" }
+
+# The arca library names the kit's crates and `elements` from the kit's
+# repository; these point them at the same checkout as above, so the core
+# links one copy of each.
+[patch."https://github.com/ConcatenaLabs/SWK"]
+lwk_common = { path = "../../SWK/lwk_common" }
+lwk_signer = { path = "../../SWK/lwk_signer" }
+elements   = { path = "../../SWK/rust-elements" }
+

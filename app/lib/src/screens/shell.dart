@@ -11,8 +11,10 @@ import '../data/btc_state.dart';
 import '../data/channel_move_service.dart';
 import '../data/config.dart';
 import '../data/descriptor.dart';
+import '../data/dev_mode.dart';
 import '../data/format.dart';
 import '../data/hidden_assets.dart';
+import '../data/leaf_service.dart';
 import '../data/lightning_service.dart';
 import '../data/ln_rail.dart';
 import '../data/lsp_client.dart';
@@ -28,6 +30,7 @@ import '../data/wallet_cache.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
 import '../widgets/ln_cards.dart';
+import 'leaves_screen.dart';
 import '../widgets/restricted_asset_detail.dart';
 import '../widgets/widgets.dart';
 import 'assets_screen.dart';
@@ -60,6 +63,24 @@ class _ShellState extends State<Shell> {
     // Register this wallet's x-only key with the OpenAMP enclave so restricted
     // assets can be held/received/sent. Fails soft if the enclave isn't deployed.
     _initOpenamp();
+    // Developer mode: the leaf wallet opens and syncs on its schedule while the app
+    // runs; turned off, it closes (the scheduled job keeps coins already held alive).
+    DevMode.instance.addListener(_onMode);
+    _onMode();
+  }
+
+  @override
+  void dispose() {
+    DevMode.instance.removeListener(_onMode);
+    super.dispose();
+  }
+
+  void _onMode() {
+    if (DevMode.instance.on) {
+      if (!LeafService.instance.open) unawaited(LeafService.instance.start());
+    } else if (LeafService.instance.open) {
+      unawaited(LeafService.instance.stop());
+    }
   }
 
   Future<void> _initLightning() async {
@@ -160,6 +181,8 @@ class _BalanceTabState extends State<BalanceTab> {
   void initState() {
     super.initState();
     PriceService.instance.addListener(_onPrice);
+    DevMode.instance.addListener(_onPrice);
+    LeafService.instance.addListener(_onPrice);
     // Asset labels can arrive after first paint (network registry); rebuild so
     // rows show the real ticker/precision instead of a hex placeholder.
     RegistryService.instance.addListener(_onPrice);
@@ -193,6 +216,8 @@ class _BalanceTabState extends State<BalanceTab> {
   @override
   void dispose() {
     PriceService.instance.removeListener(_onPrice);
+    DevMode.instance.removeListener(_onPrice);
+    LeafService.instance.removeListener(_onPrice);
     RegistryService.instance.removeListener(_onPrice);
     super.dispose();
   }
@@ -316,7 +341,21 @@ class _BalanceTabState extends State<BalanceTab> {
     // Prefer fresh sync data; fall back to cached balances so a launch shows the
     // last-known values instantly instead of a spinner. tSEQ is not privileged,
     // so a 0 balance is hidden like any other asset's.
-    final balances = _sync?.balances ?? _cachedBalances;
+    final onchainBalances = _sync?.balances ?? _cachedBalances;
+    // Developer mode with a leaf wallet: each asset's figure is on-chain plus leaves,
+    // split by rail beneath the row, and the headline counts both.
+    final rails = DevMode.instance.on && LeafService.instance.joined;
+    final leafAtoms = rails ? LeafService.instance.leafAtoms() : const <String, BigInt>{};
+    final onchainOf = {
+      for (final b in onchainBalances ?? const <core.AssetBalance>[]) b.assetId: BigInt.tryParse(b.atoms) ?? BigInt.zero
+    };
+    final balances = onchainBalances == null || leafAtoms.isEmpty
+        ? onchainBalances
+        : [
+            for (final id in {...onchainOf.keys, ...leafAtoms.keys})
+              core.AssetBalance(
+                  assetId: id, atoms: ((onchainOf[id] ?? BigInt.zero) + (leafAtoms[id] ?? BigInt.zero)).toString()),
+          ];
     // Restricted (OpenAMP) assets sit among equals — appended to the on-chain
     // rows, counted equally in the total, with no privileged label.
     final held = balances == null
@@ -389,10 +428,12 @@ class _BalanceTabState extends State<BalanceTab> {
             AmbraCard(
               padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
               child: Column(children: [
-                if (hasBtc) _BtcRow(sats: btcSatsStr!, stale: _btcStale, channels: _lnChannels, onChanged: _refresh),
+                if (hasBtc)
+                  _BtcRow(sats: btcSatsStr!, stale: _btcStale, channels: _lnChannels, onChanged: _refresh, rails: rails),
                 for (final h in part.visible)
                   _AssetRow(
                     balance: byId[h]!,
+                    rails: rails ? (onchain: onchainOf[h] ?? BigInt.zero, leaves: leafAtoms[h] ?? BigInt.zero) : null,
                     channels: _lnChannels,
                     onChanged: _refresh,
                     onHide: () async {
@@ -420,8 +461,11 @@ class _BalanceTabState extends State<BalanceTab> {
 }
 
 class _AssetRow extends StatelessWidget {
-  const _AssetRow({required this.balance, this.channels = const [], this.onChanged, this.onHide});
+  const _AssetRow({required this.balance, this.rails, this.channels = const [], this.onChanged, this.onHide});
   final core.AssetBalance balance;
+  // Developer mode: the row's figure split by rail (on-chain, leaves); Lightning
+  // comes from [channels]. null in user mode.
+  final ({BigInt onchain, BigInt leaves})? rails;
   final List<Map<dynamic, dynamic>> channels;
   final VoidCallback? onChanged;
   // Per-asset Hide control (quiet trailing icon). null = no control — the BTC row
@@ -482,6 +526,14 @@ class _AssetRow extends StatelessWidget {
           ]),
         ),
       ),
+      if (rails != null)
+        _RailLine(
+          ticker: label.ticker,
+          precision: label.precision,
+          onchain: rails!.onchain,
+          leaves: rails!.leaves,
+          lightning: legLiquidity(channels.cast<Map>(), RailTarget.asset(hex: balance.assetId, ticker: label.ticker)).spendable,
+        ),
       if (movable)
         _LnMeta(
           channels: channels,
@@ -491,7 +543,7 @@ class _AssetRow extends StatelessWidget {
             ticker: label.ticker,
             precision: label.precision,
             target: RailTarget.asset(hex: balance.assetId, ticker: label.ticker),
-            onchainAtoms: BigInt.tryParse(balance.atoms) ?? BigInt.zero,
+            onchainAtoms: rails?.onchain ?? BigInt.tryParse(balance.atoms) ?? BigInt.zero,
           ),
           onChanged: onChanged,
         ),
@@ -578,7 +630,9 @@ class _HiddenAssetsSection extends StatelessWidget {
 
 /// The Bitcoin parent-chain balance row — first-class, same layout as [_AssetRow].
 class _BtcRow extends StatelessWidget {
-  const _BtcRow({required this.sats, this.stale = false, this.channels = const [], this.onChanged});
+  const _BtcRow({required this.sats, this.stale = false, this.channels = const [], this.onChanged, this.rails = false});
+  // Developer mode: the rail split beneath the row.
+  final bool rails;
   final String sats;
   final bool stale; // showing the last-known balance because the latest scan failed
   final List<Map<dynamic, dynamic>> channels;
@@ -612,6 +666,14 @@ class _BtcRow extends StatelessWidget {
           ]),
         ]),
       ),
+      if (rails)
+        _RailLine(
+          ticker: 'BTC',
+          precision: 8,
+          onchain: BigInt.tryParse(sats) ?? BigInt.zero,
+          leaves: null,
+          lightning: legLiquidity(channels.cast<Map>(), RailTarget.btc()).spendable,
+        ),
       _LnMeta(
         channels: channels,
         leg: _Leg(
@@ -625,6 +687,37 @@ class _BtcRow extends StatelessWidget {
         onChanged: onChanged,
       ),
     ]);
+  }
+}
+
+/// Developer mode: a row's balance split by rail, "X on-chain · Y leaves · Z
+/// Lightning". BTC has no leaves: a tree on Sequentia holds no BTC.
+class _RailLine extends StatelessWidget {
+  const _RailLine({
+    required this.ticker,
+    required this.precision,
+    required this.onchain,
+    required this.leaves,
+    required this.lightning,
+  });
+  final String ticker;
+  final int precision;
+  final BigInt onchain;
+  final BigInt? leaves; // null: this asset cannot be a leaf (BTC)
+  final BigInt lightning;
+
+  @override
+  Widget build(BuildContext context) {
+    String f(BigInt v) => formatAtoms(v.toString(), precision);
+    final leafPart = leaves == null ? 'no leaves (a tree on Sequentia holds no BTC)' : '${f(leaves!)} leaves';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text('${f(onchain)} on-chain · $leafPart · ${f(lightning)} Lightning',
+            key: Key('rails-$ticker'), style: AmbraText.sub),
+      ),
+    );
   }
 }
 
@@ -1651,6 +1744,36 @@ class MoreTab extends StatelessWidget {
                   Navigator.of(context).push(MaterialPageRoute(builder: (_) => const FaucetScreen())),
             ),
           ]),
+        ),
+        const SizedBox(height: 14),
+        ListenableBuilder(
+          listenable: DevMode.instance,
+          builder: (context, _) => AmbraCard(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              const SectionLabel('Mode'),
+              const SizedBox(height: 4),
+              SwitchListTile(
+                key: const Key('dev-mode'),
+                contentPadding: EdgeInsets.zero,
+                activeThumbColor: AmbraColors.amber,
+                value: DevMode.instance.on,
+                onChanged: (v) => DevMode.instance.set(v),
+                title: const Text('Developer mode', style: AmbraText.body),
+                subtitle: const Text(
+                    'Shows every rail by name, with its balance and its manual controls: on-chain, leaves and Lightning.',
+                    style: AmbraText.sub),
+              ),
+              if (DevMode.instance.on) ...[
+                const SizedBox(height: 8),
+                SecondaryButton(
+                  key: const Key('open-leaves'),
+                  label: 'Leaves',
+                  icon: Icons.account_tree_outlined,
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LeavesScreen())),
+                ),
+              ],
+            ]),
+          ),
         ),
         const SizedBox(height: 14),
         ListenableBuilder(

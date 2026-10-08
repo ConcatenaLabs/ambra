@@ -138,6 +138,31 @@ module that implements it.
 - **My orders**: the maker's own resting covenant orders (funded on-chain, posted to the
   relay) with a reclaim path (`app/lib/src/screens/my_orders_screen.dart`).
 
+**Leaves (developer mode)**
+- Developer mode (More > Mode, off by default) shows every rail by name: each balance row
+  splits into on-chain, leaves and Lightning, and the headline counts leaves too. BTC has
+  no leaves: a tree on Sequentia holds no BTC (`app/lib/src/data/dev_mode.dart`).
+- Leaves are coins held as leaves of an operator's covenant tree on Sequentia: paid and
+  received off the chain with the operator's co-signature, and always takeable on-chain
+  by the holder. The wallet is the operator's own wallet library (`bark::arca` from
+  [arca](https://github.com/ConcatenaLabs/arca)) linked into the Rust core
+  (`ambra_core/src/leaves.rs`): every script, record, check, fee, schedule and refusal
+  is the library's, and the app shows each refusal in the library's words.
+- More > Leaves (`app/lib/src/screens/leaves_screen.dart`): join an operator (pins its
+  key and the node's chain, and restores this phrase's leaves), the leaf balance per
+  asset and state, receive (a request shown as text and QR, copied or shared), send to
+  a request, settle now (the refresh fee shown before anything is signed), every coin
+  with its dates, the exit drill, board from on-chain, and what the wallet refused.
+- The leaf wallet's store is one SQLite file per recovery phrase in the app's support
+  directory, opened by one process at a time. It keeps no phrase.
+- While the app runs, the leaf wallet syncs on the library's schedule, with a foreground
+  service keeping the process alive (`LeafSyncService.kt`). While it is closed, a
+  scheduled job (`LeafSyncWorker.kt`, WorkManager) runs the Dart entry point
+  `leafSyncJob` in an engine with no UI: it syncs, raises a notification for each
+  payment received, and wakes again at the schedule's `next_sync_at`, at most a day
+  ahead while a coin is off the chain or a receive request is open. The job keeps
+  running whatever the mode, so coins already held keep their refresh.
+
 **Assets, staking, faucet, node**
 - Issue a new asset, reissue (mint more of) an asset you hold the reissuance token for,
   and burn (`app/lib/src/screens/assets_screen.dart`).
@@ -202,6 +227,9 @@ Flutter UI (app/)  --flutter_rust_bridge-->  ambra_core (Rust)  -->  SWK (lwk_wo
   (`lwk_wollet::btc`), and the cross-chain HTLC glue (`lwk_wollet::btc::xchain`).
   SWK's own UniFFI bindings (`lwk_bindings`) build with that feature OFF and cannot
   reach these code paths, which is why Ambra has a dedicated core crate.
+  It links the operator's wallet library (`arca-wallet` from
+  [arca](https://github.com/ConcatenaLabs/arca), the `arca-core` feature) for leaves,
+  with the core's own HTTP client as its transport.
   It also embeds `seqln-signer` (from the
   [seqln](https://github.com/ConcatenaLabs/seqln) repo): the phone-side
   Lightning signing kernel + Noise_XK transport that keeps the LSP rail non-custodial.
@@ -217,11 +245,14 @@ resume instead of re-scanning.
 
 Verified toolchain: Linux host, Rust (stable), Flutter with Dart SDK >= 3.12,
 Android SDK with **NDK 29.0.14206865** (pinned in `app/android/app/build.gradle.kts`),
-`cargo-ndk`, and flutter_rust_bridge_codegen 2.12.0 (only needed if you change the core
-API).
+`cargo-ndk`, `protoc` (`apt install protobuf-compiler`; the arca library compiles a
+gRPC protocol), and flutter_rust_bridge_codegen 2.12.0 (only needed if you change the
+core API).
 
 `ambra_core` consumes SWK and seqln **by relative path**: both checkouts must sit as
-siblings of the `ambra` repo (see `[patch.crates-io]` in `ambra_core/Cargo.toml`).
+siblings of the `ambra` repo (see `[patch.crates-io]` in `ambra_core/Cargo.toml`). The
+arca library comes from GitHub at the revision `ambra_core/Cargo.toml` pins, with its
+kit crates pointed at the same SWK checkout.
 
 ```sh
 # 1. Sibling checkouts
@@ -237,6 +268,7 @@ cargo build
 rustup target add aarch64-linux-android
 cargo install cargo-ndk
 cargo ndk -t arm64-v8a -o ../app/android/app/src/main/jniLibs build --release
+# (for the x86_64 emulator: rustup target add x86_64-linux-android; -t x86_64)
 
 # 4. Build the app
 cd ../app
@@ -272,6 +304,12 @@ cargo test --test sync -- --nocapture
 # Staking pools against a local sequentiad on a private elementsregtest chain:
 # join, move and leave confirmed in blocks, wrong signatures refused by a block
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocapture
+
+# Leaves against a whole operator: a payment received while the app is closed,
+# found by the scheduled job's pass. Needs arca's long-running operator harness
+# (bark-cli/tests/arca_operator_for_browsers.rs in the arca repo) at its control
+# address; without the variable the test says so and passes without running.
+AMBRA_LEAVES_HARNESS=http://127.0.0.1:18640 cargo test --test leaves -- --nocapture
 ```
 
 A bare `cargo test` runs the network tests too, and fails `stake_records` unless

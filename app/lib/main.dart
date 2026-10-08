@@ -3,8 +3,11 @@ import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'src/data/dev_mode.dart';
+import 'src/data/leaf_service.dart';
 import 'src/data/node_config.dart';
 import 'src/data/price_service.dart';
 import 'src/data/registry_service.dart';
@@ -32,7 +35,28 @@ Future<void> main() async {
   await WalletRepository.instance.load();
   await PriceService.instance.load();
   await RegistryService.instance.load(); // asset labels (cached instantly, refreshed in bg)
+  await DevMode.instance.load();
   runApp(const AmbraApp());
+}
+
+/// The scheduled leaf-sync pass. Android's LeafSyncWorker runs this in a Flutter
+/// engine with no UI while the app is closed: it opens the leaf wallet from the
+/// app's own storage, syncs it, raises a notification per coin received, and tells
+/// the host when to run next (the library's `next_sync_at`, a day at most while a
+/// coin is off the chain or a request is open). The pass runs whatever the mode, so
+/// coins already held keep their refresh.
+@pragma('vm:entry-point')
+Future<void> leafSyncJob() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  const host = MethodChannel('ambra/leaf_job');
+  Map<String, dynamic> out;
+  try {
+    await RustLib.init();
+    out = await leafBackgroundPass(host);
+  } catch (e) {
+    out = {'ok': false, 'wake_in': null, 'summary': LeafRefusal.of(e).message};
+  }
+  await host.invokeMethod('done', out);
 }
 
 class AmbraApp extends StatefulWidget {
