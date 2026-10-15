@@ -5,7 +5,7 @@ import 'config.dart';
 /// Thin client for the SBTC bridge peg endpoints ([Backend.sbtc] = /sbtc, reverse-proxied to the
 /// bridge with the token injected by Caddy so the app never holds a secret). It ONLY allocates
 /// peg-in / peg-out addresses; the wallet's own signed sends move the funds. Mirror of the web
-/// wallet's sbtc.js. See doc/sequentia/sbtc-peg-design.md.
+/// wallet's sbtc.js. See DESIGN.md in the sbtc-bridge repository.
 class SbtcClient {
   static Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body) async {
     final r = await http

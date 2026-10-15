@@ -126,7 +126,7 @@ class PegPendingStore {
 }
 
 /// The wallet-side glue for the SBTC silent peg — the ONE place SBTC touches the DEX (spec §5,
-/// sbtc-peg-design.md). A direct port of the web wallet's swap.js pegged-covenant flow:
+/// the SBTC DESIGN.md). A direct port of the web wallet's swap.js pegged-covenant flow:
 ///
 ///   MAKER  a BUY-with-on-chain-BTC LIMIT order with "keep resting while offline" ON pegs the maker's
 ///          real BTC IN to SBTC, then rests that SBTC in a covenant ADVERTISED as a BTC offer so it
