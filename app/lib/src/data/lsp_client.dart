@@ -211,8 +211,10 @@ class LspClient {
   }
 
   /// "Move back to chain": cooperatively close a channel on the user's OWN node and send the
-  /// reclaimed funds to [destination] (a wallet address). Device-signed (the caller attaches the
-  /// signer first); the LSP drives the close but can't redirect the funds.
+  /// reclaimed funds to [destination] (a wallet address). Device-signed: the caller attaches the
+  /// signer and names [destination]'s script to it first
+  /// ([LightningService.approveCloseDestination]), or the device refuses the close. The LSP drives
+  /// the close but can't redirect the funds.
   static Future<CloseResult> channelClose({
     required String chain,
     required String destination,

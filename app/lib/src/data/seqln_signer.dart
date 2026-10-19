@@ -137,6 +137,12 @@ class SeqlnSigner {
 
   String state() => _state;
 
+  /// Name [script] (a scriptPubKey of this wallet's own address) as one a cooperative close may
+  /// pay this side's balance to. The device refuses any other close of this side's balance than
+  /// one to the node's own wallet, so a close to the wallet needs this first. Only the app names
+  /// one, never the node; the device forgets them when it is rebuilt.
+  void approveCloseDestination(List<int> script) => _inner.approveCloseDestination(script: script);
+
   /// Select the validating policy. Returns `this` for chaining.
   SeqlnSigner setPolicy(SeqlnPolicy mode) {
     _inner.setEnforce(enforce: mode == SeqlnPolicy.enforce);

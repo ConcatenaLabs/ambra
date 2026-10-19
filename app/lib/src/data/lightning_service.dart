@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import 'close_destinations.dart';
 import 'config.dart';
 import 'lsp_client.dart';
 import 'seqln_keys.dart' as keys;
@@ -291,8 +292,8 @@ class LightningService extends ChangeNotifier {
   // The shared [start]/[_signer] above serves the DEMO node. General pay/receive and the Balance
   // channel flows act on the user's OWN, per-asset (or per-BTC) hosted node, each with its own
   // device signer. This registry keeps those signers keyed by LSP node_key so repeat calls
-  // re-attach idempotently. 100% Dart orchestration over the existing FFIs (the twin of seqln.js's
-  // provisionAndConnect + the provNodes map); no new Rust.
+  // re-attach idempotently. Dart orchestration over the signer FFIs (the twin of seqln.js's
+  // provisionAndConnect + the provNodes map).
 
   final Map<String, _OwnNode> _own = {};
 
@@ -344,6 +345,13 @@ class LightningService extends ChangeNotifier {
     // the same identity (cross-client recovery). id was derived above for this asset/BTC node.
     final signer = SeqlnSigner.fromMnemonic(id.signingSeed)
       ..setPolicy(Backend.lnPolicy == 'enforce' ? SeqlnPolicy.enforce : SeqlnPolicy.permissive);
+    // The wallet's own close destinations this node may already be closing to: the device keeps
+    // none across a start.
+    for (final hex in await CloseDestinations.forNode(nodeKey)) {
+      try {
+        signer.approveCloseDestination(_hexBytes(hex));
+      } catch (_) {}
+    }
     final own = _own[nodeKey] = _OwnNode();
     signer.onStatus = (st) {
       own.nodeId = st.nodeId ?? own.nodeId;
@@ -369,6 +377,16 @@ class LightningService extends ChangeNotifier {
           'Could not bring your device signer online for your $label Lightning node: ${e.toString().replaceFirst('Exception: ', '')}');
     }
     return nodeKey;
+  }
+
+  /// Let the OWN node [nodeKey]'s next cooperative close pay this side's balance to [scriptHex], a
+  /// script of this wallet's own address, and remember it for the next start of that signer.
+  /// Throws when the node's signer is not running ([connectNode] first).
+  Future<void> approveCloseDestination(String nodeKey, String scriptHex) async {
+    final signer = _own[nodeKey]?.signer;
+    if (signer == null) throw Exception('Your device signer for that Lightning node is not running.');
+    signer.approveCloseDestination(_hexBytes(scriptHex));
+    await CloseDestinations.add(nodeKey, scriptHex);
   }
 
   /// Create a plain bolt11 to RECEIVE [amount] atoms of [asset] into the user's OWN hosted node.
