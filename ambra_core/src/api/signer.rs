@@ -18,7 +18,8 @@
 //!
 //! Mirrors `wasm/src/lib.rs` one-for-one:
 //!   * [`SeqlnSigner`]  — `fromMnemonic` / `fromHsmSecret`, `processFrame`,
-//!     `setEnforce`, `nodeId` (Signer + Signer.fromMnemonic + setEnforce in JS).
+//!     `setEnforce`, `nodeId`, `approveCloseDestination` (Signer + Signer.fromMnemonic +
+//!     setEnforce + approveCloseDestination in JS).
 //!   * [`NoiseSession`] — the Noise_XK **initiator** the device plays when it
 //!     connects OUT to the hosted proxy's responder.
 //!   * [`device_pubkey`] — the transport pubkey a host pins for a device privkey.
@@ -117,6 +118,18 @@ impl SeqlnSigner {
             BIP32_VER_TEST_PRIVATE,
         );
         hex(&k.node_id())
+    }
+
+    /// Name `script` (a scriptPubKey of this wallet's own address) as a destination a
+    /// cooperative close may pay this side's balance to, held to the same balance and fee
+    /// as a close to the node's wallet. Only the app can name one, never the hosted node,
+    /// and the device keeps none across a start: name it again whenever this signer is built.
+    #[frb(sync)]
+    pub fn approve_close_destination(&self, script: Vec<u8>) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .approve_close_destination(script);
     }
 
     /// Drive ONE hsmd request -> reply. `frame_bytes` is a single signer-split

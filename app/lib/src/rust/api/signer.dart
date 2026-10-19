@@ -91,6 +91,12 @@ abstract class NoiseSession implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SeqlnSigner>>
 abstract class SeqlnSigner implements RustOpaqueInterface {
+  /// Name `script` (a scriptPubKey of this wallet's own address) as a destination a
+  /// cooperative close may pay this side's balance to, held to the same balance and fee
+  /// as a close to the node's wallet. Only the app can name one, never the hosted node,
+  /// and the device keeps none across a start: name it again whenever this signer is built.
+  void approveCloseDestination({required List<int> script});
+
   /// Construct from the raw `hsm_secret` bytes (the on-disk mnemonic form:
   /// `32 zero bytes || mnemonic`). Throws on a malformed / unsupported secret.
   static SeqlnSigner fromHsmSecret({required List<int> hsmSecretBytes}) =>

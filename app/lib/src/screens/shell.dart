@@ -1047,8 +1047,10 @@ String _moveError(Object e, String ticker) {
   return msg;
 }
 
-/// Modal: cooperatively close the user's OWN channel for a leg and return the funds on-chain to a
-/// fresh wallet address (device-signed; the LSP drives the close but can't redirect the funds).
+/// Modal: cooperatively close the user's OWN channel for a leg and pay its balance on-chain to a
+/// fresh wallet address. The device signs that close only because the app named the address's
+/// script to it first; the LSP drives the close but cannot redirect the funds. When the peer does
+/// not answer, the close is unilateral and pays the node's own address after the channel's delay.
 class _CloseSheet extends StatefulWidget {
   const _CloseSheet({required this.leg, required this.channel, this.onChanged});
   final _Leg leg;
@@ -1083,6 +1085,9 @@ class _CloseSheetState extends State<_CloseSheet> {
       final dest = (await core.receiveAddressAt(
               mnemonic: m, index: BtcState.instance.unifiedNext, confidential: false))
           .address;
+      // The device refuses a close of this side's balance to any script it was not told is ours.
+      await LightningService.instance
+          .approveCloseDestination(nodeKey, await core.addressScriptPubkey(address: dest));
       _say('Closing the channel (your device is co-signing)…');
       final scid = '${widget.channel['short_channel_id'] ?? widget.channel['scid'] ?? ''}';
       final res = await LspClient.channelClose(
@@ -1093,12 +1098,14 @@ class _CloseSheetState extends State<_CloseSheet> {
         scid: scid.isEmpty ? null : scid,
       );
       final txid = res.closingTxid;
+      final tx = txid != null && txid.length >= 16 ? 'transaction ${txid.substring(0, 16)}…' : 'the transaction was broadcast';
       if (mounted) {
         setState(() {
           _done = true;
-          _status = txid != null && txid.length >= 16
-              ? 'Done. Closing transaction ${txid.substring(0, 16)}…. Your ${leg.ticker} returns on-chain once it confirms.'
-              : 'Done. The close was broadcast. Your ${leg.ticker} returns on-chain once it confirms.';
+          _status = res.type == 'unilateral'
+              ? 'The routing peer did not answer, so the channel closed unilaterally ($tx). Your '
+                  '${leg.ticker} goes to your Lightning node\'s own address after the channel\'s delay.'
+              : 'Done ($tx). Your ${leg.ticker} arrives in this wallet once it confirms.';
         });
       }
       widget.onChanged?.call();
@@ -1122,8 +1129,10 @@ class _CloseSheetState extends State<_CloseSheet> {
           Text('Move ${leg.ticker} back on-chain', style: AmbraText.h1),
           const SizedBox(height: 12),
           Text(
-            'This closes your ${leg.ticker} Lightning channel and returns the funds to your wallet '
-            'on-chain. Your device co-signs the closing transaction, so only you can move these funds.',
+            'This closes your ${leg.ticker} Lightning channel and pays its balance straight to this '
+            'wallet, on chain. Your device signs the close only because it pays your balance to an '
+            'address of this wallet. If the routing peer is offline the close falls back to a slower '
+            'unilateral one, which pays your Lightning node\'s own address instead.',
             style: AmbraText.sub,
           ),
           const SizedBox(height: 10),
