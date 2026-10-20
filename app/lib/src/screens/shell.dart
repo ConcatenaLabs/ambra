@@ -17,6 +17,7 @@ import '../data/hidden_assets.dart';
 import '../data/leaf_service.dart';
 import '../data/lightning_service.dart';
 import '../data/ln_rail.dart';
+import '../data/portfolio.dart';
 import '../data/lsp_client.dart';
 import '../data/node_config.dart';
 import '../data/openamp_service.dart';
@@ -63,9 +64,16 @@ class _ShellState extends State<Shell> {
     // Register this wallet's x-only key with the OpenAMP enclave so restricted
     // assets can be held/received/sent. Fails soft if the enclave isn't deployed.
     _initOpenamp();
-    // Developer mode: the leaf wallet opens and syncs on its schedule while the app
-    // runs; turned off, it closes (the scheduled job keeps coins already held alive).
+    // The wallet's mode is kept for each wallet. A wallet that joined a leaf operator
+    // keeps its leaf wallet open and syncing on its schedule while the app runs, in
+    // either mode: its coins have dates to keep. User mode only hides the rail.
     DevMode.instance.addListener(_onMode);
+    _loadMode();
+  }
+
+  Future<void> _loadMode() async {
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m != null) await DevMode.instance.loadFor(m);
     _onMode();
   }
 
@@ -76,11 +84,8 @@ class _ShellState extends State<Shell> {
   }
 
   void _onMode() {
-    if (DevMode.instance.on) {
-      if (!LeafService.instance.open) unawaited(LeafService.instance.start());
-    } else if (LeafService.instance.open) {
-      unawaited(LeafService.instance.stop());
-    }
+    // Opens only a leaf wallet this phone holds for the mnemonic (`start` checks).
+    if (!LeafService.instance.open) unawaited(LeafService.instance.start());
   }
 
   Future<void> _initLightning() async {
@@ -284,32 +289,6 @@ class _BalanceTabState extends State<BalanceTab> {
     }
   }
 
-  /// Total portfolio value in the reference currency, summed across every asset
-  /// equally (no asset privileged). null if nothing held can be priced.
-  double? _totalRef(List<core.AssetBalance> balances) {
-    double sum = 0;
-    bool any = false;
-    for (final b in balances) {
-      final label = SeqAssets.labelFor(b.assetId);
-      final v = PriceService.instance.refValue(label.ticker, b.atoms, label.precision);
-      if (v != null) {
-        sum += v;
-        any = true;
-      }
-    }
-    // Parent-chain Bitcoin counts equally toward the portfolio total (using the
-    // last-known balance if the latest testnet4 scan didn't complete).
-    final btcSats = _btc?.balanceSats ?? _btcCachedSats;
-    if (btcSats != null) {
-      final v = PriceService.instance.refValue('BTC', btcSats, 8);
-      if (v != null) {
-        sum += v;
-        any = true;
-      }
-    }
-    return any ? sum : null;
-  }
-
   /// Read this device's OWN provisioned Lightning channels from the LSP so each row can show its
   /// on-chain vs Lightning split and the Move-to-Lightning / close affordances. Passes the device's
   /// own node keys (BTC + each held asset), reconstructed from the mnemonic, as `?nodes=` so the
@@ -342,20 +321,32 @@ class _BalanceTabState extends State<BalanceTab> {
     // last-known values instantly instead of a spinner. tSEQ is not privileged,
     // so a 0 balance is hidden like any other asset's.
     final onchainBalances = _sync?.balances ?? _cachedBalances;
-    // Developer mode with a leaf wallet: each asset's figure is on-chain plus leaves,
-    // split by rail beneath the row, and the headline counts both.
-    final rails = DevMode.instance.on && LeafService.instance.joined;
-    final leafAtoms = rails ? LeafService.instance.leafAtoms() : const <String, BigInt>{};
+    // Every rail counts in each asset's one figure and in the headline, in both modes:
+    // on-chain, leaves (once this wallet joined an operator; the leaf wallet syncs in
+    // either mode) and Lightning. Developer mode also splits the figure by rail.
+    final dev = DevMode.instance.on;
+    final rails = dev && LeafService.instance.joined;
+    final leafAtoms = LeafService.instance.joined ? LeafService.instance.leafAtoms() : const <String, BigInt>{};
     final onchainOf = {
       for (final b in onchainBalances ?? const <core.AssetBalance>[]) b.assetId: BigInt.tryParse(b.atoms) ?? BigInt.zero
     };
-    final balances = onchainBalances == null || leafAtoms.isEmpty
-        ? onchainBalances
-        : [
-            for (final id in {...onchainOf.keys, ...leafAtoms.keys})
-              core.AssetBalance(
-                  assetId: id, atoms: ((onchainOf[id] ?? BigInt.zero) + (leafAtoms[id] ?? BigInt.zero)).toString()),
-          ];
+    final chans = _lnChannels.cast<Map>();
+    BigInt lnOf(String id) => legLiquidity(chans, RailTarget.asset(hex: id, ticker: SeqAssets.labelFor(id).ticker)).spendable;
+    final lnAssets = <String>{
+      for (final c in chans)
+        if ('${c['node_key'] ?? ''}'.isNotEmpty && '${c['leg'] ?? ''}' != 'btc' && '${c['asset'] ?? ''}'.isNotEmpty) '${c['asset']}',
+    };
+    final figures = onchainBalances == null
+        ? null
+        : assetFigures(
+            onchain: onchainOf,
+            leaves: leafAtoms,
+            lightning: {for (final id in {...onchainOf.keys, ...leafAtoms.keys, ...lnAssets}) id: lnOf(id)},
+          );
+    final figureOf = {for (final f in figures ?? const <AssetFigure>[]) f.id: f};
+    final balances = figures == null
+        ? null
+        : [for (final f in figures) core.AssetBalance(assetId: f.id, atoms: f.total.toString())];
     // Restricted (OpenAMP) assets sit among equals — appended to the on-chain
     // rows, counted equally in the total, with no privileged label.
     final held = balances == null
@@ -364,21 +355,34 @@ class _BalanceTabState extends State<BalanceTab> {
             ...balances.where((b) => (BigInt.tryParse(b.atoms) ?? BigInt.zero) > BigInt.zero),
             ..._openamp,
           ];
-    // Headline total: computed over EVERY asset, hidden included (see below) — hiding
-    // is visual decluttering, not accounting, so the total never changes on hide.
-    final total = balances == null ? null : _totalRef([...balances, ..._openamp]);
+    // Bitcoin is first-class: on-chain (the last-known balance if a fresh testnet4
+    // scan failed) plus Lightning, shown when held (a 0 balance is hidden like any
+    // asset's).
+    final btcSatsStr = _btc?.balanceSats ?? _btcCachedSats;
+    final btcOnchain = BigInt.tryParse(btcSatsStr ?? '0') ?? BigInt.zero;
+    final btcLn = legLiquidity(chans, RailTarget.btc()).spendable;
+    final btcTotal = btcOnchain + btcLn;
+    final hasBtc = btcTotal > BigInt.zero;
+    // Headline total: computed over EVERY asset and every rail, hidden assets
+    // included (see below) — hiding is visual decluttering, not accounting, so the
+    // total never changes on hide.
+    final total = balances == null
+        ? null
+        : headlineTotal([
+            for (final b in [...balances, ..._openamp]) (key: b.assetId, atoms: BigInt.tryParse(b.atoms) ?? BigInt.zero),
+            if (btcSatsStr != null || btcLn > BigInt.zero) (key: 'BTC', atoms: btcTotal),
+          ], (key, atoms) {
+            if (key == 'BTC') return PriceService.instance.refValue('BTC', atoms.toString(), 8);
+            final label = SeqAssets.labelFor(key);
+            return PriceService.instance.refValue(label.ticker, atoms.toString(), label.precision);
+          });
     // Split the rows into the visible main list and the collapsed hidden section
     // (AFTER the total above). BTC is never partitioned out — its row below carries
     // no hide control at all. held is positive-balance-only already, so totalOf is
-    // the row's on-chain atoms.
+    // the row's figure.
     final byId = {for (final b in held) b.assetId: b};
     final part = partitionHidden(byId.keys, HiddenAssets.instance.hidden,
         totalOf: (h) => BigInt.tryParse(byId[h]!.atoms) ?? BigInt.zero);
-    // Bitcoin is first-class: shown when held (a 0 balance is hidden like any
-    // asset). Resolve to the last-known balance if a fresh testnet4 scan failed.
-    final btcSatsStr = _btc?.balanceSats ?? _btcCachedSats;
-    final btcSats = BigInt.tryParse(btcSatsStr ?? '0') ?? BigInt.zero;
-    final hasBtc = btcSats > BigInt.zero;
     return RefreshIndicator(
       onRefresh: _refresh,
       color: AmbraColors.amber,
@@ -429,11 +433,18 @@ class _BalanceTabState extends State<BalanceTab> {
               padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
               child: Column(children: [
                 if (hasBtc)
-                  _BtcRow(sats: btcSatsStr!, stale: _btcStale, channels: _lnChannels, onChanged: _refresh, rails: rails),
+                  _BtcRow(
+                      sats: btcTotal.toString(),
+                      onchainSats: btcOnchain,
+                      stale: _btcStale,
+                      channels: _lnChannels,
+                      onChanged: _refresh,
+                      rails: rails),
                 for (final h in part.visible)
                   _AssetRow(
                     balance: byId[h]!,
-                    rails: rails ? (onchain: onchainOf[h] ?? BigInt.zero, leaves: leafAtoms[h] ?? BigInt.zero) : null,
+                    onchain: figureOf[h]?.onchain ?? BigInt.tryParse(byId[h]!.atoms) ?? BigInt.zero,
+                    rails: rails ? (onchain: figureOf[h]?.onchain ?? BigInt.zero, leaves: figureOf[h]?.leaves ?? BigInt.zero) : null,
                     channels: _lnChannels,
                     onChanged: _refresh,
                     onHide: () async {
@@ -461,8 +472,11 @@ class _BalanceTabState extends State<BalanceTab> {
 }
 
 class _AssetRow extends StatelessWidget {
-  const _AssetRow({required this.balance, this.rails, this.channels = const [], this.onChanged, this.onHide});
+  const _AssetRow({required this.balance, required this.onchain, this.rails, this.channels = const [], this.onChanged, this.onHide});
+  // The row's figure: every rail of the asset together.
   final core.AssetBalance balance;
+  // What of it is on-chain, which the Lightning card moves.
+  final BigInt onchain;
   // Developer mode: the row's figure split by rail (on-chain, leaves); Lightning
   // comes from [channels]. null in user mode.
   final ({BigInt onchain, BigInt leaves})? rails;
@@ -543,7 +557,7 @@ class _AssetRow extends StatelessWidget {
             ticker: label.ticker,
             precision: label.precision,
             target: RailTarget.asset(hex: balance.assetId, ticker: label.ticker),
-            onchainAtoms: rails?.onchain ?? BigInt.tryParse(balance.atoms) ?? BigInt.zero,
+            onchainAtoms: onchain,
           ),
           onChanged: onChanged,
         ),
@@ -630,10 +644,18 @@ class _HiddenAssetsSection extends StatelessWidget {
 
 /// The Bitcoin parent-chain balance row — first-class, same layout as [_AssetRow].
 class _BtcRow extends StatelessWidget {
-  const _BtcRow({required this.sats, this.stale = false, this.channels = const [], this.onChanged, this.rails = false});
+  const _BtcRow(
+      {required this.sats,
+      required this.onchainSats,
+      this.stale = false,
+      this.channels = const [],
+      this.onChanged,
+      this.rails = false});
   // Developer mode: the rail split beneath the row.
   final bool rails;
+  // The row's figure: on-chain and Lightning together.
   final String sats;
+  final BigInt onchainSats;
   final bool stale; // showing the last-known balance because the latest scan failed
   final List<Map<dynamic, dynamic>> channels;
   final VoidCallback? onChanged;
@@ -670,7 +692,7 @@ class _BtcRow extends StatelessWidget {
         _RailLine(
           ticker: 'BTC',
           precision: 8,
-          onchain: BigInt.tryParse(sats) ?? BigInt.zero,
+          onchain: onchainSats,
           leaves: null,
           lightning: legLiquidity(channels.cast<Map>(), RailTarget.btc()).spendable,
         ),
@@ -682,7 +704,7 @@ class _BtcRow extends StatelessWidget {
           ticker: 'BTC',
           precision: 8,
           target: RailTarget.btc(),
-          onchainAtoms: BigInt.tryParse(sats) ?? BigInt.zero,
+          onchainAtoms: onchainSats,
         ),
         onChanged: onChanged,
       ),
@@ -1759,19 +1781,26 @@ class MoreTab extends StatelessWidget {
           listenable: DevMode.instance,
           builder: (context, _) => AmbraCard(
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              const SectionLabel('Mode'),
+              const SectionLabel(ModeWords.title),
               const SizedBox(height: 4),
-              SwitchListTile(
-                key: const Key('dev-mode'),
-                contentPadding: EdgeInsets.zero,
-                activeThumbColor: AmbraColors.amber,
-                value: DevMode.instance.on,
-                onChanged: (v) => DevMode.instance.set(v),
-                title: const Text('Developer mode', style: AmbraText.body),
-                subtitle: const Text(
-                    'Shows every rail by name, with its balance and its manual controls: on-chain, leaves and Lightning.',
-                    style: AmbraText.sub),
+              RadioGroup<bool>(
+                groupValue: DevMode.instance.on,
+                onChanged: (v) {
+                  if (v != null) DevMode.instance.set(v);
+                },
+                child: Column(children: [
+                  for (final dev in [false, true])
+                    RadioListTile<bool>(
+                      key: Key(dev ? 'mode-developer' : 'mode-user'),
+                      contentPadding: EdgeInsets.zero,
+                      activeColor: AmbraColors.amber,
+                      value: dev,
+                      title: Text(dev ? ModeWords.developer : ModeWords.user, style: AmbraText.body),
+                      subtitle: Text(dev ? ModeWords.developerLine : ModeWords.userLine, style: AmbraText.sub),
+                    ),
+                ]),
               ),
+              const Text(ModeWords.note, style: AmbraText.sub),
               if (DevMode.instance.on) ...[
                 const SizedBox(height: 8),
                 SecondaryButton(

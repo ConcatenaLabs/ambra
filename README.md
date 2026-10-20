@@ -62,9 +62,10 @@ module that implements it.
   set is the round (`app/lib/src/screens/mix_screen.dart`).
 
 **Balance (dual-chain, no privileged asset)**
-- The headline is one **total balance across all held assets, valued in a user-chosen
-  reference currency** (USD default; picker in the top bar, fed by the public price
-  server). Below it, every held asset is one equal row: BTC (Bitcoin testnet4), tSEQ,
+- The headline is one **total balance across all held assets and every rail they are held
+  on (on-chain, Lightning and leaves), valued in a user-chosen reference currency** (USD
+  default; picker in the top bar, fed by the public price server), in both modes. Below
+  it, every held asset is one equal row, its figure the sum of its rails: BTC (Bitcoin testnet4), tSEQ,
   issued assets, and OpenAMP restricted assets side by side
   (`app/lib/src/screens/shell.dart`).
 - Both chains sync against Esplora-style REST APIs; last-known balances are cached on
@@ -138,10 +139,16 @@ module that implements it.
 - **My orders**: the maker's own resting covenant orders (funded on-chain, posted to the
   relay) with a reclaim path (`app/lib/src/screens/my_orders_screen.dart`).
 
-**Leaves (developer mode)**
-- Developer mode (More > Mode, off by default) shows every rail by name: each balance row
-  splits into on-chain, leaves and Lightning, and the headline counts leaves too. BTC has
-  no leaves: a tree on Sequentia holds no BTC (`app/lib/src/data/dev_mode.dart`).
+**The mode, and leaves**
+- More > Mode is one setting, kept for each wallet, in the words every Sequentia wallet
+  uses. **User mode** (the default): one figure per asset, and the wallet chooses how
+  value moves. **Developer mode**: every rail by name, side by side (on-chain, leaves and
+  Lightning), each with its balance and its manual controls, and the developer tools:
+  each balance row splits into on-chain, leaves and Lightning, and More > Leaves appears.
+  BTC has no leaves: a tree on Sequentia holds no BTC (`app/lib/src/data/dev_mode.dart`).
+- A wallet that joined a leaf operator keeps its leaf wallet syncing in either mode, since
+  its coins have dates to keep; user mode shows nothing of leaves but their value, in each
+  asset's figure and in the headline.
 - Leaves are coins held as leaves of an operator's covenant tree on Sequentia: paid and
   received off the chain with the operator's co-signature, and always takeable on-chain
   by the holder. The wallet is the operator's own wallet library (`bark::arca` from

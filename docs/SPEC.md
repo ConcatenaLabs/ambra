@@ -75,8 +75,9 @@ oracle would be the only full fix (out of scope, shared with the web).
 
 ## Balance model (no privileged asset)
 
-The Balance headline is the total portfolio value across every held asset, valued
-in a user-chosen reference currency (USD default; picker in the top bar, price-server
+The Balance headline is the total portfolio value across every held asset and every
+rail it is held on (on-chain, Lightning and leaves), in both modes, valued in a
+user-chosen reference currency (USD default; picker in the top bar, price-server
 fed). Every asset counts equally toward the total: BTC (parent chain), tSEQ, issued
 assets, and OpenAMP restricted assets. When prices are unavailable the headline
 shows a dash and the per-asset rows carry the amounts. Below the headline, one equal
@@ -84,10 +85,13 @@ row per held asset; zero balances are hidden for every asset alike, tSEQ include
 There is no "native asset" label anywhere: the Sequence token (tSEQ) is one row among
 equals, and its only special role is staking.
 
-In developer mode (More > Mode) each row's figure is on-chain plus leaves, with the
-split beneath it: "X on-chain · Y leaves · Z Lightning". BTC's line says it has no
-leaves (a tree on Sequentia holds no BTC). The headline counts leaves as it counts
-on-chain coins. More > Leaves shows the leaf wallet's own view: per asset, each state
+Each row's figure is the asset on every rail together: on-chain, Lightning and leaves
+(`app/lib/src/data/portfolio.dart`). More > Mode is one setting, kept for each wallet
+(`ambra.mode.<fingerprint>`), user mode by default; in developer mode the split is shown
+beneath each row: "X on-chain · Y leaves · Z Lightning". BTC's line says it has no
+leaves (a tree on Sequentia holds no BTC). A wallet that joined a leaf operator keeps
+its leaf wallet syncing in either mode, and its leaves count in the figures and the
+headline in both. More > Leaves shows the leaf wallet's own view: per asset, each state
 the library names (`live`, `operator-confirmed`, `pending`, …), and the leaf wallet's
 on-chain coins used for boards and exit fees.
 
@@ -101,8 +105,8 @@ on-chain coins used for boards and exit fees.
   Balance from any tab and only exits from Balance.
 - Swap tab: same-chain SeqDEX composer, plus entries to "Buy with Bitcoin
   (cross-chain)" and, when a hosted LSP is configured, "Instant (Lightning)".
-- More hub: Node (view/change backend), Testnet faucet, Mode (developer mode, and in
-  it Leaves), Security (app lock),
+- More hub: Node (view/change backend), Testnet faucet, Mode (user or developer mode,
+  and in developer mode Leaves), Security (app lock),
   Wallet (reveal phrase / remove wallet), Assets & staking (issue/manage assets,
   stake tSEQ).
 - Modals = bottom sheets: review-&-sign, reference-currency picker, fee-asset

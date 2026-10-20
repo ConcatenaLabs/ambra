@@ -95,6 +95,8 @@ class LeafService extends ChangeNotifier {
   LeafRefusal? lastError;
   Timer? _timer;
   bool _ticking = false;
+  // The schedule's next_sync_at as first given after the last sync (see syncDecision).
+  num? _heldFor;
 
   static Future<String> dataDir() async => (await getApplicationSupportDirectory()).path;
 
@@ -219,6 +221,7 @@ class LeafService extends ChangeNotifier {
   /// coin's way home), and a notification per coin received.
   Future<Map<String, dynamic>> syncNow({String by = 'user'}) async {
     final r = await run('sync') as Map<String, dynamic>;
+    _heldFor = null;
     lastSync = DateTime.now();
     for (final a in arrivals(r['mailbox'])) {
       await notifyArrived(a, channel: _channel);
@@ -259,9 +262,10 @@ class LeafService extends ChangeNotifier {
     try {
       final s = await run('schedule') as Map<String, dynamic>?;
       schedule = s;
-      final moving = inFlight(coins, participations);
-      if (s?['due'] == true || moving) {
-        await syncNow(by: s?['due'] == true ? 'schedule' : 'moving');
+      final d = syncDecision(s, _heldFor, inFlight(coins, participations));
+      _heldFor = d.held;
+      if (d.sync) {
+        await syncNow(by: d.why!);
       } else if (freshRequestWaits(s, DateTime.now())) {
         final mb = await run('mailbox');
         for (final a in arrivals(mb)) {
@@ -316,6 +320,22 @@ bool inFlight(List<dynamic> coins, List<dynamic> participations) {
   if (coins.any((c) => c is Map && moving.contains(c['state']))) return true;
   const done = {'done', 'refused', 'void', 'expired', 'completed', 'released'};
   return participations.any((p) => p is Map && p['state'] != null && !done.contains(p['state']));
+}
+
+/// Whether the app syncs now. The time to hold to is the schedule's `next_sync_at` as
+/// it was first given after the last sync ([held]): a schedule that moves that time on
+/// at every read (a coin given to a refresh reads now + 1 h each time, and is not `due`
+/// until its home date) is still synced once the time first given arrives. Also when
+/// the schedule is due, and while something moves. [held] in the answer is the time to
+/// hold to next, null once a sync runs. The browser wallets hold the same rule.
+({bool sync, String? why, num? held}) syncDecision(Map<String, dynamic>? schedule, num? held, bool moving) {
+  final next = schedule?['next_sync_at'];
+  final now = schedule?['now'];
+  final at = held ?? (next is num ? next : null);
+  if (schedule?['due'] == true) return (sync: true, why: 'schedule', held: null);
+  if (at != null && now is num && now >= at) return (sync: true, why: 'time', held: null);
+  if (moving) return (sync: true, why: 'moving', held: null);
+  return (sync: false, why: null, held: at);
 }
 
 /// A receive request handed out in the last hour: the app reads the mailbox every
