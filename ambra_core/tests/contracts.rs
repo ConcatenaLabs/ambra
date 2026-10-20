@@ -519,3 +519,17 @@ fn a_drip_and_a_vault_repaid_under_the_five_point_rule() {
         println!("{l}");
     }
 }
+
+/// The templates this wallet carries are the kit's, among them the Pignus
+/// vault and offer of several oracles, so a 2-of-3 take or liquidation is not
+/// refused at the first point of the rule.
+#[test]
+fn the_wallet_carries_the_pignus_threshold_templates() {
+    let known = contracts::known_templates();
+    for (name, hash) in [
+        ("pignus/vault-threshold", "b7fee3aa3dd5f1078204e91384f14bd7c78d7d8a051fc7ace00e9b3bde0e6f75"),
+        ("pignus/offer-threshold", "c8d981f09b6bd60b52e152a093ed54070e76fe82b305ca02a43c568e81e1e811"),
+    ] {
+        assert!(known.iter().any(|k| k == hash), "{name} {hash} is not on the list: {known:?}");
+    }
+}
