@@ -162,7 +162,8 @@ module that implements it.
   with its dates, the exit drill, board from on-chain, and what the wallet refused.
 - More > Contracts (developer mode, `app/lib/src/screens/contracts_screen.dart`): a spend
   of a contract the kit carries (`sequentia/faucet-drip`, `pignus/vault`, `pignus/offer`,
-  `sequentia/one-key`, `sequentia/one-key-exit`), pasted in the shape a site hands the
+  `pignus/vault-threshold`, `pignus/offer-threshold`, `sequentia/capped-sale`,
+  `sequentia/subscription-escrow`, `sequentia/one-key`, `sequentia/one-key-exit`), pasted in the shape a site hands the
   browser extension's `signContractSpend` (`{templateHash, instance, request | drip,
   fund?}`). The kit's contract engine (SWK `lwk_contracts`, in `ambra_core/src/contracts.rs`)
   checks it against this wallet: with `fund` the wallet adds its own explicit coins and the

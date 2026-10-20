@@ -216,6 +216,8 @@ pub fn fund_from_wallet(
             InputRequest::Wallet { txid, vout, .. } | InputRequest::Foreign { txid, vout, .. } => {
                 Some((txid.clone(), *vout))
             }
+            // Another coin of the contract's template: never one of the wallet's to pick.
+            InputRequest::Sibling { coin, .. } => Some((coin.txid.clone(), coin.vout)),
             InputRequest::Contract => None,
         })
         .collect();
@@ -225,6 +227,9 @@ pub fn fund_from_wallet(
         match i {
             InputRequest::Wallet { asset, amount, .. } | InputRequest::Foreign { asset, amount, .. } => {
                 *have.entry(asset.clone()).or_default() += u128::from(*amount)
+            }
+            InputRequest::Sibling { coin, .. } => {
+                *have.entry(coin.asset.clone()).or_default() += u128::from(coin.amount)
             }
             InputRequest::Contract => {}
         }
@@ -330,8 +335,10 @@ pub fn prepare(
             add(&o.asset);
         }
         for i in req.inputs.iter().flatten() {
-            if let InputRequest::Wallet { asset, .. } | InputRequest::Foreign { asset, .. } = i {
-                add(asset);
+            match i {
+                InputRequest::Wallet { asset, .. } | InputRequest::Foreign { asset, .. } => add(asset),
+                InputRequest::Sibling { coin, .. } => add(&coin.asset),
+                InputRequest::Contract => {}
             }
         }
         WalletView {
@@ -344,8 +351,11 @@ pub fn prepare(
     let run = |req: &SpendRequest| -> Result<Prepared, String> {
         let mut records = vec![(req.coin.txid.clone(), req.coin.vout)];
         for i in req.inputs.iter().flatten() {
-            if let InputRequest::Foreign { txid, vout, .. } = i {
-                records.push((txid.clone(), *vout));
+            match i {
+                InputRequest::Foreign { txid, vout, .. } => records.push((txid.clone(), *vout)),
+                // The engine checks a sibling coin against the chain's record too.
+                InputRequest::Sibling { coin, .. } => records.push((coin.txid.clone(), coin.vout)),
+                _ => {}
             }
         }
         let facts = chain_facts(esplora, &req.coin.txid, &records)?;
