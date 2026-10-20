@@ -1,0 +1,207 @@
+{
+  "checks": {
+    "1_known_template": "12986f202fbfb850f7699c5d5188f261f276de6c7038142f0a28bbb672b5af34 is on this wallet's list",
+    "2_output_recomputed": "the engine derived 5120d433e48202f1a776e289784ee57686437bf564dea4880ea01801c3182bec1f23 from the template and the instance; the coin pays it",
+    "3_program_run": "the contract's program (input 0) ran against the final transaction: cost 422597 milli-WU of a 5466 WU budget",
+    "4_shown": "this summary",
+    "5_contract_key": "FAUCET_KEY is this wallet's contract key at m/8383h/1h/0h/0/0"
+  },
+  "contract": {
+    "change": [
+      {
+        "asset": "b2e15d0d7a0c94e4e2ce0fe6e8691b9e451377f6e46e8045a86f7c4b5d4f0f23",
+        "change": "-50000000581",
+        "shown": "-500.00000581 tSEQ"
+      }
+    ],
+    "coin": "33c011ad33ca13d5d8896abd6b7bfcdebffa79d4c94eeccb70e010596c95fa87:1",
+    "input": 0,
+    "script_pubkey": "5120d433e48202f1a776e289784ee57686437bf564dea4880ea01801c3182bec1f23"
+  },
+  "digest": "1e297ab252f033c9a99f97e6dd4f89a221023d899e94372bfc72b265c2bb1162",
+  "fee": [
+    {
+      "amount": 581,
+      "asset": "b2e15d0d7a0c94e4e2ce0fe6e8691b9e451377f6e46e8045a86f7c4b5d4f0f23",
+      "shown": "0.00000581 tSEQ"
+    }
+  ],
+  "inputs": [
+    {
+      "amount": 200000000000000,
+      "asset": "b2e15d0d7a0c94e4e2ce0fe6e8691b9e451377f6e46e8045a86f7c4b5d4f0f23",
+      "checked_against_chain": true,
+      "coin": "33c011ad33ca13d5d8896abd6b7bfcdebffa79d4c94eeccb70e010596c95fa87:1",
+      "index": 0,
+      "is": "contract",
+      "sequence": "0x00400001",
+      "shown": "the contract's coin, 2000000.00000000 tSEQ"
+    }
+  ],
+  "lock_time": 0,
+  "locks": "relative lock of 1 × 512 s passed at median time 1792517750",
+  "opens": [],
+  "outputs": [
+    {
+      "amount": 199949999999419,
+      "asset": "b2e15d0d7a0c94e4e2ce0fe6e8691b9e451377f6e46e8045a86f7c4b5d4f0f23",
+      "index": 0,
+      "role": "contract",
+      "script_pubkey": "5120d433e48202f1a776e289784ee57686437bf564dea4880ea01801c3182bec1f23"
+    },
+    {
+      "amount": 50000000000,
+      "asset": "b2e15d0d7a0c94e4e2ce0fe6e8691b9e451377f6e46e8045a86f7c4b5d4f0f23",
+      "index": 1,
+      "role": "wallet",
+      "script_pubkey": "0014d0c4a3ef09e997b6e99e397e518fe3e41a118ca1"
+    },
+    {
+      "amount": 581,
+      "asset": "b2e15d0d7a0c94e4e2ce0fe6e8691b9e451377f6e46e8045a86f7c4b5d4f0f23",
+      "index": 2,
+      "role": "fee",
+      "script_pubkey": ""
+    }
+  ],
+  "params": [
+    {
+      "label": "Dripped asset",
+      "name": "ASSET",
+      "role": "asset",
+      "shown": "tSEQ (b2e15d0d7a0c94e4e2ce0fe6e8691b9e451377f6e46e8045a86f7c4b5d4f0f23)",
+      "type": "u256",
+      "value": "230f4f5d4b7c6fa845806ee4f67713459e1b69e8e60fcee2e4940c7a0d5de1b2"
+    },
+    {
+      "label": "Faucet key",
+      "name": "FAUCET_KEY",
+      "role": "pubkey",
+      "shown": "561012804a5e7c56565fe7a04c58b7ad2209699c1cf683e0a2a1367a42d7483c (this wallet's contract key, m/8383h/1h/0h/0/0)",
+      "type": "Pubkey",
+      "value": "561012804a5e7c56565fe7a04c58b7ad2209699c1cf683e0a2a1367a42d7483c"
+    },
+    {
+      "label": "Interval between drips, in units of 512 seconds",
+      "name": "INTERVAL",
+      "role": "number",
+      "shown": "1",
+      "type": "u16",
+      "value": "0001"
+    },
+    {
+      "label": "Most a drip pays in fees, in the dripped asset",
+      "name": "FEE_CAP",
+      "role": "amount",
+      "shown": "0.00100000 tSEQ",
+      "type": "u64",
+      "value": "00000000000186a0"
+    },
+    {
+      "label": "Tier 1: the reserve holds at least",
+      "name": "TIER1_FLOOR",
+      "role": "amount",
+      "shown": "1000000.00000000 tSEQ",
+      "type": "u64",
+      "value": "00005af3107a4000"
+    },
+    {
+      "label": "Tier 1: a drip pays at most",
+      "name": "TIER1_MAX",
+      "role": "amount",
+      "shown": "500.00000000 tSEQ",
+      "type": "u64",
+      "value": "0000000ba43b7400"
+    },
+    {
+      "label": "Tier 2: the reserve holds at least",
+      "name": "TIER2_FLOOR",
+      "role": "amount",
+      "shown": "100000.00000000 tSEQ",
+      "type": "u64",
+      "value": "000009184e72a000"
+    },
+    {
+      "label": "Tier 2: a drip pays at most",
+      "name": "TIER2_MAX",
+      "role": "amount",
+      "shown": "200.00000000 tSEQ",
+      "type": "u64",
+      "value": "00000004a817c800"
+    },
+    {
+      "label": "Tier 3: the reserve holds at least",
+      "name": "TIER3_FLOOR",
+      "role": "amount",
+      "shown": "10000.00000000 tSEQ",
+      "type": "u64",
+      "value": "000000e8d4a51000"
+    },
+    {
+      "label": "Tier 3: a drip pays at most",
+      "name": "TIER3_MAX",
+      "role": "amount",
+      "shown": "20.00000000 tSEQ",
+      "type": "u64",
+      "value": "0000000077359400"
+    },
+    {
+      "label": "Below tier 3: a drip pays at most",
+      "name": "TIER4_MAX",
+      "role": "amount",
+      "shown": "2.00000000 tSEQ",
+      "type": "u64",
+      "value": "000000000bebc200"
+    },
+    {
+      "label": "Recovery delay",
+      "name": "RECOVERY_DELAY",
+      "role": "sequence",
+      "shown": "2 × 512 s = 1024 s (17 min 4 s)",
+      "type": "u32",
+      "value": "00400002"
+    },
+    {
+      "label": "Treasury key",
+      "name": "TREASURY_KEY",
+      "role": "pubkey",
+      "shown": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "type": "Pubkey",
+      "value": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    }
+  ],
+  "path": {
+    "effect": "Pays output 1, in ASSET, to any script but this one, at most TIER1_MAX while the reserve holds at least TIER1_FLOOR, else TIER2_MAX from TIER2_FLOOR, else TIER3_MAX from TIER3_FLOOR, else TIER4_MAX; once INTERVAL units of 512 seconds have passed since the reserve confirmed; with fees of at most FEE_CAP in ASSET; and pays the rest to output 0 at this script, which waits the interval again. The reserve must be input 0.",
+    "kind": "simplicity",
+    "leaf": "drip",
+    "name": "drip",
+    "selected_by": null,
+    "who": "the holder of FAUCET_KEY"
+  },
+  "payments": [],
+  "sequence": "0x00400001 (1 × 512 s = 512 s (8 min 32 s))",
+  "slots": [],
+  "spender": [],
+  "template": {
+    "hash": "12986f202fbfb850f7699c5d5188f261f276de6c7038142f0a28bbb672b5af34",
+    "names_itself": "sequentia/faucet-drip",
+    "registered": false,
+    "roots": [
+      "5251ec00d9799dbcdb31da4534f25ef9960321f195e2e24ef7125c46f24b972a"
+    ],
+    "shown": "an unregistered template, root 5251ec00d9799dbcdb31da4534f25ef9960321f195e2e24ef7125c46f24b972a",
+    "summary": "A faucet reserve that pays out at most one tier per interval to whatever the faucet key signs for, and that the treasury key recovers once drips stop.",
+    "version": 1
+  },
+  "unsigned_tx": "02000000000187fa956c5910e070cbec4ec9d479fabfdefc7b6bbd6a89d8d513ca33ad11c0330100000000010040000301230f4f5d4b7c6fa845806ee4f67713459e1b69e8e60fcee2e4940c7a0d5de1b2010000b5da7cb909bb00225120d433e48202f1a776e289784ee57686437bf564dea4880ea01801c3182bec1f2301230f4f5d4b7c6fa845806ee4f67713459e1b69e8e60fcee2e4940c7a0d5de1b2010000000ba43b740000160014d0c4a3ef09e997b6e99e397e518fe3e41a118ca101230f4f5d4b7c6fa845806ee4f67713459e1b69e8e60fcee2e4940c7a0d5de1b2010000000000000245000000000000",
+  "unsigned_txid": "490cbb417ee048b4b2518a9e387fe7c03141c7794e5caa1f7aace76ac40d88f4",
+  "vsize": 581,
+  "wallet_change": [
+    {
+      "asset": "b2e15d0d7a0c94e4e2ce0fe6e8691b9e451377f6e46e8045a86f7c4b5d4f0f23",
+      "change": "50000000000",
+      "shown": "500.00000000 tSEQ"
+    }
+  ],
+  "weight": 2323
+}
