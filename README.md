@@ -160,6 +160,19 @@ module that implements it.
   asset and state, receive (a request shown as text and QR, copied or shared), send to
   a request, settle now (the refresh fee shown before anything is signed), every coin
   with its dates, the exit drill, board from on-chain, and what the wallet refused.
+- More > Contracts (developer mode, `app/lib/src/screens/contracts_screen.dart`): a spend
+  of a contract the kit carries (`sequentia/faucet-drip`, `pignus/vault`, `pignus/offer`,
+  `sequentia/one-key`, `sequentia/one-key-exit`), pasted in the shape a site hands the
+  browser extension's `signContractSpend` (`{templateHash, instance, request | drip,
+  fund?}`). The kit's contract engine (SWK `lwk_contracts`, in `ambra_core/src/contracts.rs`)
+  checks it against this wallet: with `fund` the wallet adds its own explicit coins and the
+  change; every wallet input is checked against the wallet's own record of its coins, the
+  contract coin and every foreign coin against the chain's record, read from the wallet's
+  own explorer; every program runs against the final transaction. The screen shows the
+  engine's summary (the template, the path, the parameters by role, every input by what it
+  is, the wallet's balance change in every asset, where the coins go, and the five checks)
+  and signs only the digest of what it showed, with a contract key the path names or, on a
+  path that takes no signature, none; the wallet's funding keys sign only its own coins.
 - The leaf wallet's store is one SQLite file per recovery phrase in the app's support
   directory, opened by one process at a time. It keeps no phrase.
 - While the app runs, the leaf wallet syncs on the library's schedule, with a foreground
@@ -312,6 +325,12 @@ cargo test --test sync -- --nocapture
 # join, move and leave confirmed in blocks, wrong signatures refused by a block
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocapture
 
+# Contract spends against a local sequentiad: a faucet drip and a Pignus vault
+# repaid with the wallet's own coins, each summary checked and each spend confirmed,
+# and the refusals (a digest not shown, a wallet coin said to be in another asset,
+# a foreign coin the chain does not back, a template the wallet does not carry)
+SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test contracts -- --nocapture
+
 # Leaves against a whole operator: a payment received while the app is closed,
 # found by the scheduled job's pass. Needs arca's long-running operator harness
 # (bark-cli/tests/arca_operator_for_browsers.rs in the arca repo) at its control
@@ -319,8 +338,8 @@ SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocaptu
 AMBRA_LEAVES_HARNESS=http://127.0.0.1:18640 cargo test --test leaves -- --nocapture
 ```
 
-A bare `cargo test` runs the network tests too, and fails `stake_records` unless
-`SEQUENTIAD_EXEC` is set, so prefer the explicit forms.
+A bare `cargo test` runs the network tests too, and fails `stake_records` and
+`contracts` unless `SEQUENTIAD_EXEC` is set, so prefer the explicit forms.
 
 Flutter (from `app/`):
 

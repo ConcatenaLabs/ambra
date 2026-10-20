@@ -106,7 +106,7 @@ on-chain coins used for boards and exit fees.
 - Swap tab: same-chain SeqDEX composer, plus entries to "Buy with Bitcoin
   (cross-chain)" and, when a hosted LSP is configured, "Instant (Lightning)".
 - More hub: Node (view/change backend), Testnet faucet, Mode (user or developer mode,
-  and in developer mode Leaves), Security (app lock),
+  and in developer mode Leaves and Contracts), Security (app lock),
   Wallet (reveal phrase / remove wallet), Assets & staking (issue/manage assets,
   stake tSEQ).
 - Modals = bottom sheets: review-&-sign, reference-currency picker, fee-asset
@@ -194,6 +194,11 @@ Generated bindings live in `app/lib/src/rust/`; the Rust source of truth is
   `leaves_job` (the scheduled pass: sync, what arrived, when to wake), and
   `leaves_wake_in`. Answers are the library's JSON; a refusal is its
   `{"error": {"kind", "message"}}`.
+- Contract spends (`api/contracts.rs`, logic in `ambra_core/src/contracts.rs`, over the
+  kit's contract engine `lwk_contracts`): `contract_known_templates`, `contract_prepare`
+  (the engine's summary of a spend asked as `{templateHash, instance, request | drip,
+  fund?}`, kept under its digest), `contract_sign` (signs and broadcasts only the spend
+  prepared under the digest the screen showed, once) and `contract_discard`.
 - Lightning device signer (`api/signer.rs`): `SeqlnSigner` (from mnemonic or
   hsm_secret, `process_frame`, enforce/permissive policy), `NoiseSession`
   (Noise_XK initiator: handshake, encrypt/decrypt), `device_pubkey`,

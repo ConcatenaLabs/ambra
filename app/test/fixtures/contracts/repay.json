@@ -1,0 +1,244 @@
+{
+  "checks": {
+    "1_known_template": "6b17869c4e2abe782fe3d8a3ece4865b8f0aa483028b1d0a815e6bcb4e8939ac is on this wallet's list",
+    "2_output_recomputed": "the engine derived 51208d6b2d5bb78243591dce830b62cfc895e1db5a4acaee6540c07502043ea13ca5 from the template and the instance; the coin pays it",
+    "3_program_run": "the contract's program (input 0) ran against the final transaction: cost 750828 milli-WU of a 6758 WU budget",
+    "4_shown": "this summary",
+    "5_contract_key": "path repay takes no signature, so no contract key signs; this wallet's funding keys sign only its own input 1 (m/84h/1h/0h/0/0), each key checked against its coin's script"
+  },
+  "contract": {
+    "change": [
+      {
+        "asset": null,
+        "change": "0",
+        "shown": "no change: the contract holds what it held"
+      }
+    ],
+    "coin": "121d05d7ee6024cdbfb2085b22c3d1ac4b73fdaf6a09b9fde66c4ae52b416848:1",
+    "input": 0,
+    "script_pubkey": "51208d6b2d5bb78243591dce830b62cfc895e1db5a4acaee6540c07502043ea13ca5"
+  },
+  "digest": "1383c01817858798a8b5a54600dfb40479a18cc279b7c5f079229ccf8f234ca9",
+  "fee": [
+    {
+      "amount": 2000,
+      "asset": "71fc3c7c58460bc9b518216b2b698941c264dda904ff5e37fe35bc8447a70540",
+      "shown": "0.00002000 YDEBT"
+    }
+  ],
+  "inputs": [
+    {
+      "amount": 1000000000,
+      "asset": "7fe0bf8306aa61c210e4fb923e44d2c6989cbcfa25e37271bfbd13daf5e257f2",
+      "checked_against_chain": true,
+      "coin": "121d05d7ee6024cdbfb2085b22c3d1ac4b73fdaf6a09b9fde66c4ae52b416848:1",
+      "index": 0,
+      "is": "contract",
+      "sequence": "0xfffffffd",
+      "shown": "the contract's coin, 10.00000000 XCOL"
+    },
+    {
+      "amount": 1200000000,
+      "asset": "71fc3c7c58460bc9b518216b2b698941c264dda904ff5e37fe35bc8447a70540",
+      "coin": "59151ef8dc71951caad24b2dd7d6b91b7c06d303194fba1277b21ddc4a92e9f1:1",
+      "index": 1,
+      "is": "wallet",
+      "key_path": "m/84h/1h/0h/0/0",
+      "script_pubkey": "0014d0c4a3ef09e997b6e99e397e518fe3e41a118ca1",
+      "shown": "this wallet's coin, 12.00000000 YDEBT, signed with its funding key m/84h/1h/0h/0/0"
+    }
+  ],
+  "lock_time": 0,
+  "locks": null,
+  "opens": [],
+  "outputs": [
+    {
+      "amount": 1000000000,
+      "asset": "7fe0bf8306aa61c210e4fb923e44d2c6989cbcfa25e37271bfbd13daf5e257f2",
+      "index": 0,
+      "role": "contract next state",
+      "script_pubkey": "5120187ca6cb5d1b0dc388fbdd20293e7d34d3c955d57ec0e88ae665c3941d36b056"
+    },
+    {
+      "amount": 200000000,
+      "asset": "71fc3c7c58460bc9b518216b2b698941c264dda904ff5e37fe35bc8447a70540",
+      "index": 1,
+      "role": "pay",
+      "script_pubkey": "00149cc961f6e455ce5fe3cf784a9dcaf4b8262d083f"
+    },
+    {
+      "amount": 2000,
+      "asset": "71fc3c7c58460bc9b518216b2b698941c264dda904ff5e37fe35bc8447a70540",
+      "index": 2,
+      "role": "fee",
+      "script_pubkey": ""
+    },
+    {
+      "amount": 999998000,
+      "asset": "71fc3c7c58460bc9b518216b2b698941c264dda904ff5e37fe35bc8447a70540",
+      "index": 3,
+      "role": "wallet",
+      "script_pubkey": "0014d0c4a3ef09e997b6e99e397e518fe3e41a118ca1"
+    }
+  ],
+  "params": [
+    {
+      "label": "Collateral asset",
+      "name": "COLL",
+      "role": "asset",
+      "shown": "XCOL (7fe0bf8306aa61c210e4fb923e44d2c6989cbcfa25e37271bfbd13daf5e257f2)",
+      "type": "u256",
+      "value": "f257e2f5da13bdbf7172e325fabc9c98c6d2443e92fbe410c261aa0683bfe07f"
+    },
+    {
+      "label": "Debt asset",
+      "name": "DEBT_ASSET",
+      "role": "asset",
+      "shown": "YDEBT (71fc3c7c58460bc9b518216b2b698941c264dda904ff5e37fe35bc8447a70540)",
+      "type": "u256",
+      "value": "4005a74784bc35fe375eff04a9dd64c24189692b6b2118b5c90b46587c3cfc71"
+    },
+    {
+      "label": "Oracle key, whose format-2 attestations price the collateral in the debt asset",
+      "name": "ORACLE",
+      "role": "pubkey",
+      "shown": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "type": "Pubkey",
+      "value": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    },
+    {
+      "label": "The oracle's beacon asset",
+      "name": "BEACON_ASSET",
+      "role": "asset",
+      "shown": "b2e15d0d7a0c94e4e2ce0fe6e8691b9e451377f6e46e8045a86f7c4b5d4f0f23",
+      "type": "u256",
+      "value": "230f4f5d4b7c6fa845806ee4f67713459e1b69e8e60fcee2e4940c7a0d5de1b2"
+    },
+    {
+      "label": "Precision of the oracle's price: price / 10^PRECISION debt atoms per collateral atom",
+      "name": "PRECISION",
+      "role": "number",
+      "shown": "8",
+      "type": "u8",
+      "value": "08"
+    },
+    {
+      "label": "Liquidation threshold: the vault is unhealthy below this collateral ratio, in basis points",
+      "name": "LIQ_BP",
+      "role": "number",
+      "shown": "12000",
+      "type": "u32",
+      "value": "00002ee0"
+    },
+    {
+      "label": "Liquidation target: a liquidation restores the vault at most to this collateral ratio, in basis points",
+      "name": "TARGET_BP",
+      "role": "number",
+      "shown": "15000",
+      "type": "u32",
+      "value": "00003a98"
+    },
+    {
+      "label": "Liquidation bonus: a liquidator seizes collateral worth at most this share of what it repays, in basis points",
+      "name": "BONUS_BP",
+      "role": "number",
+      "shown": "10500",
+      "type": "u32",
+      "value": "00002904"
+    },
+    {
+      "label": "Maturity: from this Unix time anyone may call the loan at an attested price",
+      "name": "MATURITY",
+      "role": "time",
+      "shown": "1792532300 (unix time)",
+      "type": "u32",
+      "value": "6ad7df4c"
+    },
+    {
+      "label": "Recovery: from this Unix time anyone may pay the whole collateral to the lender",
+      "name": "RECOVER_AFTER",
+      "role": "time",
+      "shown": "1792546700 (unix time)",
+      "type": "u32",
+      "value": "6ad8178c"
+    },
+    {
+      "label": "Lender's payout script",
+      "name": "LENDER",
+      "role": "script_hash",
+      "shown": "339a4ea85aae08e16f6039e797189681976918e34289acd03cbf0731159f358b (SHA-256 of a script that is not this wallet's)",
+      "type": "u256",
+      "value": "339a4ea85aae08e16f6039e797189681976918e34289acd03cbf0731159f358b"
+    },
+    {
+      "label": "Borrower's payout script",
+      "name": "BORROWER",
+      "role": "script_hash",
+      "shown": "90954fa8865a517697fd98bc4248654082a383c1ed6722c1dadeb803b13dd571 (SHA-256 of this wallet's script 0014d0c4a3ef09e997b6e99e397e518fe3e41a118ca1)",
+      "type": "u256",
+      "value": "90954fa8865a517697fd98bc4248654082a383c1ed6722c1dadeb803b13dd571"
+    }
+  ],
+  "path": {
+    "effect": "Pays the lender at output 2k+1 at least one atom of DEBT_ASSET. Below DEBT_OUT, output 2k is this vault again, holding the same collateral, owing DEBT_OUT less the payment; at or above it, output 2k pays the borrower at least the whole collateral and the vault closes. This coin is input k.",
+    "kind": "simplicity",
+    "leaf": "vault",
+    "name": "repay",
+    "selected_by": "PATH = Left(Left(… (checked against the kit's table for this template)",
+    "who": "anyone"
+  },
+  "payments": [
+    {
+      "amount": 200000000,
+      "asset": "71fc3c7c58460bc9b518216b2b698941c264dda904ff5e37fe35bc8447a70540",
+      "index": 1,
+      "script_pubkey": "00149cc961f6e455ce5fe3cf784a9dcaf4b8262d083f",
+      "shown": "2.00000000 YDEBT"
+    }
+  ],
+  "sequence": "0xfffffffd (0xfffffffd: no relative lock)",
+  "slots": [
+    {
+      "label": "Debt outstanding, in the debt asset",
+      "name": "DEBT_OUT",
+      "role": "amount",
+      "shown": "1050000000",
+      "value": "000000003e95ba80"
+    },
+    {
+      "label": "Time of the newest attestation a liquidation used, or of the loan's start",
+      "name": "LAST_TIME",
+      "role": "time",
+      "shown": "1792517899 (unix time)",
+      "value": "6ad7a70b"
+    }
+  ],
+  "spender": [
+    {
+      "name": "PATH",
+      "value": "Left(Left(()))"
+    }
+  ],
+  "template": {
+    "hash": "6b17869c4e2abe782fe3d8a3ece4865b8f0aa483028b1d0a815e6bcb4e8939ac",
+    "names_itself": "pignus/vault",
+    "registered": false,
+    "roots": [
+      "5fbca220e82362f0896b29d49812f244ca0ac30209e3d74429700e75b9ed2649"
+    ],
+    "shown": "an unregistered template, root 5fbca220e82362f0896b29d49812f244ca0ac30209e3d74429700e75b9ed2649",
+    "summary": "A loan's collateral in one coin, with its terms and its debt beside the program: repaid in part or whole by anyone, topped up by anyone, liquidated in part under a fresh oracle price only while unhealthy, and recoverable by the lender only long after maturity.",
+    "version": 2
+  },
+  "unsigned_tx": "0200000000024868412be54a6ce6fdb9096aaffd734bacd1c3225b08b2bfcd2460eed7051d120100000000fdfffffff1e9924adc1db27712ba4f1903d3067c1bb9d6d72d4bd2aa1c9571dcf81e15590100000000fdffffff0401f257e2f5da13bdbf7172e325fabc9c98c6d2443e92fbe410c261aa0683bfe07f01000000003b9aca0000225120187ca6cb5d1b0dc388fbdd20293e7d34d3c955d57ec0e88ae665c3941d36b056014005a74784bc35fe375eff04a9dd64c24189692b6b2118b5c90b46587c3cfc7101000000000bebc200001600149cc961f6e455ce5fe3cf784a9dcaf4b8262d083f014005a74784bc35fe375eff04a9dd64c24189692b6b2118b5c90b46587c3cfc710100000000000007d00000014005a74784bc35fe375eff04a9dd64c24189692b6b2118b5c90b46587c3cfc7101000000003b9ac23000160014d0c4a3ef09e997b6e99e397e518fe3e41a118ca100000000",
+  "unsigned_txid": "f22b884b92875fb3e38f737866419681dc991bc2ee82bd7e4704fcf74c8fd9f4",
+  "vsize": 797,
+  "wallet_change": [
+    {
+      "asset": "71fc3c7c58460bc9b518216b2b698941c264dda904ff5e37fe35bc8447a70540",
+      "change": "-200002000",
+      "shown": "-2.00002000 YDEBT"
+    }
+  ],
+  "weight": 3186
+}

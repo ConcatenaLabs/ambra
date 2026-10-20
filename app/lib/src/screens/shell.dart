@@ -31,6 +31,7 @@ import '../data/wallet_cache.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
 import '../widgets/ln_cards.dart';
+import 'contracts_screen.dart';
 import 'leaves_screen.dart';
 import '../widgets/restricted_asset_detail.dart';
 import '../widgets/widgets.dart';
@@ -1808,6 +1809,13 @@ class MoreTab extends StatelessWidget {
                   label: 'Leaves',
                   icon: Icons.account_tree_outlined,
                   onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LeavesScreen())),
+                ),
+                const SizedBox(height: 8),
+                SecondaryButton(
+                  key: const Key('open-contracts'),
+                  label: 'Contracts',
+                  icon: Icons.description_outlined,
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ContractsScreen())),
                 ),
               ],
             ]),

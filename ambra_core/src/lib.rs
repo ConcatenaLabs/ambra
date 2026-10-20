@@ -24,6 +24,9 @@ mod seqdex;
 /// Staking pools on any Sequentia chain: join, find, move and leave a
 /// delegation record. `api` wraps it for the testnet.
 pub mod staking;
+
+/// Contract spends under the five-point rule, through the kit's contract engine.
+pub mod contracts;
 /// Leaves of an operator's covenant trees: the operator's wallet library
 /// (`bark::arca`) with the phone's HTTP and store, and the scheduled job's pass.
 pub mod leaves;

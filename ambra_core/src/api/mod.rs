@@ -18,6 +18,10 @@ pub mod rewards;
 /// job that syncs while the app is closed.
 pub mod leaves;
 
+/// Contract spends under the five-point rule: a drip, a Pignus loan's spends, any
+/// spend of a template the kit carries, checked and signed by the kit's engine.
+pub mod contracts;
+
 use std::str::FromStr;
 
 use anyhow::Result;

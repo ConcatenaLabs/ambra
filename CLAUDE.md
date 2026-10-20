@@ -57,6 +57,7 @@ Tests, from `ambra_core/`:
 cargo test --test smoke --test signer_conformance
 cargo test --test sync -- --nocapture
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocapture
+SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test contracts -- --nocapture
 AMBRA_LEAVES_HARNESS=http://127.0.0.1:18640 cargo test --test leaves -- --nocapture
 ```
 
