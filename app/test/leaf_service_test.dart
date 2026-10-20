@@ -68,4 +68,17 @@ void main() {
     expect(nextAsk({'now': 100, 'next_sync_at': 50}, false), const Duration(seconds: 5));
     expect(nextAsk({'now': 100, 'next_sync_at': null}, false), LeafService.tick);
   });
+
+  test('the app syncs when the time the schedule first gave arrives, though the schedule moves it on and is not due', () {
+    var d = syncDecision({'now': 1000, 'next_sync_at': 4600, 'due': false}, null, false);
+    expect((d.sync, d.why, d.held), (false, null, 4600));
+    d = syncDecision({'now': 2000, 'next_sync_at': 5600, 'due': false}, d.held, false);
+    expect((d.sync, d.held), (false, 4600), reason: 'the time first given is held, not the one read now');
+    d = syncDecision({'now': 4600, 'next_sync_at': 8200, 'due': false}, d.held, false);
+    expect((d.sync, d.why, d.held), (true, 'time', null));
+    d = syncDecision({'now': 1, 'next_sync_at': 9, 'due': true}, 5, false);
+    expect((d.sync, d.why), (true, 'schedule'));
+    d = syncDecision({'now': 1, 'next_sync_at': 9, 'due': false}, null, true);
+    expect((d.sync, d.why), (true, 'moving'));
+  });
 }
