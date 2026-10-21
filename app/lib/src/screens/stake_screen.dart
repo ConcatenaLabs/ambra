@@ -745,8 +745,8 @@ class _PoolSectionState extends State<_PoolSection> {
           'silently, but does not check that address shares anything with you.');
     } else if (p.payout.startsWith('pays every delegator')) {
       out.add('This pool shares rewards proportionally: they pool up on-chain and anyone can '
-          'trigger the payout. Leaving forfeits your unclaimed share, so claim your rewards '
-          'before you leave.');
+          'trigger the payout. Leaving gives up your share that has not been paid out yet, so '
+          'have your rewards paid out before you leave.');
     }
     final away = p.pendingBlocks;
     if (away != null) {
