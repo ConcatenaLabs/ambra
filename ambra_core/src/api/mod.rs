@@ -1704,7 +1704,7 @@ pub struct TxRow {
     pub txid: String,
     pub height: Option<u32>,
     pub timestamp: Option<u64>,
-    /// "incoming" | "outgoing" | "issuance" | "reissuance" | "burn" | "redeposit" | "unknown".
+    /// "incoming" | "outgoing" | "swap" | "issuance" | "reissuance" | "burn" | "redeposit" | "unknown".
     pub kind: String,
     pub fee: u64,
     /// The asset id (hex) the network fee was paid in. Sequentia's open fee market
@@ -1746,9 +1746,12 @@ pub fn wallet_transactions(mnemonic: String, esplora_url: String) -> Result<Vec<
                         atoms: v.to_string(),
                     })
                     .collect();
+                // One asset out and another in, which lwk cannot name (an issuance it
+                // names as such): a swap, such as a fill of a covenant order.
                 let kind = match (neg, pos) {
                     (true, false) => "outgoing".to_string(),
                     (false, true) => "incoming".to_string(),
+                    (true, true) if t.type_ == "unknown" => "swap".to_string(),
                     _ => t.type_,
                 };
                 // The fee output's asset (any-asset fee market): the fee need not
