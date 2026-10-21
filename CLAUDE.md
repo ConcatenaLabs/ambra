@@ -121,6 +121,12 @@ debug to release signing requires one uninstall, after which updates apply clean
 
 `key.properties`, `**/*.keystore` and `**/*.jks` are gitignored. Keep it that way.
 
+Release builds are shrunk by R8 (the Flutter Gradle plugin turns it on), debug builds are
+not. Whatever Android code reaches by reflection needs a keep rule in
+`app/android/app/proguard-rules.pro`: WorkManager's Room database and its workers are kept
+there, and without them a release APK dies at start-up while every debug build runs. Start a
+release build on a device before a release.
+
 ## Working in this repo
 
 - **Repository is public.** Never commit seeds, private keys, keystores, credentials, RPC
