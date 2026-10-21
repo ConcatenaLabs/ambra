@@ -357,8 +357,7 @@ class _BalanceTabState extends State<BalanceTab> {
             ..._openamp,
           ];
     // Bitcoin is first-class: on-chain (the last-known balance if a fresh testnet4
-    // scan failed) plus Lightning, shown when held (a 0 balance is hidden like any
-    // asset's).
+    // scan failed) plus Lightning. Its row comes first and is listed even at 0.
     final btcSatsStr = _btc?.balanceSats ?? _btcCachedSats;
     final btcOnchain = BigInt.tryParse(btcSatsStr ?? '0') ?? BigInt.zero;
     final btcLn = legLiquidity(chans, RailTarget.btc()).spendable;
@@ -421,20 +420,21 @@ class _BalanceTabState extends State<BalanceTab> {
             const Padding(
                 padding: EdgeInsets.only(top: 40),
                 child: Center(child: CircularProgressIndicator(color: AmbraColors.amber)))
-          else if (held.isEmpty && !hasBtc)
-            const AmbraCard(
-                child: Text(
-                    'No funds yet. Get free testnet coins from the faucet (More tab), '
-                    'or share your address on Receive.',
-                    style: AmbraText.muted))
           else ...[
+            if (held.isEmpty && !hasBtc) ...[
+              const AmbraCard(
+                  child: Text(
+                      'No funds yet. Get free testnet coins from the faucet (More tab), '
+                      'or share your address on Receive.',
+                      style: AmbraText.muted)),
+              const SizedBox(height: 18),
+            ],
             Text('ASSETS', style: AmbraText.label),
             const SizedBox(height: 10),
             AmbraCard(
               padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
               child: Column(children: [
-                if (hasBtc)
-                  _BtcRow(
+                _BtcRow(
                       sats: btcTotal.toString(),
                       onchainSats: btcOnchain,
                       stale: _btcStale,
