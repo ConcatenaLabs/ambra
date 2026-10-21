@@ -140,6 +140,9 @@ class Backend {
   /// depth (reorg-aware, per anchoring supremacy — never sticky).
   static String anchor(String blockHash) => '$_origin/anchor/$blockHash';
 
+  /// The base of [anchor], for the core, which appends `/<block hash>`.
+  static String get anchorBase => '$_origin/anchor';
+
   /// Trim whitespace and trailing slashes so endpoint concatenation stays clean.
   static String _normalize(String v) {
     var s = v.trim();

@@ -2332,6 +2332,140 @@ pub fn build_delegation_spend(
     Ok(raw_hex)
 }
 
+// --- SEQUENTIA stakes: listed, unbonded, claimed ----------------------------
+//
+// A stake of this wallet's key (m/2/0) is found on the chain under either lock a
+// Sequentia wallet bonds with (the height lock of the web wallet and the
+// extension, the time lock of this app), so a stake made by any of them is
+// listed, unbonded and claimed here. The logic is in `crate::staking`.
+
+/// A coin of this wallet's staking key that is still its Sequence token.
+#[derive(Debug, Clone)]
+pub struct StakeEntry {
+    /// The coin: the bond's staking output, or the unbonding output.
+    pub txid: String,
+    pub vout: u32,
+    /// Atoms of the Sequence token.
+    pub value: u64,
+    /// "height" or "time" for a bond; "" for an unbonding output.
+    pub lock: String,
+    /// "pending", "bonded", "unbondable", "unbonding" or "claimable".
+    pub state: String,
+    /// The block the coin is in; None while unconfirmed.
+    pub height: Option<u32>,
+    /// Height lock: the first block an unbond may enter.
+    pub matures_at_height: Option<u32>,
+    /// Time lock: the median time (unix seconds) the chain must reach first.
+    pub matures_at_time: Option<u64>,
+    /// The chain tip's median time when this was read (time lock only).
+    pub tip_time: Option<u64>,
+    /// Unbonding: the Bitcoin height the chain tip's anchor must reach.
+    pub claimable_at_anchor: Option<u32>,
+    /// Unbonding: the chain tip's Bitcoin anchor when this was read.
+    pub tip_anchor: Option<u32>,
+}
+
+impl From<&crate::staking::Stake> for StakeEntry {
+    fn from(s: &crate::staking::Stake) -> Self {
+        StakeEntry {
+            txid: s.txid.to_string(),
+            vout: s.vout,
+            value: s.value,
+            lock: match s.csv {
+                Some(c) if crate::staking::is_time_csv(c) => "time".into(),
+                Some(_) => "height".into(),
+                None => String::new(),
+            },
+            state: s.phase.name().into(),
+            height: s.height,
+            matures_at_height: s.matures_at_height,
+            matures_at_time: s.matures_at_time,
+            tip_time: s.tip_time,
+            claimable_at_anchor: s.claimable_at_anchor,
+            tip_anchor: s.tip_anchor,
+        }
+    }
+}
+
+fn find_own_stakes(mnemonic: &str, esplora_url: &str, anchor_url: &str) -> Result<Vec<crate::staking::Stake>> {
+    let staker = crate::staking::public_bytes(&crate::staking::staker_secret(mnemonic)?);
+    crate::staking::find_stakes(&crate::staking::StakeChain::testnet(), esplora_url, anchor_url, &staker)
+}
+
+/// Every stake of this wallet's key that is still its Sequence token: each
+/// bonded stake under either lock and each unbonding output not yet claimed,
+/// with where it stands. `anchor_url` answers `<anchor_url>/<block hash>` with
+/// the block's Bitcoin anchor height.
+pub fn list_stakes(mnemonic: String, esplora_url: String, anchor_url: String) -> Result<Vec<StakeEntry>> {
+    Ok(find_own_stakes(&mnemonic, &esplora_url, &anchor_url)?
+        .iter()
+        .map(StakeEntry::from)
+        .collect())
+}
+
+fn own_stake(
+    mnemonic: &str,
+    esplora_url: &str,
+    anchor_url: &str,
+    txid: &str,
+    vout: u32,
+) -> Result<crate::staking::Stake> {
+    find_own_stakes(mnemonic, esplora_url, anchor_url)?
+        .into_iter()
+        .find(|s| s.txid.to_string() == txid && s.vout == vout)
+        .ok_or_else(|| err("that stake is no longer on the chain".to_string()))
+}
+
+/// Unbond the stake at `txid:vout` once its lock has passed: the raw signed
+/// transaction moving it into the unbonding output of the same key, its fee
+/// taken out of the stake. Broadcast it with [`broadcast_stake_step`].
+pub fn build_unbond(
+    mnemonic: String,
+    esplora_url: String,
+    anchor_url: String,
+    txid: String,
+    vout: u32,
+) -> Result<String> {
+    let stake = own_stake(&mnemonic, &esplora_url, &anchor_url, &txid, vout)?;
+    let (raw, _) = crate::staking::build_unbond(
+        &crate::staking::StakeChain::testnet(),
+        &esplora_url,
+        &crate::staking::staker_secret(&mnemonic)?,
+        &stake,
+    )?;
+    Ok(raw)
+}
+
+/// Claim the unbonding output at `txid:vout` back into the wallet once the
+/// unbonding depth has passed: the raw signed transaction paying it to a fresh
+/// address of the wallet. Broadcast it with [`broadcast_stake_step`].
+pub fn build_unbond_claim(
+    mnemonic: String,
+    esplora_url: String,
+    anchor_url: String,
+    txid: String,
+    vout: u32,
+) -> Result<String> {
+    let unbonding = own_stake(&mnemonic, &esplora_url, &anchor_url, &txid, vout)?;
+    let destination = fresh_unblinded_spk(&mnemonic, &esplora_url)?;
+    let (raw, _) = crate::staking::build_claim(
+        &crate::staking::StakeChain::testnet(),
+        &esplora_url,
+        &crate::staking::staker_secret(&mnemonic)?,
+        &unbonding,
+        destination,
+    )?;
+    Ok(raw)
+}
+
+/// Broadcast an unbond or a claim. Returns its txid. The next sync rescans,
+/// so a claim's coins appear in the wallet.
+pub fn broadcast_stake_step(esplora_url: String, tx_hex: String) -> Result<String> {
+    let txid = crate::staking::broadcast(&esplora_url, &tx_hex)?;
+    clear_scan_marks();
+    Ok(txid)
+}
+
 // --- OpenAMP restricted-asset enclave signing --------------------------------
 //
 // OpenAMP holds a user's restricted (clawback-capable) assets in an enclave

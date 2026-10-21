@@ -6,8 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_fee_and_finish`, `base64_encode`, `btc_params`, `clear_scan_marks`, `controller_and_signer`, `covenant_display_ids`, `ct_str`, `ct_u64`, `derive_maker_payout`, `derive_maker_secret`, `enclave_prevout_to_txout`, `enclave_prevouts_to_txouts`, `enclave_sighash_inner`, `err`, `esplora_client`, `fetch_utxo`, `fresh_unblinded_spk`, `hexbytes`, `hexstr_bytes`, `last_scan`, `maker_identity_priv`, `mark_scanned`, `openamp_keypair`, `order_from_terms`, `parse_openamp_tx`, `policy_native_rate`, `priv32`, `recoverable_signature`, `rerr`, `rev_hex`, `scan_into`, `scanned_recently`, `select_taker_inputs`, `seq_addr_params`, `tohex`, `with_synced_wollet`, `wollet_cache`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `apply_fee_and_finish`, `base64_encode`, `btc_params`, `clear_scan_marks`, `controller_and_signer`, `covenant_display_ids`, `ct_str`, `ct_u64`, `derive_maker_payout`, `derive_maker_secret`, `enclave_prevout_to_txout`, `enclave_prevouts_to_txouts`, `enclave_sighash_inner`, `err`, `esplora_client`, `fetch_utxo`, `find_own_stakes`, `fresh_unblinded_spk`, `hexbytes`, `hexstr_bytes`, `last_scan`, `maker_identity_priv`, `mark_scanned`, `openamp_keypair`, `order_from_terms`, `own_stake`, `parse_openamp_tx`, `policy_native_rate`, `priv32`, `recoverable_signature`, `rerr`, `rev_hex`, `scan_into`, `scanned_recently`, `select_taker_inputs`, `seq_addr_params`, `tohex`, `with_synced_wollet`, `wollet_cache`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`, `from`
 
 /// The active Sequentia network's identifier, e.g. `"sequentia-testnet"`.
 String networkName() => RustLib.instance.api.crateApiNetworkName();
@@ -896,6 +896,64 @@ Future<String> buildDelegationSpend({
   esploraUrl: esploraUrl,
   rotateTo: rotateTo,
   probeSigners: probeSigners,
+);
+
+/// Every stake of this wallet's key that is still its Sequence token: each
+/// bonded stake under either lock and each unbonding output not yet claimed,
+/// with where it stands. `anchor_url` answers `<anchor_url>/<block hash>` with
+/// the block's Bitcoin anchor height.
+Future<List<StakeEntry>> listStakes({
+  required String mnemonic,
+  required String esploraUrl,
+  required String anchorUrl,
+}) => RustLib.instance.api.crateApiListStakes(
+  mnemonic: mnemonic,
+  esploraUrl: esploraUrl,
+  anchorUrl: anchorUrl,
+);
+
+/// Unbond the stake at `txid:vout` once its lock has passed: the raw signed
+/// transaction moving it into the unbonding output of the same key, its fee
+/// taken out of the stake. Broadcast it with [`broadcast_stake_step`].
+Future<String> buildUnbond({
+  required String mnemonic,
+  required String esploraUrl,
+  required String anchorUrl,
+  required String txid,
+  required int vout,
+}) => RustLib.instance.api.crateApiBuildUnbond(
+  mnemonic: mnemonic,
+  esploraUrl: esploraUrl,
+  anchorUrl: anchorUrl,
+  txid: txid,
+  vout: vout,
+);
+
+/// Claim the unbonding output at `txid:vout` back into the wallet once the
+/// unbonding depth has passed: the raw signed transaction paying it to a fresh
+/// address of the wallet. Broadcast it with [`broadcast_stake_step`].
+Future<String> buildUnbondClaim({
+  required String mnemonic,
+  required String esploraUrl,
+  required String anchorUrl,
+  required String txid,
+  required int vout,
+}) => RustLib.instance.api.crateApiBuildUnbondClaim(
+  mnemonic: mnemonic,
+  esploraUrl: esploraUrl,
+  anchorUrl: anchorUrl,
+  txid: txid,
+  vout: vout,
+);
+
+/// Broadcast an unbond or a claim. Returns its txid. The next sync rescans,
+/// so a claim's coins appear in the wallet.
+Future<String> broadcastStakeStep({
+  required String esploraUrl,
+  required String txHex,
+}) => RustLib.instance.api.crateApiBroadcastStakeStep(
+  esploraUrl: esploraUrl,
+  txHex: txHex,
 );
 
 /// The 32-byte x-only public key (BIP340) at m/5/0, as 64-char hex — the key an
@@ -1932,6 +1990,85 @@ class SignedMessage {
           signature == other.signature &&
           verifyAddress == other.verifyAddress &&
           address == other.address;
+}
+
+/// A coin of this wallet's staking key that is still its Sequence token.
+class StakeEntry {
+  /// The coin: the bond's staking output, or the unbonding output.
+  final String txid;
+  final int vout;
+
+  /// Atoms of the Sequence token.
+  final BigInt value;
+
+  /// "height" or "time" for a bond; "" for an unbonding output.
+  final String lock;
+
+  /// "pending", "bonded", "unbondable", "unbonding" or "claimable".
+  final String state;
+
+  /// The block the coin is in; None while unconfirmed.
+  final int? height;
+
+  /// Height lock: the first block an unbond may enter.
+  final int? maturesAtHeight;
+
+  /// Time lock: the median time (unix seconds) the chain must reach first.
+  final BigInt? maturesAtTime;
+
+  /// The chain tip's median time when this was read (time lock only).
+  final BigInt? tipTime;
+
+  /// Unbonding: the Bitcoin height the chain tip's anchor must reach.
+  final int? claimableAtAnchor;
+
+  /// Unbonding: the chain tip's Bitcoin anchor when this was read.
+  final int? tipAnchor;
+
+  const StakeEntry({
+    required this.txid,
+    required this.vout,
+    required this.value,
+    required this.lock,
+    required this.state,
+    this.height,
+    this.maturesAtHeight,
+    this.maturesAtTime,
+    this.tipTime,
+    this.claimableAtAnchor,
+    this.tipAnchor,
+  });
+
+  @override
+  int get hashCode =>
+      txid.hashCode ^
+      vout.hashCode ^
+      value.hashCode ^
+      lock.hashCode ^
+      state.hashCode ^
+      height.hashCode ^
+      maturesAtHeight.hashCode ^
+      maturesAtTime.hashCode ^
+      tipTime.hashCode ^
+      claimableAtAnchor.hashCode ^
+      tipAnchor.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is StakeEntry &&
+          runtimeType == other.runtimeType &&
+          txid == other.txid &&
+          vout == other.vout &&
+          value == other.value &&
+          lock == other.lock &&
+          state == other.state &&
+          height == other.height &&
+          maturesAtHeight == other.maturesAtHeight &&
+          maturesAtTime == other.maturesAtTime &&
+          tipTime == other.tipTime &&
+          claimableAtAnchor == other.claimableAtAnchor &&
+          tipAnchor == other.tipAnchor;
 }
 
 /// A message signed with the STAKING key (m/2/0), for a site that reads the

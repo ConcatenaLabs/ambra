@@ -31,6 +31,14 @@
 //! leave in the first block at it (signed the second-generation way; the legacy
 //! one refused by a block).
 //!
+//! `stakes_under_both_locks`: a stake under the height lock the web wallet and
+//! the extension bond with and one under the time lock the app bonds with, both
+//! found at the staking key through the explorer, each unbonded once its lock
+//! passes and claimed once the unbonding depth passes, by `ambra_core::staking`.
+//! An unbond before either lock is refused by the mempool (`non-BIP68-final`)
+//! and by a block, and so is a claim before the depth (`bad-unbond-premature`);
+//! the wallet refuses to build either first.
+//!
 //! Needs `SEQUENTIAD_EXEC` pointing at a `sequentiad`:
 //!
 //! ```text
@@ -75,6 +83,9 @@ const COIN: u64 = 100_000_000;
 const FEE_RATE: f32 = 2_000.0;
 /// The chain's unbonding period (blocks), hence the bond's relative lock.
 const UNBONDING: u32 = 5;
+/// Blocks an unbonding output waits before its claim (`-posunbonddepth`): on a
+/// chain without Bitcoin anchors the node counts Sequentia blocks.
+const UNBOND_DEPTH: u32 = 3;
 /// A published test mnemonic: the wallet holds nothing outside these tests.
 const MNEMONIC: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -321,7 +332,7 @@ impl Drop for Node {
 }
 
 /// `bad` is refused by the node's relay policy and by a block, for the reasons
-/// given, and `good` is valid in that same block.
+/// given, and `good` (when given) is valid in that same block.
 fn refused_everywhere(
     node: &Node,
     producer: &str,
@@ -332,7 +343,14 @@ fn refused_everywhere(
     block: &str,
 ) {
     let by_policy = node.refusal(&hex_of(bad));
-    let verdicts = node.block_verdicts(producer, &[vec![bad.clone()], good.to_vec()]);
+    // With nothing to set beside it, the block that carries it is judged alone:
+    // the same block without it is the one the node produces.
+    let variants = if good.is_empty() {
+        vec![vec![bad.clone()]]
+    } else {
+        vec![vec![bad.clone()], good.to_vec()]
+    };
+    let verdicts = node.block_verdicts(producer, &variants);
     let by_block = verdicts[0]
         .clone()
         .expect_err("a block carrying it must be invalid");
@@ -342,6 +360,9 @@ fn refused_everywhere(
         "{what}: mempool said {by_policy}"
     );
     assert!(by_block.contains(block), "{what}: block said {by_block}");
+    if good.is_empty() {
+        return;
+    }
     verdicts[1]
         .clone()
         .unwrap_or_else(|e| panic!("{what}: the same block carrying the right transaction: {e}"));
@@ -536,6 +557,36 @@ fn esplora_tx(tx: &Json, height: Option<u32>) -> Json {
 fn route(port: u16, method: &str, path: &str, body: &str) -> (&'static str, String) {
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     match (method, parts.as_slice()) {
+        ("GET", ["blocks", "tip", "hash"]) => match try_rpc(port, "getbestblockhash", json!([])) {
+            Ok(h) => ("200 OK", h.as_str().unwrap().to_string()),
+            Err(e) => ("500 Internal Server Error", e),
+        },
+        ("GET", ["block-height", h]) => {
+            match try_rpc(port, "getblockhash", json!([h.parse::<u64>().unwrap_or(u64::MAX)])) {
+                Ok(h) => ("200 OK", h.as_str().unwrap().to_string()),
+                Err(_) => ("404 Not Found", String::new()),
+            }
+        }
+        ("GET", ["block", hash]) => match try_rpc(port, "getblockheader", json!([hash])) {
+            Ok(h) => (
+                "200 OK",
+                json!({
+                    "id": h["hash"],
+                    "height": h["height"],
+                    "mediantime": h["mediantime"],
+                    "previousblockhash": h["previousblockhash"],
+                })
+                .to_string(),
+            ),
+            Err(_) => ("404 Not Found", String::new()),
+        },
+        // The node's anchor service. This chain has no Bitcoin anchor, and the
+        // node then counts the unbonding depth in Sequentia blocks: a block's
+        // "anchor" is its height.
+        ("GET", ["anchor", hash]) => match try_rpc(port, "getblockheader", json!([hash])) {
+            Ok(h) => ("200 OK", json!({"anchorheight": h["height"]}).to_string()),
+            Err(_) => ("404 Not Found", String::new()),
+        },
         ("GET", ["blocks", "tip", "height"]) => (
             "200 OK",
             try_rpc(port, "getblockcount", json!([]))
@@ -692,6 +743,7 @@ fn chain_args(producer_pub: &[u8], extra: &[String]) -> Vec<String> {
     .map(|s| s.to_string())
     .collect();
     args.push(format!("-posunbonding={UNBONDING}"));
+    args.push(format!("-posunbonddepth={UNBOND_DEPTH}"));
     args.push(format!("-staker={}:{}", producer_pub.to_hex(), COIN));
     args.extend(extra.iter().cloned());
     args
@@ -741,6 +793,10 @@ impl Ambra {
             chain: StakeChain {
                 network,
                 records_v2_height,
+                // The height lock here is the chain's minimum, as 43,200 is
+                // the testnet's; the time lock is the one the app bonds with.
+                stake_csvs: vec![UNBONDING, staking::TIME_CSV],
+                unbond_depth: UNBOND_DEPTH,
             },
             signer: SwSigner::new(MNEMONIC, false).unwrap(),
             wollet,
@@ -1320,4 +1376,249 @@ fn records_across_the_fork_height() {
     assert_eq!(signing, StakeRecordSigning::SegwitV0);
     assert!(node.tip() >= FORK);
     assert_eq!(node.delegation_of(&staker), None);
+}
+
+// --- Stakes under both locks ----------------------------------------------------
+
+/// Bond 50 coins to Ambra's staking key under `csv`, through the wallet's PSET
+/// path (`build_stake_tx` builds the same output). Returns the bond's txid.
+fn bond_with(node: &Node, ambra: &mut Ambra, producer: &str, csv: u32, what: &str) -> Txid {
+    let staker = ambra.staker.clone();
+    let tx = ambra.pset_tx(TxBuilder::new(ambra.chain.network).add_stake_output(
+        &staker,
+        csv,
+        50 * COIN,
+    ));
+    let id = node.send(&hex_of(&tx));
+    assert!(node.produce(producer).contains(&id));
+    ambra.applied(&tx);
+    assert!(tx
+        .output
+        .iter()
+        .any(|o| o.script_pubkey == sequentia_stake_script(&staker, csv)));
+    println!("bond {what} (csv {csv:#x}) {id} in block {}", node.tip());
+    id
+}
+
+fn stakes(ambra: &Ambra) -> Vec<staking::Stake> {
+    staking::find_stakes(
+        &ambra.chain,
+        &ambra.esplora,
+        &format!("{}/anchor", ambra.esplora),
+        &ambra.staker,
+    )
+    .unwrap()
+}
+
+fn stake_of(ambra: &Ambra, txid: Txid) -> staking::Stake {
+    stakes(ambra)
+        .into_iter()
+        .find(|s| s.txid == txid)
+        .unwrap_or_else(|| panic!("{txid} is listed"))
+}
+
+/// The unbond the wallet would refuse to build yet, built anyway with the kit
+/// for the next block: what the node makes of an early unbond.
+fn forced_unbond(node: &Node, ambra: &Ambra, s: &staking::Stake) -> Transaction {
+    let tip = node.tip();
+    let (raw, _) = lwk_wollet::build_unbond_tx(&lwk_wollet::UnbondPlan {
+        stakes: vec![lwk_wollet::StakeOutput {
+            txid: s.txid,
+            vout: s.vout,
+            value: s.value,
+            script_pubkey: s.script.clone(),
+        }],
+        asset: ambra.asset(),
+        staker_secret: ambra.staker_secret,
+        fee_atoms: staking::UNBOND_FEE_ATOMS,
+        locktime: tip,
+        signing: ambra.chain.signing_after(tip).unwrap(),
+    })
+    .unwrap();
+    decode(&raw)
+}
+
+/// The claim the wallet would refuse to build yet, built anyway with the kit.
+fn forced_claim(node: &Node, ambra: &Ambra, s: &staking::Stake) -> Transaction {
+    let tip = node.tip();
+    let (raw, _) = lwk_wollet::build_unbond_claim_tx(&lwk_wollet::UnbondClaimPlan {
+        unbonding: vec![lwk_wollet::UnbondingOutput {
+            txid: s.txid,
+            vout: s.vout,
+            value: s.value,
+        }],
+        asset: ambra.asset(),
+        staker_secret: ambra.staker_secret,
+        destination: ambra.address_spk(11),
+        fee_atoms: staking::CLAIM_FEE_ATOMS,
+        dust_floor: staking::DUST_FLOOR,
+        locktime: tip,
+        signing: ambra.chain.signing_after(tip).unwrap(),
+    })
+    .unwrap();
+    decode(&raw)
+}
+
+/// Unbond `bond` with Ambra's code once listed as unbondable, mine it, and
+/// return the unbonding output as listed.
+fn unbond(node: &Node, ambra: &Ambra, producer: &str, bond: Txid, what: &str) -> staking::Stake {
+    let s = stake_of(ambra, bond);
+    assert_eq!(s.phase, staking::StakePhase::Unbondable, "{what}");
+    let (raw, id) = staking::build_unbond(&ambra.chain, &ambra.esplora, &ambra.staker_secret, &s).unwrap();
+    assert_eq!(staking::broadcast(&ambra.esplora, &raw).unwrap(), id.to_string());
+    assert!(node.produce(producer).contains(&id));
+    println!(
+        "unbond {what} {id} in block {} ({} vB, fee {} atoms from the stake)",
+        node.tip(),
+        node.vsize(&raw),
+        staking::UNBOND_FEE_ATOMS
+    );
+    assert!(stakes(ambra).iter().all(|x| x.txid != bond), "the bond is spent");
+    let u = stake_of(ambra, id);
+    assert_eq!(u.phase, staking::StakePhase::Unbonding);
+    assert_eq!(u.csv, None);
+    assert_eq!(u.value, 50 * COIN - staking::UNBOND_FEE_ATOMS);
+    assert_eq!(u.claimable_at_anchor, Some(node.tip() + UNBOND_DEPTH));
+    u
+}
+
+/// Claim `u` with Ambra's code once listed as claimable, mine it, and check the
+/// coins reached the wallet's address and left the list.
+fn claim(node: &Node, ambra: &Ambra, producer: &str, u: &staking::Stake, index: u32, what: &str) {
+    let dest = ambra.address_spk(index);
+    let (raw, id) =
+        staking::build_claim(&ambra.chain, &ambra.esplora, &ambra.staker_secret, u, dest.clone()).unwrap();
+    assert_eq!(staking::broadcast(&ambra.esplora, &raw).unwrap(), id.to_string());
+    assert!(node.produce(producer).contains(&id));
+    let tx = decode(&raw);
+    assert_eq!(tx.output[0].script_pubkey, dest);
+    assert_eq!(tx.output[0].value, Value::Explicit(u.value - staking::CLAIM_FEE_ATOMS));
+    println!(
+        "claim {what} {id} in block {} ({} vB, fee {} atoms): {} atoms to the wallet",
+        node.tip(),
+        node.vsize(&raw),
+        staking::CLAIM_FEE_ATOMS,
+        u.value - staking::CLAIM_FEE_ATOMS
+    );
+    assert!(stakes(ambra).iter().all(|x| x.txid != u.txid), "claimed back");
+}
+
+#[test]
+fn stakes_under_both_locks() {
+    let (producer_sk, producer_pub) = random_key();
+    let producer = wif(&producer_sk);
+    let mut node = Node::start("ambra_stakes_both_locks", chain_args(&producer_pub, &[]));
+    let mut ambra = Ambra::new(&node, 1, String::new());
+    fund(&mut node, &mut ambra, &producer);
+
+    // A stake under the height lock, as the web wallet and the extension
+    // bond (43,200 blocks on the testnet, the chain's minimum here), and one
+    // under the time lock the app bonds with.
+    let by_height = bond_with(&node, &mut ambra, &producer, UNBONDING, "under the height lock");
+    let by_time = bond_with(&node, &mut ambra, &producer, staking::TIME_CSV, "under the time lock");
+    let listed = stakes(&ambra);
+    assert_eq!(listed.len(), 2, "both found: {listed:?}");
+    let h = stake_of(&ambra, by_height);
+    let t = stake_of(&ambra, by_time);
+    assert_eq!(h.phase, staking::StakePhase::Bonded);
+    assert_eq!(t.phase, staking::StakePhase::Bonded);
+    assert_eq!(h.matures_at_height, Some(h.height.unwrap() + UNBONDING));
+    assert_eq!(staking::staked_total(&listed), 100 * COIN);
+    println!(
+        "found: {by_height} height lock, unbondable from block {}; {by_time} time lock, from median time {} (tip's {})",
+        h.matures_at_height.unwrap(),
+        t.matures_at_time.unwrap(),
+        t.tip_time.unwrap()
+    );
+
+    // --- The height lock ------------------------------------------------------
+    let e = staking::build_unbond(&ambra.chain, &ambra.esplora, &ambra.staker_secret, &h)
+        .unwrap_err()
+        .to_string();
+    println!("NEGATIVE early unbond, wallet: {e}");
+    assert!(e.contains("cannot be unbonded yet"), "{e}");
+    refused_everywhere(
+        &node,
+        &producer,
+        &forced_unbond(&node, &ambra, &h),
+        &[],
+        "unbond before the height lock",
+        "non-BIP68-final",
+        "bad-txns-nonfinal",
+    );
+    while stake_of(&ambra, by_height).phase == staking::StakePhase::Bonded {
+        node.produce(&producer);
+    }
+    assert_eq!(node.tip() + 1, h.matures_at_height.unwrap(), "unbondable exactly when the node takes it");
+    let u = unbond(&node, &ambra, &producer, by_height, "of the height-locked stake");
+
+    let e = staking::build_claim(&ambra.chain, &ambra.esplora, &ambra.staker_secret, &u, ambra.address_spk(10))
+        .unwrap_err()
+        .to_string();
+    println!("NEGATIVE early claim, wallet: {e}");
+    assert!(e.contains("cannot be claimed yet"), "{e}");
+    refused_everywhere(
+        &node,
+        &producer,
+        &forced_claim(&node, &ambra, &u),
+        &[],
+        "claim before the unbonding depth",
+        "bad-unbond-premature",
+        "bad-unbond-premature",
+    );
+    let u = loop {
+        let u = stake_of(&ambra, u.txid);
+        if u.phase == staking::StakePhase::Claimable {
+            break u;
+        }
+        node.produce(&producer);
+    };
+    claim(&node, &ambra, &producer, &u, 10, "of the height-locked stake");
+
+    // --- The time lock --------------------------------------------------------
+    let t = stake_of(&ambra, by_time);
+    assert_eq!(t.phase, staking::StakePhase::Bonded);
+    let e = staking::build_unbond(&ambra.chain, &ambra.esplora, &ambra.staker_secret, &t)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("cannot be unbonded yet"), "{e}");
+    refused_everywhere(
+        &node,
+        &producer,
+        &forced_unbond(&node, &ambra, &t),
+        &[],
+        "unbond before the time lock",
+        "non-BIP68-final",
+        "bad-txns-nonfinal",
+    );
+    // The lock is 2,532 × 512 s, about 15 days: the node's clock is moved on,
+    // and blocks produced until the tip's median time passes it.
+    let mut clock = t.matures_at_time.unwrap() + 60;
+    node.rpc("setmocktime", json!([clock]));
+    let mut produced = 0;
+    while stake_of(&ambra, by_time).phase == staking::StakePhase::Bonded {
+        clock += 10;
+        node.rpc("setmocktime", json!([clock]));
+        node.produce(&producer);
+        produced += 1;
+        assert!(produced < 30, "the median time never passed the lock");
+    }
+    let t = stake_of(&ambra, by_time);
+    println!(
+        "time lock passed after {produced} blocks: tip's median time {} >= {}",
+        t.tip_time.unwrap(),
+        t.matures_at_time.unwrap()
+    );
+    let u = unbond(&node, &ambra, &producer, by_time, "of the time-locked stake");
+    let u = loop {
+        let u = stake_of(&ambra, u.txid);
+        if u.phase == staking::StakePhase::Claimable {
+            break u;
+        }
+        clock += 10;
+        node.rpc("setmocktime", json!([clock]));
+        node.produce(&producer);
+    };
+    claim(&node, &ambra, &producer, &u, 12, "of the time-locked stake");
+    assert!(stakes(&ambra).is_empty(), "nothing left at the staking key");
 }
