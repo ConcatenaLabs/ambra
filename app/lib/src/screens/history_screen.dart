@@ -371,7 +371,11 @@ class _TxRowView extends StatelessWidget {
     final top = _top();
     String amount = '';
     Color amountColor = AmbraColors.dim;
-    if (top != null) {
+    final swap = tx.kind == 'swap' ? swapLine(tx.deltas) : null;
+    if (swap != null) {
+      amount = swap;
+      amountColor = AmbraColors.txt;
+    } else if (top != null) {
       final label = SeqAssets.labelFor(top.assetId);
       final atoms = BigInt.tryParse(top.atoms) ?? BigInt.zero;
       final neg = atoms.isNegative;
@@ -411,6 +415,24 @@ class _TxRowView extends StatelessWidget {
   }
 }
 
+/// A swap's two legs in one line, "−paid A → +got B": the asset that left the wallet (the largest
+/// outflow) and the one that came in (the largest inflow). Null when either leg is missing.
+String? swapLine(List<core.AssetDelta> deltas) {
+  core.AssetDelta? out, inn;
+  for (final d in deltas) {
+    final v = BigInt.tryParse(d.atoms) ?? BigInt.zero;
+    if (v.isNegative && (out == null || v < BigInt.parse(out.atoms))) out = d;
+    if (v > BigInt.zero && (inn == null || v > BigInt.parse(inn.atoms))) inn = d;
+  }
+  if (out == null || inn == null) return null;
+  String leg(core.AssetDelta d) {
+    final l = SeqAssets.labelFor(d.assetId);
+    return '${formatAtoms(d.atoms, l.precision)} ${l.ticker}';
+  }
+
+  return '${leg(out)} → +${leg(inn)}';
+}
+
 (Color, Color, String) _badgeFor(String kind) {
   switch (kind) {
     case 'incoming':
@@ -419,6 +441,8 @@ class _TxRowView extends StatelessWidget {
       return (AmbraColors.amber2, const Color(0xFF241C0A), 'OUT');
     case 'burn':
       return (AmbraColors.amber2, const Color(0xFF241C0A), 'BURN');
+    case 'swap':
+      return (AmbraColors.blue, const Color(0xFF0D1F2A), 'SWAP');
     case 'issuance':
     case 'reissuance':
       return (AmbraColors.blue, const Color(0xFF0D1F2A), 'ISSUE');
@@ -472,6 +496,8 @@ String _kindTitle(String kind) {
       return 'Burn';
     case 'redeposit':
       return 'Internal transfer';
+    case 'swap':
+      return 'Swap';
     default:
       return 'Transaction';
   }

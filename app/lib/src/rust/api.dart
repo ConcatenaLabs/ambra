@@ -1968,7 +1968,7 @@ class TxRow {
   final int? height;
   final BigInt? timestamp;
 
-  /// "incoming" | "outgoing" | "issuance" | "reissuance" | "burn" | "redeposit" | "unknown".
+  /// "incoming" | "outgoing" | "swap" | "issuance" | "reissuance" | "burn" | "redeposit" | "unknown".
   final String kind;
   final BigInt fee;
 
