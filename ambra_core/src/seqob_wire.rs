@@ -257,6 +257,18 @@ fn encode_cross_chain(c: Option<&Value>) -> Option<Vec<u8>> {
 /// The resting outpoint (fields 1 and 2) is left out, as the relay leaves it out of
 /// the signed bytes: its watcher moves a covenant to a new outpoint on every partial
 /// fill while the maker is offline, and funding is checked on-chain instead.
+/// A covenant byte field as the offer carries it: hex as this wallet writes it, or base64 as the
+/// relay serves it (grpc-gateway JSON writes `bytes` fields in base64). A string of an even number
+/// of hex digits is read as hex; anything else as base64. The two cannot be confused for the
+/// 32-byte fields: their base64 is 44 characters ending in `=`.
+fn covenant_bytes(s: &str) -> Vec<u8> {
+    if s.len() % 2 == 0 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        hex_to_bytes(s)
+    } else {
+        b64_decode(s).unwrap_or_default()
+    }
+}
+
 fn encode_covenant_terms(c: Option<&Value>) -> Option<Vec<u8>> {
     let c = c?;
     let mut w = Pw::new();
@@ -264,16 +276,16 @@ fn encode_covenant_terms(c: Option<&Value>) -> Option<Vec<u8>> {
     w.str(4, as_str(get(c, &["asset_b", "assetB"])));
     w.uint(5, as_u64(get(c, &["rate_num", "rateNum"])));
     w.uint(6, as_u64(get(c, &["rate_den", "rateDen"])));
-    w.lenbytes(7, &hex_to_bytes(as_str(get(c, &["maker_prog", "makerProg"]))));
+    w.lenbytes(7, &covenant_bytes(as_str(get(c, &["maker_prog", "makerProg"]))));
     w.uint(8, as_u64(get(c, &["maker_prog_ver", "makerProgVer"])));
     w.uint(9, as_u64(get(c, &["min_lot", "minLot"])));
     w.uint(10, as_u64(get(c, &["expiry_locktime", "expiryLocktime"])));
-    w.lenbytes(11, &hex_to_bytes(as_str(get(c, &["maker_x", "makerX"]))));
-    w.lenbytes(12, &hex_to_bytes(as_str(get(c, &["internal_key", "internalKey"]))));
+    w.lenbytes(11, &covenant_bytes(as_str(get(c, &["maker_x", "makerX"]))));
+    w.lenbytes(12, &covenant_bytes(as_str(get(c, &["internal_key", "internalKey"]))));
     if let Some(Value::Array(arr)) = get(c, &["merkle_path", "merklePath"]) {
         for p in arr {
             if let Value::String(s) = p {
-                w.lenbytes(13, &hex_to_bytes(s));
+                w.lenbytes(13, &covenant_bytes(s));
             }
         }
     }

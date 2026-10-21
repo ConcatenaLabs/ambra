@@ -1,0 +1,44 @@
+{
+ "offer_id": "94ec28cafa18d165968d8b8babe99fa1",
+ "schema_version": 1,
+ "pair": {
+  "base_asset": "2a515539da5e6a60caa7766ecd65bac0c10d15717ddd2088844ba58f4d04b9de",
+  "quote_asset": "e39685e718516156679088d9400d11a1eb82bf7cc27c5b9f5a614b8c91246d13",
+  "confidential": false
+ },
+ "trade_dir": "TRADE_DIR_SELL",
+ "base_amount": "4400000000",
+ "offer_amount": "4400000000",
+ "offer_asset": "2a515539da5e6a60caa7766ecd65bac0c10d15717ddd2088844ba58f4d04b9de",
+ "want_amount": "4009130000",
+ "want_asset": "e39685e718516156679088d9400d11a1eb82bf7cc27c5b9f5a614b8c91246d13",
+ "allow_partial": true,
+ "min_fill": "0",
+ "created_at_unix": "1792142397",
+ "expires_at_unix": "1792743597",
+ "maker_pubkey": "032c2662dd2b05e030d66175ff5caa523858cd7a0c818ed1c688180c0eb91ae9b8",
+ "fee_asset_hint": "e39685e718516156679088d9400d11a1eb82bf7cc27c5b9f5a614b8c91246d13",
+ "min_anchor_depth": 0,
+ "maker_ln_node_pubkey": "",
+ "ln_connect_hints": [],
+ "time_in_force": "TIME_IN_FORCE_UNSPECIFIED",
+ "confidential": false,
+ "covenant": {
+  "covenant_txid": "0abb7d98c01af92af16f681fe22fd17981675081f412a0998cfdab96ff9d0a16",
+  "covenant_vout": 2,
+  "asset_a": "deb9044d8fa54b848820dd7d71150dc1c0ba65cd6e76a7ca606a5eda3955512a",
+  "asset_b": "136d24918c4b615a9f5b7cc27cbf82eba1110d40d988906756615118e78596e3",
+  "rate_num": "400913",
+  "rate_den": "440000",
+  "maker_prog": "Bh3AimkLt84D3Opw7x0fxSFEusvnOrssGRPFSXo8Qaw=",
+  "maker_prog_ver": 1,
+  "min_lot": "4400000",
+  "expiry_locktime": 186154,
+  "maker_x": "Bh3AimkLt84D3Opw7x0fxSFEusvnOrssGRPFSXo8Qaw=",
+  "internal_key": "UJKbdMGgSVS3i0tgNel6XgeKWg8o7JbVR7/ums6AOsA=",
+  "merkle_path": [
+   "j4ecBSDMqvUbUH2Ulu5hrpku1Z29pbdgA7iLlnvBoPo="
+  ]
+ },
+ "maker_sig": "MEUCIQDxZjA5HwljkRFf4WRCMSWa2WfWFAjTQVUWx0d6wHIHFgIgcTV6LVXSiOR/jajWZgOktLH8GwmusnCvPB24CPP1uUA="
+}
