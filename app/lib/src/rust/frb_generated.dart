@@ -72,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
-        stem: 'UNKNOWN',
+        stem: 'ambra_core',
         ioDirectory: '../ambra_core/target/release/',
         webPrefix: 'pkg/',
         wasmBindgenName: 'wasm_bindgen',
