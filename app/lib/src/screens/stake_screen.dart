@@ -42,6 +42,7 @@ class _StakeScreenState extends State<StakeScreen> {
   // Staking rewards, and what the standing instruction would do with them.
   List<Map<String, dynamic>> _rewardTotals = <Map<String, dynamic>>[];
   List<RewardPassRow> _rewardRows = <RewardPassRow>[];
+  int? _maturity; // blocks before a block reward is spendable, from the kit
 
   @override
   void initState() {
@@ -74,11 +75,13 @@ class _StakeScreenState extends State<StakeScreen> {
       // one and this chain runs at 60 seconds. A wallet that guessed 100 would
       // call a reward spendable 900 blocks early and then build a transaction
       // the chain rejects.
+      final maturity = await rewards_api.sequentiaCoinbaseMaturity();
+      if (mounted) setState(() => _maturity = maturity);
       final rewardsJson = await rewards_api.attributeStakingRewards(
         txsJson: txsJson,
         stakingKeysJson: keysJson,
         tipHeight: tip,
-        coinbaseMaturity: await rewards_api.sequentiaCoinbaseMaturity(),
+        coinbaseMaturity: maturity,
       );
       final rewards = (jsonDecode(rewardsJson) as List).cast<Map<String, dynamic>>();
       final report = await RewardConvert.instance.runPass(
@@ -201,6 +204,7 @@ class _StakeScreenState extends State<StakeScreen> {
               RewardsCard(
                 totals: _rewardTotals,
                 rows: _rewardRows,
+                maturity: _maturity,
                 onChanged: () async {
                   final m = await WalletRepository.instance.readMnemonic();
                   if (m != null) await _loadRewards(m);
@@ -706,7 +710,10 @@ class _PoolSectionState extends State<_PoolSection> {
 /// (see [RewardConvert]) — never here, and never differently from the desktop
 /// wallet watching the same keys.
 class RewardsCard extends StatefulWidget {
-  const RewardsCard({super.key, required this.totals, required this.rows, this.onChanged});
+  const RewardsCard({super.key, required this.totals, required this.rows, this.maturity, this.onChanged});
+
+  /// Blocks before a block reward can be spent, from the kit (null until read).
+  final int? maturity;
 
   /// Per-asset totals, from `rewardTotals`.
   final List<Map<String, dynamic>> totals;
@@ -729,10 +736,11 @@ class _RewardsCardState extends State<RewardsCard> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Staking rewards', style: AmbraText.title),
         const SizedBox(height: 8),
-        const Text(
+        Text(
           'What staking has paid you, in whatever assets the fees were paid in. Sequentia has no '
-          'block subsidy: a block earns its own transaction fees and nothing else. Block rewards '
-          'are spendable 100 blocks after they are earned; a pool payout is spendable at once.',
+          'block subsidy: a block earns its own transaction fees and nothing else. '
+          '${widget.maturity == null ? 'Block rewards can be spent once they mature' : 'Block rewards are spendable ${formatAtoms('${widget.maturity}', 0)} blocks after they are earned'}'
+          '; a pool payout is spendable at once.',
           style: AmbraText.muted,
         ),
         const SizedBox(height: 12),
