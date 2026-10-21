@@ -2,8 +2,10 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../data/api_client.dart';
 import '../data/config.dart';
 import '../data/contract_summary.dart';
+import '../data/drip_rate.dart';
 import '../data/wallet_repository.dart';
 import '../rust/api/contracts.dart' as core;
 import '../theme/theme.dart';
@@ -54,7 +56,9 @@ class _ContractsScreenState extends State<ContractsScreen> {
     if (widget.prepare != null) return widget.prepare!(ask);
     final m = await WalletRepository.instance.readMnemonic();
     if (m == null) throw 'no wallet is open';
-    return core.contractPrepare(mnemonic: m, esploraUrl: Backend.esplora, askJson: ask, labelsJson: _labels());
+    // A drip's fee is paid in the dripped asset: value its default rate at the node's rate.
+    final priced = ask.contains('"drip"') ? dripAskAtNodeRate(ask, await ApiClient.feeRates()) : ask;
+    return core.contractPrepare(mnemonic: m, esploraUrl: Backend.esplora, askJson: priced, labelsJson: _labels());
   }
 
   Future<String> _sign(String digest) async {

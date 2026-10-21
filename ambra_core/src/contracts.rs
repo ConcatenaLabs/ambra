@@ -70,7 +70,8 @@ pub struct DripAsk {
     /// The address paid; this wallet's receive address by default.
     #[serde(default)]
     pub to: Option<String>,
-    /// Atoms of the dripped asset per 1,000 vB; 1,000 by default.
+    /// Atoms of the dripped asset per 1,000 vB; 1,000 by default. The app always names it: the
+    /// reference rate at the node's rate for the asset (`app/lib/src/data/drip_rate.dart`).
     #[serde(default)]
     pub rate_per_kvb: Option<u64>,
 }
