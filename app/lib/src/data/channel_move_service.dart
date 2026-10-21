@@ -30,8 +30,10 @@ import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'config.dart';
 import 'lightning_service.dart';
 import 'lsp_client.dart';
+import 'seqln_keys.dart' as keys;
 import 'store_log.dart';
 import 'wallet_repository.dart';
 
@@ -273,6 +275,52 @@ class ChannelMoveService {
         }
         if (++pollErrs > maxPollErrors) rethrow;
         say(movePhaseCopy('reconnecting')!);
+      }
+    }
+  }
+
+  /// Bring every hosted node of this wallet back online, and finish a Move to Lightning that no
+  /// record remembers. Called on cold start, after [resume].
+  ///
+  /// The record of a move lives on this phone and goes with a reinstall. The node does not: its
+  /// keys come from the phrase, so it is this wallet's on every phone. But a keyless node that
+  /// restarted while this device was away waits for its device at start-up and answers nothing, so
+  /// the service can list none of its channels and the coins moved into one look gone (seqln's
+  /// `tests/sequentia/test_keyless_open_interrupted.py`). Attaching the device brings it up and its
+  /// channels back into view. A node that then reports a deposit that never became a channel gets
+  /// that channel, as the move it was asked for; nothing is deposited again.
+  static Future<void> recoverFromNodes({void Function(String)? onStep}) async {
+    if (!LightningService.instance.configured) return;
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m == null) return;
+    final recorded = {for (final r in await ChannelMoveStore.list()) r.nodeKey};
+    final targets = <(String, String?)>[
+      ('btc', null),
+      for (final id in SeqAssets.resolvedIds) ('seq', id),
+    ];
+    for (final (chain, asset) in targets) {
+      final key = chain == 'btc' ? keys.ownNodeKeyForBtc(m) : keys.ownNodeKeyForAsset(m, asset!);
+      try {
+        if (await LspClient.nodeOnchain(key) == null) continue; // never provisioned
+        await LightningService.instance.connectNode(m, chain: chain, asset: asset);
+        if (recorded.contains(key)) continue; // [resume] drives it
+        final info = await LspClient.nodeOnchain(key);
+        if (info == null || !info.owesChannel) continue;
+        storeLog('channel move recover: $key holds ${info.onchainAtoms} on chain and never had a channel - opening it');
+        final rec = ChannelMove(
+          id: idFor(key),
+          chain: chain,
+          asset: asset,
+          ticker: chain == 'btc' ? 'BTC' : SeqAssets.labelFor(asset!).ticker,
+          amountAtoms: info.onchainAtoms.toString(),
+          nodeKey: key,
+          pollPath: null,
+          startedMs: DateTime.now().millisecondsSinceEpoch,
+        );
+        await ChannelMoveStore.put(rec);
+        await drive(rec, onStep: onStep);
+      } catch (e) {
+        storeLog('channel move recover: $key not finished ($e)');
       }
     }
   }
