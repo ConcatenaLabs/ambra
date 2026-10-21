@@ -6,8 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../rust/api/leaves.dart' as leaves;
+import 'btc_state.dart';
 import 'config.dart';
 import 'format.dart';
 import 'wallet_repository.dart';
@@ -98,6 +100,16 @@ class LeafService extends ChangeNotifier {
   // The schedule's next_sync_at as first given after the last sync (see syncDecision).
   num? _heldFor;
 
+  /// The last answer of the library's `care` (what the wallet did by itself: claims
+  /// taken up, plans cancelled and made, coins refreshed into a round), when it ran,
+  /// and its refusal if it failed. Developer mode shows them; user mode only sees a
+  /// claim taken up in the asset's figure.
+  Map<String, dynamic>? lastCare;
+  DateTime? lastCareAt;
+  LeafRefusal? careError;
+  // Whether care ran since the app started: the first sync after a start runs it.
+  bool _caredThisRun = false;
+
   static Future<String> dataDir() async => (await getApplicationSupportDirectory()).path;
 
   static Future<String?> nodePassword() => _storage.read(key: _kNodePassword);
@@ -140,8 +152,27 @@ class LeafService extends ChangeNotifier {
     if (open) {
       await _foreground(true);
       await refresh();
-      _plan(Duration.zero);
+      await openingSync();
+      _plan(tick);
     }
+  }
+
+  /// One sync when the leaf wallet opens or the app comes back, whatever the schedule
+  /// says, then care. The schedule wakes a planned coin only at its plan's `sync_by`,
+  /// so a wallet back after an expiry would otherwise show the coin a plan's step
+  /// replaced until then; and a wallet back from a while away may have payments in
+  /// its mailbox or an exit to move on.
+  Future<void> openingSync({String by = 'open'}) async {
+    if (!open || _ticking) return;
+    _ticking = true;
+    try {
+      await syncNow(by: by);
+      lastError = null;
+    } catch (e) {
+      lastError = LeafRefusal.of(e);
+    }
+    _ticking = false;
+    notifyListeners();
   }
 
   /// Stops the schedule and closes the wallet; the scheduled job takes over.
@@ -226,8 +257,80 @@ class LeafService extends ChangeNotifier {
     for (final a in arrivals(r['mailbox'])) {
       await notifyArrived(a, channel: _channel);
     }
+    await careIfDue();
     await refresh();
     return r;
+  }
+
+  /// Runs the library's `care` when it is due: at the first sync after the app
+  /// starts, then at most every [careEvery] (the scheduled job keeps the same
+  /// clock). It takes up every claim named by an address the wallet handed out (the
+  /// scan reaches 20 past the wallet's next receive index), cancels each plan whose
+  /// coin moved, plans each coin within ten days of its step window, and refreshes
+  /// into a round a coin no plan can start from. No prompt: it is what the wallet
+  /// does by itself.
+  Future<void> careIfDue({bool force = false}) async {
+    if (!open) return;
+    final last = _caredThisRun ? (lastCareAt ?? await careClock()) : null;
+    if (!force && !careDue(last, DateTime.now())) return;
+    _caredThisRun = true;
+    final at = DateTime.now();
+    try {
+      lastCare = Map<String, dynamic>.from(await run('care', careArgs(await scanNext())) as Map);
+      careError = null;
+    } catch (e) {
+      careError = LeafRefusal.of(e);
+    }
+    lastCareAt = at;
+    await setCareClock(at);
+    notifyListeners();
+  }
+
+  static const careEvery = Duration(minutes: 10);
+  static const _kCareAt = 'ambra.leaves.care_at';
+  static const _kScanNext = 'ambra.leaves.scan_next';
+
+  /// When care last ran, in this process or the scheduled job.
+  static Future<DateTime?> careClock() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final t = p.getInt(_kCareAt);
+      return t == null ? null : DateTime.fromMillisecondsSinceEpoch(t * 1000);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> setCareClock(DateTime at) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setInt(_kCareAt, at.millisecondsSinceEpoch ~/ 1000);
+    } catch (_) {}
+  }
+
+  /// The kit wallet's next receive index (shared by both chains' addresses), kept so
+  /// the scheduled job scans as far as the app does.
+  static Future<int> scanNext() async {
+    var n = BtcState.instance.unifiedNext;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final kept = p.getInt(_kScanNext) ?? 0;
+      if (n > kept) {
+        await p.setInt(_kScanNext, n);
+      } else {
+        n = kept;
+      }
+    } catch (_) {}
+    return n;
+  }
+
+  /// A different wallet opened on this phone: its own clock and index.
+  static Future<void> forgetCare() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.remove(_kCareAt);
+      await p.remove(_kScanNext);
+    } catch (_) {}
   }
 
   /// Leaf atoms per asset: every coin the library counts as held off the chain,
@@ -303,6 +406,48 @@ class LeafService extends ChangeNotifier {
       await _channel.invokeMethod(on ? 'startService' : 'stopService');
     } catch (_) {/* host tests: no platform */}
   }
+}
+
+/// Whether `care` runs now: never yet ([last] null), or [LeafService.careEvery] since.
+bool careDue(DateTime? last, DateTime now) => last == null || now.difference(last) >= LeafService.careEvery;
+
+/// `care`'s arguments: the scan reaches 20 past the kit wallet's next receive index, so a
+/// claim named by any address the wallet handed out is found (the leaf wallet's own
+/// index counter is separate from the kit's).
+Map<String, dynamic> careArgs(int kitNextIndex) => {'scan': kitNextIndex + 20};
+
+/// What a `care` answer did, counted for developer mode: claims taken up, plans
+/// cancelled, coins planned, coins refreshed into a round, coins not yet within reach,
+/// and each part's refusals.
+({int claimed, int cancelled, int planned, int refreshing, int later, List<String> refusals}) careSummary(
+    Map<String, dynamic>? care) {
+  if (care == null) return (claimed: 0, cancelled: 0, planned: 0, refreshing: 0, later: 0, refusals: const []);
+  final refusals = <String>[];
+  int count(Object? list, bool Function(Map) ok) {
+    if (list is! List) return 0;
+    var n = 0;
+    for (final e in list) {
+      if (e is! Map) continue;
+      final err = e['error'] ?? e['refused'];
+      if (err != null) {
+        refusals.add('${e['coin'] ?? e['claim'] ?? e['plan_id'] ?? ''}: $err');
+      } else if (ok(e)) {
+        n++;
+      }
+    }
+    return n;
+  }
+
+  final claims = care['claims'];
+  if (claims is Map && claims['error'] != null) refusals.add('claims: ${claims['error']}');
+  return (
+    claimed: count(claims, (e) => e['taken_up'] != null),
+    cancelled: count(care['cancelled'], (_) => true),
+    planned: count(care['planned'], (_) => true),
+    refreshing: count(care['refreshing'], (_) => true),
+    later: (care['not_yet_planned'] as num?)?.toInt() ?? 0,
+    refusals: refusals,
+  );
 }
 
 /// The coins a mailbox read accepted.
@@ -386,10 +531,16 @@ Future<Map<String, dynamic>> leafBackgroundPass(MethodChannel host) async {
   final m = await WalletRepository.instance.readMnemonic();
   if (m == null) return {'ok': true, 'wake_in': null, 'summary': 'no wallet'};
   final dir = await LeafService.dataDir();
-  final out = jsonDecode(
-          await leaves.leavesJob(dir: dir, mnemonic: m, nodePassword: await LeafService.nodePassword() ?? ''))
-      as Map<String, dynamic>;
+  // Care rides along when it is due, on the clock the app keeps too.
+  final now = DateTime.now();
+  final care = careDue(await LeafService.careClock(), now) ? careArgs(await LeafService.scanNext()) : null;
+  final out = jsonDecode(await leaves.leavesJob(
+      dir: dir,
+      mnemonic: m,
+      nodePassword: await LeafService.nodePassword() ?? '',
+      careJson: care == null ? '' : jsonEncode(care))) as Map<String, dynamic>;
   if (out['joined'] == false) return {'ok': true, 'wake_in': null, 'summary': 'no leaf wallet'};
+  if (care != null) await LeafService.setCareClock(now);
   final arrived = arrivals({'accepted': out['arrived']});
   for (final a in arrived) {
     await notifyArrived(a, channel: host);
@@ -398,6 +549,7 @@ Future<Map<String, dynamic>> leafBackgroundPass(MethodChannel host) async {
   return {
     'ok': true,
     'wake_in': out['wake_in'],
-    'summary': 'arrived ${arrived.length}; next_sync_at ${s?['next_sync_at']}; now ${s?['now']}',
+    'summary': 'arrived ${arrived.length}; next_sync_at ${s?['next_sync_at']}; now ${s?['now']}'
+        '${care == null ? '' : '; care ${careSummary(out['care'] is Map ? Map<String, dynamic>.from(out['care'] as Map) : null)}'}',
   };
 }

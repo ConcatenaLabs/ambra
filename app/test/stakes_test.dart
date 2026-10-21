@@ -1,8 +1,11 @@
 import 'package:ambra/src/data/stakes.dart';
 import 'package:ambra/src/rust/api.dart' as core;
+import 'package:ambra/src/screens/stake_screen.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 core.StakeEntry entry({
+  String txid = '',
   String state = 'bonded',
   String lock = 'height',
   int? height = 100,
@@ -12,7 +15,7 @@ core.StakeEntry entry({
   int? tipAnchor,
 }) =>
     core.StakeEntry(
-      txid: 'ab' * 32,
+      txid: txid.isEmpty ? 'ab' * 32 : txid,
       vout: 0,
       value: BigInt.from(4000000000000),
       lock: lock,
@@ -62,5 +65,23 @@ void main() {
         expect(RegExp('\\b$w', caseSensitive: false).hasMatch(l), isFalse, reason: '"$l" says "$w"');
       }
     }
+  });
+
+  testWidgets('the stake list offers Unbond once a lock has passed and Return once unbonding is over', (tester) async {
+    StakeHoldings.instance.debugSet([
+      entry(txid: '11' * 32, maturesAtHeight: 43300),
+      entry(txid: '22' * 32, lock: 'time', state: 'unbondable'),
+      entry(txid: '33' * 32, lock: '', state: 'claimable'),
+    ]);
+    await tester.pumpWidget(const MaterialApp(home: Scaffold(body: SingleChildScrollView(child: StakesSection(autoLoad: false)))));
+    expect(find.text('Your stakes'), findsOneWidget);
+    expect(find.text('Unbond'), findsOneWidget);
+    expect(find.text('Return to wallet'), findsOneWidget);
+    expect(find.textContaining('Locked until block 43300'), findsOneWidget);
+    expect(find.text('Unlocked: you can unbond it'), findsOneWidget);
+    expect(find.text('Unbonded: ready to return to your wallet'), findsOneWidget);
+    expect(find.byWidgetPredicate((w) => w is Text && (w.data ?? '').startsWith('40') && (w.data ?? '').endsWith(' tSEQ')),
+        findsNWidgets(3));
+    StakeHoldings.instance.clear();
   });
 }

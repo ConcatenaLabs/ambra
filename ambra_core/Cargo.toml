@@ -62,8 +62,8 @@ serde_json = "1"
 # there is one TLS stack. Its store is SQLite through rusqlite 0.31, built from
 # source for Android (`bundled`). Building it needs `protoc`, as every build
 # of the library does.
-arca-wallet = { git = "https://github.com/ConcatenaLabs/arca", rev = "bf8c02abb4a5671d17b84af29e97c1d05030795e", default-features = false, features = ["arca-core"] }
-arca-sequentia-ext = { git = "https://github.com/ConcatenaLabs/arca", rev = "bf8c02abb4a5671d17b84af29e97c1d05030795e", default-features = false }
+arca-wallet = { git = "https://github.com/ConcatenaLabs/arca", rev = "4718c371aadb94afc38546f6b463d9637410b78a", default-features = false, features = ["arca-core"] }
+arca-sequentia-ext = { git = "https://github.com/ConcatenaLabs/arca", rev = "4718c371aadb94afc38546f6b463d9637410b78a", default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 # The store's lock is flock(2): the standard library's `File::try_lock` is not
 # supported on Android.

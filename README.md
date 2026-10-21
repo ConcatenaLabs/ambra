@@ -223,7 +223,30 @@ module that implements it.
   `leafSyncJob` in an engine with no UI: it syncs, raises a notification for each
   payment received, and wakes again at the schedule's `next_sync_at`, at most a day
   ahead while a coin is off the chain or a receive request is open. The job keeps
-  running whatever the mode, so coins already held keep their refresh.
+  running whatever the mode, so coins already held keep their refresh. When the leaf
+  wallet opens and whenever the app comes back to the foreground it syncs once,
+  whatever the schedule says (the schedule wakes a planned coin only at its plan's
+  `sync_by`).
+- What the wallet does by itself, with no prompt, in either mode: at the first sync after
+  the app starts and then at most every ten minutes (the app and the scheduled job keep
+  one clock), it runs the library's `care`. `care` takes up every claim of a distribution
+  named for an address the wallet handed out (it scans 20 past the wallet's next receive
+  index, since the leaf wallet counts its keys apart from the main wallet); a claim taken
+  up then counts in the asset's figure like any coin. It cancels each offline-refresh plan
+  whose coin moved, and signs a plan for each coin whose first step could run within ten
+  days, two expiries ahead, so a wallet closed across an expiry keeps the coin. Each
+  step's fee is at most 0.2% of the coin and is taken from the coin in its own asset,
+  never another; a coin the operator will not plan in its asset stays unplanned, and the
+  sync refreshes it while the app is open. A coin of no round (a board, or a coin
+  received or taken up out of round) is refreshed into a round first and planned at a
+  later sync. Younger coins stay unplanned so they remain free to pay with, which leaves a
+  gap: a wallet closed within a coin's first two weeks or so and kept closed through that
+  coin's step window can lose the coin to the operator's sweep, as any holder who stays
+  away past an expiry can. Developer mode's Leaves screen shows the last run in a "Kept
+  by itself" card (claims taken up, plans cancelled and made, coins refreshed into a
+  round) with the distributions, the claims and the plans; each open plan has Cancel and
+  Release (cancel, then refresh the coin in the next round at the fee shown). User mode
+  shows none of it.
 
 **Assets, staking, faucet, node**
 - Issue a new asset, reissue (mint more of) an asset you hold the reissuance token for,

@@ -77,11 +77,15 @@ pub fn leaves_is_open() -> bool {
     leaves::is_open()
 }
 
-/// The scheduled job's pass: `sync`, then what arrived and when to wake
-/// (`{"arrived", "schedule", "wake_in", "sync", "opened_for_the_job"}`, or
-/// `{"joined": false}` when the phone holds no leaf wallet for `mnemonic`).
-pub fn leaves_job(dir: String, mnemonic: String, node_password: String) -> Result<String> {
-    leaves::job(Path::new(&dir), &mnemonic, password(node_password)).map(|v| v.to_string()).map_err(fail)
+/// The scheduled job's pass: `sync`, then `care` with `care_json`'s
+/// arguments unless it is empty, then what arrived and when to wake
+/// (`{"arrived", "schedule", "wake_in", "sync", "care", "opened_for_the_job"}`,
+/// or `{"joined": false}` when the phone holds no leaf wallet for `mnemonic`).
+pub fn leaves_job(dir: String, mnemonic: String, node_password: String, care_json: String) -> Result<String> {
+    let care = if care_json.trim().is_empty() { None } else { Some(parse("care's arguments", &care_json)?) };
+    leaves::job(Path::new(&dir), &mnemonic, password(node_password), care.as_ref())
+        .map(|v| v.to_string())
+        .map_err(fail)
 }
 
 /// When the scheduled job must wake, in seconds, from the library's `schedule`

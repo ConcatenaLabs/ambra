@@ -72,6 +72,14 @@ class StakeHoldings extends ChangeNotifier {
     notifyListeners();
   }
 
+  @visibleForTesting
+  void debugSet(List<core.StakeEntry> stakes, {core.DelegationRecord? delegation}) {
+    _stakes = stakes;
+    _delegation = delegation;
+    _readAt = DateTime.now();
+    notifyListeners();
+  }
+
   /// A different wallet opened on this phone: nothing of the last one's stays.
   void clear() {
     _stakes = const [];

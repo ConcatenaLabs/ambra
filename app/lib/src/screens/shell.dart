@@ -1843,6 +1843,7 @@ class MoreTab extends StatelessWidget {
       await WalletRepository.instance.removeWallet();
       await WalletCache.clear();
       StakeHoldings.instance.clear();
+      await LeafService.forgetCare();
     }
   }
 

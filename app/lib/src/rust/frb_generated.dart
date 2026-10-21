@@ -449,6 +449,7 @@ abstract class RustLibApi extends BaseApi {
     required String dir,
     required String mnemonic,
     required String nodePassword,
+    required String careJson,
   });
 
   Future<String> crateApiLeavesLeavesJoin({
@@ -3232,6 +3233,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String dir,
     required String mnemonic,
     required String nodePassword,
+    required String careJson,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -3240,6 +3242,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(dir, serializer);
           sse_encode_String(mnemonic, serializer);
           sse_encode_String(nodePassword, serializer);
+          sse_encode_String(careJson, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -3252,7 +3255,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiLeavesLeavesJobConstMeta,
-        argValues: [dir, mnemonic, nodePassword],
+        argValues: [dir, mnemonic, nodePassword, careJson],
         apiImpl: this,
       ),
     );
@@ -3260,7 +3263,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiLeavesLeavesJobConstMeta => const TaskConstMeta(
     debugName: "leaves_job",
-    argNames: ["dir", "mnemonic", "nodePassword"],
+    argNames: ["dir", "mnemonic", "nodePassword", "careJson"],
   );
 
   @override

@@ -215,7 +215,8 @@ Generated bindings live in `app/lib/src/rust/`; the Rust source of truth is
   wallet library `bark::arca`): `leaves_exists`, `leaves_join` (create against an
   operator and node, then restore), `leaves_open`, `leaves_run` (any of the library's
   commands by name, `bark::arca::command`), `leaves_close`, `leaves_is_open`,
-  `leaves_job` (the scheduled pass: sync, what arrived, when to wake), and
+  `leaves_job` (the scheduled pass: sync, `care` when the app says it is due, what
+  arrived, when to wake), and
   `leaves_wake_in`. Answers are the library's JSON; a refusal is its
   `{"error": {"kind", "message"}}`.
 - Contract spends (`api/contracts.rs`, logic in `ambra_core/src/contracts.rs`, over the
@@ -232,7 +233,9 @@ Generated bindings live in `app/lib/src/rust/`; the Rust source of truth is
 
 Single wallet (mirrors the web wallet); opt-in device biometric/passcode lock;
 foreground + on-resume + pull-to-refresh sync (no push), and for leaves a sync on the
-library's schedule while the app runs plus a scheduled job while it is closed; testnet/faucet cues kept;
+library's schedule while the app runs, once when it opens or comes back, plus a scheduled job while it is closed,
+and the library's `care` (claims taken up, offline-refresh plans kept) at the first sync and then at most every ten
+minutes; testnet/faucet cues kept;
 reference currency defaults to USD. Backend defaults to the public testnet node
 `https://sequentiatestnet.com` and is user-configurable (More > Node, optional HTTP auth);
 endpoints: `/api`, `/testnet4/api`, `/dex`, `/feerates`, `/prices`,

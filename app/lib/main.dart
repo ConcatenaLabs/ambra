@@ -170,6 +170,8 @@ class _AmbraAppState extends State<AmbraApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Back in the foreground: the leaf wallet syncs once, whatever its schedule says.
+    if (state == AppLifecycleState.resumed) unawaited(LeafService.instance.openingSync(by: 'resume'));
     // Re-lock when the app leaves the foreground, so returning to it requires
     // auth again (no-op unless the opt-in lock is enabled). Only on `paused`
     // (backgrounded), not `inactive`, so the biometric prompt itself never locks.

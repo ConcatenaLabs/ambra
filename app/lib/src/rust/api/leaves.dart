@@ -56,17 +56,20 @@ void leavesClose() => RustLib.instance.api.crateApiLeavesLeavesClose();
 /// Whether a leaf wallet is open in this process.
 bool leavesIsOpen() => RustLib.instance.api.crateApiLeavesLeavesIsOpen();
 
-/// The scheduled job's pass: `sync`, then what arrived and when to wake
-/// (`{"arrived", "schedule", "wake_in", "sync", "opened_for_the_job"}`, or
-/// `{"joined": false}` when the phone holds no leaf wallet for `mnemonic`).
+/// The scheduled job's pass: `sync`, then `care` with `care_json`'s
+/// arguments unless it is empty, then what arrived and when to wake
+/// (`{"arrived", "schedule", "wake_in", "sync", "care", "opened_for_the_job"}`,
+/// or `{"joined": false}` when the phone holds no leaf wallet for `mnemonic`).
 Future<String> leavesJob({
   required String dir,
   required String mnemonic,
   required String nodePassword,
+  required String careJson,
 }) => RustLib.instance.api.crateApiLeavesLeavesJob(
   dir: dir,
   mnemonic: mnemonic,
   nodePassword: nodePassword,
+  careJson: careJson,
 );
 
 /// When the scheduled job must wake, in seconds, from the library's `schedule`
