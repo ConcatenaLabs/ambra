@@ -244,6 +244,10 @@ class AmbraField extends StatelessWidget {
 /// A readable, floating snackbar consistent with the app theme. The default
 /// SnackBar renders dark-on-dark and anchors to the very bottom (over buttons /
 /// behind the keyboard); this floats above with a panel background and light text.
+///
+/// It leaves after its duration even with an action: Flutter keeps a snackbar that
+/// has an action until it is tapped unless told otherwise, and every later message
+/// queues behind it, unseen.
 SnackBar ambraSnack(String message, {SnackBarAction? action}) {
   return SnackBar(
     content: Text(message, style: const TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w600)),
@@ -255,7 +259,8 @@ SnackBar ambraSnack(String message, {SnackBarAction? action}) {
       side: const BorderSide(color: AmbraColors.line),
     ),
     action: action,
-    duration: const Duration(seconds: 4),
+    persist: false,
+    duration: Duration(seconds: action == null ? 4 : 6),
   );
 }
 
