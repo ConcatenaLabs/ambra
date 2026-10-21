@@ -91,8 +91,12 @@ module that implements it.
   network accepts, at the node's published exchange rates. Optional fee-rate override,
   always denominated in **the chosen fee asset's own units per vByte** (never sat/vB;
   sats are Bitcoin-only) (`app/lib/src/screens/send_screen.dart`).
-- Bitcoin (testnet4) send: BTC appears in the same asset picker and pays its own fee in
-  sat/vB (correct there, it is the Bitcoin chain).
+- One asset picker, shared with the swap composer (`app/lib/src/widgets/asset_sheet.dart`):
+  BTC first and picked by default, listed even at 0; then every asset the wallet holds on
+  any rail (on-chain, Lightning, leaves); a search over every registry asset, or a pasted
+  asset id, reaches the rest. The list scrolls, whatever its length and the screen's.
+- Bitcoin (testnet4) send: BTC pays its own fee in sat/vB (correct there, it is the
+  Bitcoin chain).
 - QR scanning of recipient addresses using the first-party CameraX preview plus a
   **pure-Dart ZXing decoder (`zxing2`)**, so the app needs no Google ML Kit and no Play
   Services (`app/lib/src/screens/scan_screen.dart`).

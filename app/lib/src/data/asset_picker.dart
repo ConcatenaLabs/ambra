@@ -108,3 +108,16 @@ HiddenPartition partitionHidden(
   }
   return HiddenPartition(visible, hidden);
 }
+
+/// The order every asset picker lists its rows in: native BTC first, always,
+/// whatever its balance; then the assets the wallet holds on any rail (on-chain,
+/// Lightning, leaves) in the order given; then every other asset the wallet can
+/// name, which the search reaches. No id appears twice.
+List<String> pickerOrder({required Iterable<String> held, Iterable<String> known = const []}) {
+  final out = <String>[kBtcSentinel];
+  final seen = <String>{kBtcSentinel};
+  for (final id in [...held, ...known]) {
+    if (id.isNotEmpty && seen.add(id)) out.add(id);
+  }
+  return out;
+}

@@ -5,14 +5,21 @@ import 'package:flutter/services.dart';
 
 import '../rust/api.dart' as core;
 import '../data/api_client.dart';
+import '../data/asset_picker.dart';
 import '../data/btc_state.dart';
 import '../data/config.dart';
 import '../data/format.dart';
+import '../data/hidden_assets.dart';
+import '../data/leaf_service.dart';
+import '../data/lightning_service.dart';
+import '../data/ln_rail.dart';
 import '../data/openamp_service.dart';
 import '../data/price_service.dart';
+import '../data/seqln_keys.dart' as lnkeys;
 import '../data/wallet_cache.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
+import '../widgets/asset_sheet.dart';
 import '../widgets/widgets.dart';
 import 'scan_screen.dart';
 
@@ -29,6 +36,7 @@ class _SendTabState extends State<SendTab> {
   final _feeRateCtl = TextEditingController(); // sat/vB, optional; empty = network default
   List<core.AssetBalance> _balances = [];
   core.BtcBalance? _btc; // parent-chain (testnet4) balance, sendable like any asset
+  List<Map> _lnChannels = const []; // this wallet's own Lightning channels, for the picker's holdings
   Map<String, BigInt> _feeRates = {};
   String _assetId = _btcId; // BTC is the first-class default pick (principle 2), not tSEQ
   String? _feeAsset; // null = pay the fee in tSEQ (the builder's default)
@@ -56,10 +64,6 @@ class _SendTabState extends State<SendTab> {
     setState(() {
       // Restricted (OpenAMP) assets are sendable among equals; show last-known.
       _balances = [...b, ...OpenAmpService.instance.balances];
-      final sendable = _sendableIds();
-      if (!sendable.contains(_assetId)) {
-        _assetId = sendable.isNotEmpty ? sendable.first : _btcId; // BTC-first (principle 2), never tSEQ by default
-      }
       if (!_feeManual) _feeAsset = _defaultFeeFor(_assetId);
       _loading = false;
     });
@@ -89,11 +93,35 @@ class _SendTabState extends State<SendTab> {
       .toList();
 
   bool get _isBtc => _assetId == _btcId;
-  bool get _hasBtc => (BigInt.tryParse(_btc?.balanceSats ?? '0') ?? BigInt.zero) > BigInt.zero;
 
-  /// Everything sendable, BTC included as a first-class asset (parent chain first
-  /// when held, so a BTC-only wallet defaults to it).
-  List<String> _sendableIds() => [if (_hasBtc) _btcId, ..._heldIds()];
+  /// Atoms of [id] spendable in this wallet's own Lightning channels (BTC included).
+  BigInt _lnAtoms(String id) {
+    if (_lnChannels.isEmpty) return BigInt.zero;
+    final t = id == _btcId ? RailTarget.btc() : RailTarget.asset(hex: id, ticker: SeqAssets.labelFor(id).ticker);
+    return legLiquidity(_lnChannels, t).spendable;
+  }
+
+  /// Atoms of [id] in this wallet's leaves (none until it joined an operator; BTC is never a leaf).
+  BigInt _leafAtoms(String id) =>
+      LeafService.instance.joined ? (LeafService.instance.leafAtoms()[id] ?? BigInt.zero) : BigInt.zero;
+
+  /// What the wallet holds of [id] on every rail: on-chain, Lightning and leaves.
+  BigInt _totalOf(String id) => (BigInt.tryParse(_balanceOf(id)) ?? BigInt.zero) + _lnAtoms(id) + _leafAtoms(id);
+
+  /// The picker's rows in the wallet's order: BTC first (listed even at 0), then every
+  /// asset held on any rail, then every other asset the wallet can name, for the search.
+  List<String> _pickerIds() {
+    final candidates = <String>{
+      for (final b in _balances) b.assetId,
+      if (LeafService.instance.joined) ...LeafService.instance.leafAtoms().keys,
+      for (final c in _lnChannels)
+        if ('${c['leg'] ?? ''}' != 'btc' && '${c['asset'] ?? ''}'.isNotEmpty) '${c['asset']}',
+    };
+    return pickerOrder(
+      held: candidates.where((id) => _totalOf(id) > BigInt.zero),
+      known: SeqAssets.resolvedIds,
+    );
+  }
 
   Future<void> _load() async {
     try {
@@ -118,6 +146,7 @@ class _SendTabState extends State<SendTab> {
       final s = await core.syncWallet(mnemonic: m, esploraUrl: Backend.esplora);
       final btc = await btcF;
       final amp = await ampF;
+      final lnCh = await _ownChannels(m, s.balances);
       WalletCache.saveBalances(s.balances); // keep the shared cache fresh
       if (btc != null) BtcState.instance.observe(btc: btc, seqNext: s.nextIndex);
       if (!mounted) return;
@@ -125,12 +154,9 @@ class _SendTabState extends State<SendTab> {
         _error = null; // a successful load clears any earlier (transient) error
         _balances = [...s.balances, ...amp];
         if (btc != null) _btc = btc;
-        // Default the send asset to one you hold (keep the current choice if it's
-        // still funded). Never default to tSEQ when its balance is 0.
-        final held = _sendableIds();
-        if (!held.contains(_assetId)) {
-          _assetId = held.isNotEmpty ? held.first : _btcId; // BTC-first (principle 2), never tSEQ by default
-        }
+        if (lnCh != null) _lnChannels = lnCh;
+        // The send asset is the user's pick, BTC until they make one (principle 2); a
+        // reload never moves it, and never to tSEQ.
         // Default the fee to the asset being sent (asset-agnostic). Keep the
         // user's manual fee choice while they still hold it; otherwise re-apply
         // the default for the current send asset.
@@ -150,6 +176,28 @@ class _SendTabState extends State<SendTab> {
           _loading = false;
         });
       }
+    }
+  }
+
+  /// This wallet's own Lightning channels (best-effort: null when Lightning is off or
+  /// the provider does not answer), so an asset held only in a channel is still listed
+  /// among the wallet's holdings. Keyed like the Balance tab: a node key for BTC and for
+  /// every asset the wallet can name or holds.
+  Future<List<Map>?> _ownChannels(String m, List<core.AssetBalance> balances) async {
+    if (!LightningService.instance.configured) return null;
+    try {
+      final nodes = <String>{
+        lnkeys.ownNodeKeyForBtc(m),
+        for (final id in SeqAssets.resolvedIds) lnkeys.ownNodeKeyForAsset(m, id),
+        for (final b in balances) lnkeys.ownNodeKeyForAsset(m, b.assetId),
+      }.toList();
+      final st = await LightningService.instance.getStatus(nodes: nodes);
+      return ((st.raw['channels'] as List?) ?? const [])
+          .whereType<Map>()
+          .where((c) => '${c['node_key'] ?? ''}'.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return null;
     }
   }
 
@@ -215,7 +263,23 @@ class _SendTabState extends State<SendTab> {
   bool get _feeUnpriced => _feeAsset != null && _rateFor(_feeAsset!) == null;
 
   Future<void> _pickAsset() async {
-    final picked = await _assetSheet('Choose asset', _sendableIds(), withBalances: true);
+    final rows = [
+      for (final id in _pickerIds())
+        AssetPickerItem(
+          hex: id,
+          ticker: id == _btcId ? 'BTC' : SeqAssets.labelFor(id).ticker,
+          name: id == _btcId ? 'Bitcoin' : SeqAssets.labelFor(id).subtitle,
+          held: id == _btcId || _totalOf(id) > BigInt.zero,
+          hidden: HiddenAssets.instance.isHidden(id),
+        ),
+    ];
+    final picked = await showAssetSheet(
+      context,
+      title: 'Choose asset',
+      rows: rows,
+      registrySearch: true,
+      balanceOf: (id) => formatAtoms(_totalOf(id).toString(), id == _btcId ? 8 : SeqAssets.labelFor(id).precision),
+    );
     if (picked != null) {
       setState(() {
         _assetId = picked;
@@ -229,35 +293,28 @@ class _SendTabState extends State<SendTab> {
   }
 
   Future<void> _pickFee() async {
-    final picked = await _assetSheet('Pay fee in', _feeOptions());
+    final picked = await showAssetSheet(
+      context,
+      title: 'Pay fee in',
+      rows: [
+        for (final id in _feeOptions())
+          AssetPickerItem(
+            hex: id,
+            ticker: id.isEmpty ? 'tSEQ' : SeqAssets.labelFor(id).ticker,
+            name: SeqAssets.labelFor(id.isEmpty ? SeqAssets.policy : id).subtitle,
+          ),
+      ],
+      balanceOf: (id) {
+        final hex = id.isEmpty ? SeqAssets.policy : id;
+        return formatAtoms(_balanceOf(hex), SeqAssets.labelFor(hex).precision);
+      },
+    );
     if (picked != null) {
       setState(() {
         _feeManual = true;
         _feeAsset = picked.isEmpty ? null : picked;
       });
     }
-  }
-
-  Future<String?> _assetSheet(String title, List<String> ids, {bool withBalances = false}) {
-    return showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: AmbraColors.panel,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(AmbraRadii.card))),
-      builder: (_) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Padding(padding: const EdgeInsets.all(16), child: Text(title, style: AmbraText.title)),
-          for (final id in ids)
-            ListTile(
-              title: Text(id.isEmpty ? 'tSEQ' : SeqAssets.labelFor(id).ticker, style: AmbraText.body),
-              trailing: withBalances
-                  ? Text(formatAtoms(_balanceOf(id), SeqAssets.labelFor(id).precision), style: AmbraText.mono)
-                  : null,
-              onTap: () => Navigator.pop(context, id),
-            ),
-          const SizedBox(height: 8),
-        ]),
-      ),
-    );
   }
 
   String _balanceOf(String id) {
@@ -465,8 +522,13 @@ class _SendTabState extends State<SendTab> {
     final label = SeqAssets.labelFor(_assetId);
     final held = _heldIds();
     final canPickFee = _feeOptions().length > 1; // more than one held asset to choose from
-    final canSend = !_loading && _error == null && (held.isNotEmpty || _hasBtc);
-    final balStr = formatAtoms(_balanceOf(_assetId), label.precision);
+    final canSend = !_loading && _error == null;
+    final prec = _isBtc ? 8 : label.precision;
+    final balStr = formatAtoms(_balanceOf(_assetId), prec);
+    // The form spends on-chain coins; when part of the holding sits in Lightning or
+    // leaves, the field says which part it can send.
+    final elsewhere = _lnAtoms(_assetId) + _leafAtoms(_assetId) > BigInt.zero;
+    final nothingHeld = held.isEmpty && (BigInt.tryParse(_balanceOf(_btcId)) ?? BigInt.zero) == BigInt.zero;
     return Column(
       children: [
         Expanded(
@@ -483,18 +545,21 @@ class _SendTabState extends State<SendTab> {
                   SecondaryButton(label: 'Retry', icon: Icons.refresh, onPressed: _load),
                 ]),
               )
-            else if (held.isEmpty && !_hasBtc)
-              const AmbraCard(
-                  child: Text(
-                      'No assets to send yet. Get free testnet coins from the faucet (More tab), '
-                      'or receive funds to your address.',
-                      style: AmbraText.muted))
             else ...[
+              if (nothingHeld) ...[
+                const AmbraCard(
+                    child: Text(
+                        'Nothing to send yet. Get free testnet coins from the faucet (More tab), '
+                        'or receive funds to your address.',
+                        style: AmbraText.muted)),
+                const SizedBox(height: 18),
+              ],
               const SectionLabel('Asset'),
               const SizedBox(height: 8),
               _PickerField(
-                label: label.ticker,
-                trailing: 'balance $balStr',
+                key: const ValueKey('send-asset-picker'),
+                label: _isBtc ? 'BTC' : label.ticker,
+                trailing: elsewhere ? '$balStr on-chain' : 'balance $balStr',
                 onTap: _pickAsset,
               ),
               const SizedBox(height: 18),
@@ -512,7 +577,7 @@ class _SendTabState extends State<SendTab> {
                       ),
               ),
               const SizedBox(height: 18),
-              AmbraField(label: 'Amount (${label.ticker})', controller: _amount, hint: '0.0'),
+              AmbraField(label: 'Amount (${_isBtc ? 'BTC' : label.ticker})', controller: _amount, hint: '0.0'),
               const SizedBox(height: 18),
               if (_isRestricted) ...[
                 // Restricted (OpenAMP) assets move inside the enclave; the fee is
@@ -563,7 +628,7 @@ class _SendTabState extends State<SendTab> {
 }
 
 class _PickerField extends StatelessWidget {
-  const _PickerField({required this.label, this.trailing, this.onTap});
+  const _PickerField({super.key, required this.label, this.trailing, this.onTap});
   final String label;
   final String? trailing;
   final VoidCallback? onTap;
