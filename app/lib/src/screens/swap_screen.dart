@@ -4270,12 +4270,29 @@ Future<String> _executeRestPost({
   final signed = await core.signPset(mnemonic: mnemonic, pset: pset);
   final covTxid = await core.finalizeAndBroadcast(mnemonic: mnemonic, esploraUrl: Backend.esplora, pset: signed);
 
+  // FUND-SAFETY: the covenant is now funded ON-CHAIN. Persist its reclaim material (funding txid +
+  // preparedJson + makerIndex + expiry) at once, BEFORE anything else can fail: locating the funded
+  // output (an explorer that has not seen the transaction yet answers 404), finalizing, posting. A
+  // record whose output index is not known yet ([kVoutUnknown]) is found again at the reclaim.
+  final pending = PlacedCovenant(
+    covTxid: covTxid,
+    covVout: kVoutUnknown,
+    pay: payAsset,
+    receive: recvAsset,
+    sellAtoms: sellAtoms.toString(),
+    recvAtoms: buyAtoms.toString(),
+    makerIndex: makerIndex,
+    covenantSpkHex: prepared.covenantSpkHex,
+    preparedJson: prepared.preparedJson,
+    expiryLocktime: prepared.expiryLocktime,
+    posted: false,
+    createdMs: DateTime.now().millisecondsSinceEpoch,
+  );
+  await PlacedOrders.put(pending);
+
   onStatus?.call('Locating the funded output…');
   final covVout = await resolveCovenantVout(covTxid, prepared.covenantSpkHex);
 
-  // FUND-SAFETY: the covenant is now funded ON-CHAIN. Persist its reclaim material (funding outpoint +
-  // preparedJson + makerIndex + expiry) BEFORE finalizing and posting, so a post failure (relay reject,
-  // dropped connection) can never strand the funds without a local record to reclaim them.
   var placed = PlacedCovenant(
     covTxid: covTxid,
     covVout: covVout,
@@ -4288,9 +4305,10 @@ Future<String> _executeRestPost({
     preparedJson: prepared.preparedJson,
     expiryLocktime: prepared.expiryLocktime,
     posted: false,
-    createdMs: DateTime.now().millisecondsSinceEpoch,
+    createdMs: pending.createdMs,
   );
   await PlacedOrders.put(placed);
+  await PlacedOrders.remove(pending.key);
 
   onStatus?.call('Signing & posting your order…');
   final signedOffer = await core.covenantFinalizeOffer(

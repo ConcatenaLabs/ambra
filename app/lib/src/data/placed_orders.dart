@@ -109,6 +109,10 @@ class PlacedCovenant {
       );
 }
 
+/// The output index of a covenant funding whose output was not located yet: the record is written
+/// as soon as the funding is broadcast, and the reclaim locates the output itself.
+const int kVoutUnknown = -1;
+
 /// Persistent store of placed covenant orders (recorded before the post — see [PlacedCovenant]).
 class PlacedOrders {
   static const _key = 'ambra.dex.placed';

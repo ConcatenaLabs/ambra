@@ -299,12 +299,33 @@ class SbtcPegService {
     final signed = await core.signPset(mnemonic: mnemonic, pset: pset);
     final covTxid = await core.finalizeAndBroadcast(mnemonic: mnemonic, esploraUrl: Backend.esplora, pset: signed);
 
+    // FUND-SAFETY: persist the reclaim material (txid + ORIGINAL preparedJson + makerIndex + expiry) at
+    // once, before locating the output, posting or anything else can fail, so the funds are never
+    // stranded without a local record to reclaim them (and, for a pegged order, to peg the reclaimed
+    // SBTC back out). The output index is filled in once located; the reclaim locates it otherwise.
+    PlacedCovenant record(int vout) => PlacedCovenant(
+      covTxid: covTxid,
+      covVout: vout,
+      pay: sellAsset,
+      receive: buyAsset,
+      sellAtoms: sellAtoms.toString(),
+      recvAtoms: buyAtoms.toString(),
+      makerIndex: makerIndex,
+      covenantSpkHex: prepared.covenantSpkHex,
+      preparedJson: prepared.preparedJson, // ORIGINAL: the refund taptree derives from sell_asset (SBTC)
+      expiryLocktime: prepared.expiryLocktime,
+      posted: false,
+      createdMs: DateTime.now().millisecondsSinceEpoch,
+      pegged: pegged,
+      advertiseAs: pegged ? advertiseSellAs : null,
+    );
+    final pending = record(kVoutUnknown);
+    await PlacedOrders.put(pending);
+
     onStatus?.call('Locating the funded output…');
     final covVout = await resolveCovenantVout(covTxid, prepared.covenantSpkHex);
 
-    // FUND-SAFETY: persist the reclaim material (outpoint + ORIGINAL preparedJson + makerIndex + expiry)
-    // BEFORE posting, so a post failure can never strand the funds without a local record to reclaim
-    // (and, for a pegged order, to peg the reclaimed SBTC back out). Flip posted:true once accepted.
+    // Flip posted:true once accepted.
     var placed = PlacedCovenant(
       covTxid: covTxid,
       covVout: covVout,
@@ -322,6 +343,7 @@ class SbtcPegService {
       advertiseAs: pegged ? advertiseSellAs : null,
     );
     await PlacedOrders.put(placed);
+    await PlacedOrders.remove(pending.key);
 
     onStatus?.call('Signing & posting your order…');
     final signedOffer = await core.covenantFinalizeOffer(
