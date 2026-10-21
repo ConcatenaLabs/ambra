@@ -66,6 +66,8 @@ android {
                 signingConfigs.getByName("release")
             else
                 signingConfigs.getByName("debug")
+            // Keep what WorkManager reaches by reflection (see proguard-rules.pro).
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 }
