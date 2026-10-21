@@ -75,6 +75,12 @@ final BigInt _kScale = BigInt.from(100000000); // exchange-rate scale (atoms per
 
 /// A pre-lock failure: no maker committed any BTC, so the composer may retry the next resting offer
 /// (the web driveReverse's 'retry'). Nothing was spent and nothing was persisted.
+/// The words of an error for a sentence, without Dart's "Exception: " prefix.
+String _why(Object e) {
+  final s = '$e';
+  return s.startsWith('Exception: ') ? s.substring(11) : s;
+}
+
 class XrNoMakerException implements Exception {
   XrNoMakerException(this.message);
   final String message;
@@ -646,9 +652,9 @@ class XrSwapService {
         'seq_amount': takeSeq.toInt(),
       });
       locked = await courier.recv(XcType.btcLegLocked, timeout: timing.btcLockedTimeout);
-    } catch (_) {
+    } catch (e) {
       await courier.close();
-      throw XrNoMakerException('The maker did not lock any Bitcoin. Nothing was spent - try the next offer.');
+      throw XrNoMakerException('The maker did not lock any Bitcoin (${_why(e)}). Nothing was spent - try the next offer.');
     }
 
     // The record id, hoisted so the post-courier settle tail can reload THIS record by id.
