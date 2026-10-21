@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../rust/api.dart' as core;
@@ -9,7 +8,6 @@ import 'config.dart';
 import 'fee_asset_rule.dart';
 import 'placed_orders.dart';
 import 'sbtc_client.dart';
-import 'seqdex_client.dart' show pick;
 import 'seqob_client.dart';
 import 'swap_route.dart' show kBtcSentinel;
 
@@ -302,7 +300,7 @@ class SbtcPegService {
     final covTxid = await core.finalizeAndBroadcast(mnemonic: mnemonic, esploraUrl: Backend.esplora, pset: signed);
 
     onStatus?.call('Locating the funded output…');
-    final covVout = await _resolveCovenantVout(covTxid, prepared.covenantSpkHex);
+    final covVout = await resolveCovenantVout(covTxid, prepared.covenantSpkHex);
 
     // FUND-SAFETY: persist the reclaim material (outpoint + ORIGINAL preparedJson + makerIndex + expiry)
     // BEFORE posting, so a post failure can never strand the funds without a local record to reclaim
@@ -382,18 +380,16 @@ class SbtcPegService {
   static bool isPeggedFillToRedeem(SeqObOffer offer) {
     final cov = offer.covenant;
     if (cov == null) return false;
-    final gotAsset = (pick(cov, ['asset_a', 'assetA'])?.toString() ?? '').toLowerCase();
-    final sbtcHex = (sbtcAssetId() ?? '').toLowerCase();
-    if (sbtcHex.isEmpty || gotAsset != sbtcHex) return false; // we didn't receive SBTC
+    if (!covenantLocks(cov, sbtcAssetId() ?? '')) return false; // we didn't receive SBTC
     return offer.baseAsset == kBtcSentinel || offer.quoteAsset == kBtcSentinel; // advertised BTC -> redeem
   }
 
   /// Peg the just-received (or just-reclaimed) SBTC back OUT to real BTC: ask the bridge for a peg-out
   /// address bound to a wallet BTC address, send the SBTC there, and the bridge releases real BTC.
   /// Best-effort + safe: on any failure the user simply holds redeemable SBTC (never lost). [atoms] =
-  /// the SBTC to redeem. Returns the send txid, or null when there is nothing to redeem. The tx fee is
-  /// paid in the policy asset (tSEQ) so the FULL SBTC amount transfers to the bridge. Mirrors swap.js
-  /// pegOutReceivedSbtc.
+  /// the SBTC to redeem. Returns the send txid, or null when there is nothing to redeem. The fee follows
+  /// the wallet rule and is never taken from the SBTC sent, so the FULL amount reaches the bridge.
+  /// Mirrors swap.js pegOutReceivedSbtc.
   static Future<String?> pegOutReceivedSbtc({required String mnemonic, required BigInt atoms}) async {
     if (atoms <= BigInt.zero) return null;
     final sbtcHex = sbtcAssetId();
@@ -438,21 +434,6 @@ class SbtcPegService {
     }
     throw Exception('The peg-in hasn\'t been credited yet. Your BTC is safe at the bridge and your SBTC '
         'will arrive; re-open the order once it does.');
-  }
-
-  /// Locate the covenant funding vout by matching its scriptPubKey on the broadcast tx.
-  static Future<int> _resolveCovenantVout(String txid, String spkHex) async {
-    final r = await http
-        .get(Uri.parse('${Backend.esplora}/tx/$txid'), headers: {...Backend.authHeaders})
-        .timeout(const Duration(seconds: 30));
-    if (r.statusCode != 200) throw Exception('esplora /tx/$txid returned ${r.statusCode}');
-    final tx = jsonDecode(r.body) as Map<String, dynamic>;
-    final vout = (tx['vout'] as List?) ?? const [];
-    for (var i = 0; i < vout.length; i++) {
-      final o = vout[i] as Map;
-      if ('${o['scriptpubkey'] ?? ''}'.toLowerCase() == spkHex.toLowerCase()) return i;
-    }
-    throw Exception('funded covenant output not found in $txid');
   }
 
   static String _randHex(int bytes) {

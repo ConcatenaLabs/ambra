@@ -344,8 +344,7 @@ class SeqObClient {
         if (offer.baseAtoms <= BigInt.zero) continue;
         // MIS-SELL BINDING: require the covenant to actually lock SBTC (asset_a == the known SBTC id).
         // Refuse a BTC-advertised covenant that locks anything else — we must never fill it as "pegged BTC".
-        final lockedAsset = (pick(offer.covenant ?? const {}, ['asset_a', 'assetA'])?.toString() ?? '').toLowerCase();
-        if (lockedAsset != sbtc) continue;
+        if (!covenantLocks(offer.covenant, sbtc)) continue;
         out.add(offer);
       }
     } catch (_) {/* best-effort */}
@@ -538,4 +537,52 @@ List<int> _hexBytes(String hex) {
     out.add(int.parse(hex.substring(i, i + 2), radix: 16));
   }
   return out;
+}
+
+/// A 32-byte id between display and internal byte order (its own inverse).
+String revHex(String h) {
+  final pairs = <String>[];
+  for (var i = 0; i + 1 < h.length; i += 2) {
+    pairs.add(h.substring(i, i + 2));
+  }
+  return pairs.reversed.join();
+}
+
+/// True when a covenant's terms lock the asset [displayHex]. Terms name asset A in
+/// the byte order its leaf baked: internal (reversed) for current covenants,
+/// display for ones derived before wallets reversed it. Either is the same asset;
+/// the fill itself checks the funded coin's asset on-chain.
+bool covenantLocks(Map<String, dynamic>? covenant, String displayHex) {
+  final a = (pick(covenant ?? const {}, ['asset_a', 'assetA'])?.toString() ?? '').toLowerCase();
+  final d = displayHex.toLowerCase();
+  return d.isNotEmpty && (a == d || a == revHex(d));
+}
+
+/// The output of [txid] that pays [spkHex], read from the wallet's esplora. A
+/// transaction just broadcast may not be indexed yet, so a 404 is retried for
+/// about a minute ([tries] x [wait]) before giving up; any other answer is final.
+/// [get] is the HTTP GET, replaceable in tests.
+Future<int> resolveCovenantVout(
+  String txid,
+  String spkHex, {
+  int tries = 20,
+  Duration wait = const Duration(seconds: 3),
+  Future<http.Response> Function(Uri url)? get,
+}) async {
+  final fetch = get ?? (Uri u) => http.get(u, headers: {...Backend.authHeaders}).timeout(const Duration(seconds: 30));
+  for (var attempt = 1;; attempt++) {
+    final r = await fetch(Uri.parse('${Backend.esplora}/tx/$txid'));
+    if (r.statusCode == 404 && attempt < tries) {
+      await Future<void>.delayed(wait);
+      continue;
+    }
+    if (r.statusCode != 200) throw Exception('esplora /tx/$txid returned ${r.statusCode}');
+    final tx = jsonDecode(r.body) as Map<String, dynamic>;
+    final vout = (tx['vout'] as List?) ?? const [];
+    for (var i = 0; i < vout.length; i++) {
+      final o = vout[i] as Map;
+      if ('${o['scriptpubkey'] ?? ''}'.toLowerCase() == spkHex.toLowerCase()) return i;
+    }
+    throw Exception('funded covenant output not found in $txid');
+  }
 }
