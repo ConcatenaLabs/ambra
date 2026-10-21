@@ -107,12 +107,14 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
       // core then takes it from the reclaimed value), else in the accepted asset whose
       // largest coin covers the most fees. Sized at the reference value of 2,000 atoms.
       final fee = await walletFeeFor(m, moved: rec.pay);
+      // A record written at the broadcast, before its output was located: locate it now.
+      final vout = rec.covVout == kVoutUnknown ? await resolveCovenantVout(rec.covTxid, rec.covenantSpkHex) : rec.covVout;
       final built = await core.covenantBuildRefundTx(
         mnemonic: m,
         esploraUrl: Backend.esplora,
         preparedJson: rec.preparedJson,
         covenantTxid: rec.covTxid,
-        covenantVout: rec.covVout,
+        covenantVout: vout,
         makerIndex: rec.makerIndex,
         feeAsset: fee.asset,
         feeAtoms: feeAtomsIn(fee.rate, BigInt.from(2000)),
