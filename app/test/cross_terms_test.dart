@@ -21,8 +21,8 @@ CrossTerms terms({
   BigInt? asset,
   String claim = '03bb',
   String refund = '03cc',
-  int bl = 200,
-  int sl = 100,
+  int bl = 157412,
+  int sl = 179123,
   BigInt? fee,
 }) =>
     CrossTerms(
@@ -35,33 +35,42 @@ CrossTerms terms({
       assetAtoms: asset ?? BigInt.from(1244524),
     );
 
+// The chain tips when two makers sent the default terms above (21/10/2026): testnet4 157152, Sequentia
+// 178883. Sequentia's height is past testnet4's, which an ordering of the two timeouts refused.
+const btcTip = 157152, seqTip = 178883;
+String? validate({required CrossOffer offer, required CrossTerms terms, BigInt? requestedAtoms}) =>
+    validateCrossTerms(offer: offer, terms: terms, btcTip: btcTip, seqTip: seqTip, requestedAtoms: requestedAtoms);
+
 void main() {
   test('matching terms with safe locktimes + small fee -> OK to lock', () {
-    expect(validateCrossTerms(offer: offer(), terms: terms()), isNull);
+    expect(validate(offer: offer(), terms: terms()), isNull);
   });
 
   test('BTC amount mismatch -> refused', () {
-    expect(validateCrossTerms(offer: offer(), terms: terms(btc: BigInt.from(99999))), contains('Bitcoin amount'));
+    expect(validate(offer: offer(), terms: terms(btc: BigInt.from(99999))), contains('Bitcoin amount'));
   });
 
   test('asset amount mismatch -> refused', () {
-    expect(validateCrossTerms(offer: offer(), terms: terms(asset: BigInt.from(999))), contains('asset amount'));
+    expect(validate(offer: offer(), terms: terms(asset: BigInt.from(999))), contains('asset amount'));
   });
 
   test('missing maker key -> refused', () {
-    expect(validateCrossTerms(offer: offer(), terms: terms(claim: '')), contains('missing a key'));
-    expect(validateCrossTerms(offer: offer(), terms: terms(refund: '')), contains('missing a key'));
+    expect(validate(offer: offer(), terms: terms(claim: '')), contains('missing a key'));
+    expect(validate(offer: offer(), terms: terms(refund: '')), contains('missing a key'));
   });
 
-  test('T_btc must exceed T_seq -> refused', () {
-    expect(validateCrossTerms(offer: offer(), terms: terms(bl: 100, sl: 100)), contains('locktime ordering'));
-    expect(validateCrossTerms(offer: offer(), terms: terms(bl: 90, sl: 100)), contains('locktime ordering'));
+  test('each timeout is checked against its own chain, never against the other', () {
+    expect(validate(offer: offer(), terms: terms()), isNull, reason: 'T_btc below T_seq is fine across two chains');
+    expect(validate(offer: offer(), terms: terms(bl: btcTip)), contains('Bitcoin timeout'));
+    expect(validate(offer: offer(), terms: terms(bl: btcTip + kMaxBtcLockDelta + 1)), contains('Bitcoin timeout'));
+    expect(validate(offer: offer(), terms: terms(sl: seqTip + kMinSeqClaimWindow - 1)), contains('Sequentia timeout'));
+    expect(validateCrossTerms(offer: offer(), terms: terms(), btcTip: -1, seqTip: seqTip), contains('chain tips'));
   });
 
   test('maker fee over ~1% + 1000 of the trade -> refused', () {
     // 67173 sats trade; cap = 67173/100 + 1000 = 1671. 2000 is over, 1500 is under.
-    expect(validateCrossTerms(offer: offer(), terms: terms(fee: BigInt.from(2000))), contains('fee is too high'));
-    expect(validateCrossTerms(offer: offer(), terms: terms(fee: BigInt.from(1500))), isNull);
+    expect(validate(offer: offer(), terms: terms(fee: BigInt.from(2000))), contains('fee is too high'));
+    expect(validate(offer: offer(), terms: terms(fee: BigInt.from(1500))), isNull);
   });
 
   group('partial fill (priority C, forward CEIL proportional BTC)', () {
@@ -78,9 +87,9 @@ void main() {
     test('buy 10 of a 43 binds 10 asset at the proportional CEIL BTC, never the whole 43', () {
       // ceil(4300*10/43) = ceil(1000.0) = 1000.
       expect(proportionalBtcForwardCeil(BigInt.from(4300), BigInt.from(43), BigInt.from(10)), BigInt.from(1000));
-      expect(validateCrossTerms(offer: o43(), terms: t(asset: 10, btc: 1000), requestedAtoms: BigInt.from(10)), isNull);
+      expect(validate(offer: o43(), terms: t(asset: 10, btc: 1000), requestedAtoms: BigInt.from(10)), isNull);
       // The whole-offer amounts must NOT validate for a partial request.
-      expect(validateCrossTerms(offer: o43(), terms: t(asset: 43, btc: 4300), requestedAtoms: BigInt.from(10)),
+      expect(validate(offer: o43(), terms: t(asset: 43, btc: 4300), requestedAtoms: BigInt.from(10)),
           isNotNull);
     });
 
@@ -89,24 +98,29 @@ void main() {
           offerId: 'x', seqAsset: 'g', makerSellsAsset: true,
           assetAtoms: BigInt.from(43), btcSats: BigInt.from(4307), makerPubkey: '03aa');
       expect(proportionalBtcForwardCeil(BigInt.from(4307), BigInt.from(43), BigInt.from(10)), BigInt.from(1002));
-      expect(validateCrossTerms(offer: o, terms: t(asset: 10, btc: 1002), requestedAtoms: BigInt.from(10)), isNull);
-      expect(validateCrossTerms(offer: o, terms: t(asset: 10, btc: 1001), requestedAtoms: BigInt.from(10)), isNotNull);
+      expect(validate(offer: o, terms: t(asset: 10, btc: 1002), requestedAtoms: BigInt.from(10)), isNull);
+      expect(validate(offer: o, terms: t(asset: 10, btc: 1001), requestedAtoms: BigInt.from(10)), isNotNull);
     });
 
     test('overcharging a partial slice is refused (never overpay)', () {
-      expect(validateCrossTerms(offer: o43(), terms: t(asset: 10, btc: 1500), requestedAtoms: BigInt.from(10)),
+      expect(validate(offer: o43(), terms: t(asset: 10, btc: 1500), requestedAtoms: BigInt.from(10)),
           isNotNull);
     });
 
     test('a slice below a known min_fill is refused before any BTC locks', () {
       expect(
           validateCrossTerms(
-              offer: o43(), terms: t(asset: 2, btc: 200), requestedAtoms: BigInt.from(2), minFill: BigInt.from(5)),
+              offer: o43(),
+              terms: t(asset: 2, btc: 200),
+              btcTip: btcTip,
+              seqTip: seqTip,
+              requestedAtoms: BigInt.from(2),
+              minFill: BigInt.from(5)),
           contains('minimum fillable'));
     });
 
     test('a requested size >= the offer falls back to the strict whole-offer check', () {
-      expect(validateCrossTerms(offer: o43(), terms: t(asset: 43, btc: 4300), requestedAtoms: BigInt.from(100)), isNull);
+      expect(validate(offer: o43(), terms: t(asset: 43, btc: 4300), requestedAtoms: BigInt.from(100)), isNull);
     });
   });
 }

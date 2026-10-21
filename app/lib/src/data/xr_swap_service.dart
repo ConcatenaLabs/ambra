@@ -64,6 +64,14 @@ const int kXrMinSeqClaimWindow = 120;
 /// BTC after it reveals, so funding would be one-sided (xrswap.js MIN_BTC_CLAIM_WINDOW).
 const int kXrMinBtcClaimWindow = 6;
 
+/// A sale's maker timeouts, each against its own chain (xrswap.js, xdriver_reverse.go): T_btc at least
+/// this many testnet4 blocks past the tip, T_seq at most this many Sequentia blocks past its tip, and the
+/// Bitcoin time left at least [xrMinBtcDelta] of the Sequentia time left (testnet4 blocks are 10 minutes,
+/// Sequentia's 1; 90/150 keeps the Go taker's ratio).
+const int kXrMinBtcLockDelta = 30;
+const int kXrMaxSeqLockDelta = 480;
+int xrMinBtcDelta(int seqDelta) => (seqDelta * 90 + 149) ~/ 150 + kXrMinBtcClaimWindow;
+
 /// Bitcoin's canonical P2SH dust value + the drivers' per-spend fee floor/default — byte-for-byte the
 /// Go xminslice.go constants (mirrored in xrswap.js). A partial slice below dust + 2x the spend fee is
 /// unsettleable (the post-fee claim/refund output cannot relay), so it is refused PRE-FUND.
@@ -719,21 +727,40 @@ class XrSwapService {
         return _failAbort(courier, rec, 'btc_leg_invalid',
             'maker BTC-leg script does not match the agreed terms - do not fund - nothing was spent');
       }
-      if (!(tBtc > tSeq)) {
-        return _failAbort(
-            courier, rec, 'btc_leg_invalid', 'bad timeout ordering (T_btc must exceed T_seq) - nothing was spent');
-      }
-      // T_seq FLOOR: ordering alone is not enough — a T_seq only a few blocks above the tip would be
-      // dead on arrival (inside its own refund margin before the anchor gate can run). A tip read that
-      // FAILS is not a verdict; fundWindowClosed re-reads immediately before funding.
-      try {
-        final tip = await chain.seqTipHeight();
-        if (tip >= 0 && tSeq > 0 && tSeq < tip + kXrMinSeqClaimWindow) {
+      // Each timeout against its own chain (xrswap.js verifyMakerBtcLeg, xdriver_reverse.go): T_btc is a
+      // testnet4 height and T_seq a Sequentia height, and comparing them refused every sale once Sequentia's
+      // height passed testnet4's. T_btc far enough past the testnet4 tip to claim in, T_seq not too far past
+      // the Sequentia tip, and the Bitcoin time left outlasting the Sequentia time left.
+      {
+        final btcTip = await chain.btcTipHeight();
+        final seqTip = await chain.seqTipHeight();
+        if (btcTip < 0 || seqTip < 0) {
           return _failAbort(courier, rec, 'btc_leg_invalid',
-              "the maker's asset timeout T_seq=$tSeq is only ${tSeq - tip} blocks above the current Sequentia tip "
-              '$tip; this wallet needs at least $kXrMinSeqClaimWindow to settle safely - nothing was spent');
+              "could not read the chain tips to check the maker's timeouts - nothing was spent");
         }
-      } catch (_) {}
+        if (tBtc < btcTip + kXrMinBtcLockDelta) {
+          return _failAbort(courier, rec, 'btc_leg_invalid',
+              "the maker's Bitcoin timeout (block $tBtc) is less than $kXrMinBtcLockDelta blocks past the testnet4 tip "
+              '$btcTip - nothing was spent');
+        }
+        if (tSeq > seqTip + kXrMaxSeqLockDelta) {
+          return _failAbort(courier, rec, 'btc_leg_invalid',
+              "the maker's Sequentia timeout (block $tSeq) is more than $kXrMaxSeqLockDelta blocks past the tip $seqTip "
+              '- nothing was spent');
+        }
+        if (tBtc - btcTip < xrMinBtcDelta(tSeq - seqTip)) {
+          return _failAbort(courier, rec, 'btc_leg_invalid',
+              "the maker's Bitcoin timeout does not outlast the Sequentia one (${tBtc - btcTip} testnet4 blocks against "
+              '${tSeq - seqTip} Sequentia blocks) - nothing was spent');
+        }
+        // T_seq FLOOR: a T_seq only a few blocks above the tip would be dead on arrival (inside its own
+        // refund margin before the anchor gate can run); fundWindowClosed re-reads before funding.
+        if (tSeq < seqTip + kXrMinSeqClaimWindow) {
+          return _failAbort(courier, rec, 'btc_leg_invalid',
+              "the maker's asset timeout T_seq=$tSeq is only ${tSeq - seqTip} blocks above the current Sequentia tip "
+              '$seqTip; this wallet needs at least $kXrMinSeqClaimWindow to settle safely - nothing was spent');
+        }
+      }
 
       await XrSwapStore.save(rec);
 

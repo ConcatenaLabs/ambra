@@ -109,6 +109,8 @@ class _FakeChain implements XrChain {
   int seqTipReads = 0;
   int? seqTipAfterFirstRead; // later reads return this (verify passes once, then the window can close)
   int btcTip = 90;
+  int btcTipReads = 0;
+  int? btcTipAfterFirstRead; // later reads return this (verify passes once, then Bitcoin moves on)
   int anchorHeight = 99; // the LIVE anchor view
   bool anchorOk = true;
   int anchorAdvanceAfterReads = 0; // reads after which the anchor jumps to [anchorAfter]
@@ -164,7 +166,11 @@ class _FakeChain implements XrChain {
     return seqTip;
   }
   @override
-  Future<int> btcTipHeight() async => btcTip;
+  Future<int> btcTipHeight() async {
+    btcTipReads++;
+    if (btcTipAfterFirstRead != null && btcTipReads > 1) return btcTipAfterFirstRead!;
+    return btcTip;
+  }
 
   @override
   Future<({int height, bool ok})?> anchorTip() async {
@@ -245,8 +251,8 @@ class _FakeChain implements XrChain {
 Map<String, dynamic> _btcLegLocked({
   required BigInt wantBtc,
   required BigInt takeSeq,
-  int tBtc = 5000,
-  int tSeq = 2000,
+  int tBtc = 400,
+  int tSeq = 1240,
   BigInt? legAmount,
 }) =>
     {
@@ -501,7 +507,7 @@ void main() {
       chain
         ..btcFunding = XrBtcFunding(vout: 0, valueSats: BigInt.from(10000), height: 100, confirmed: true)
         ..anchorHeight = 100 // stuck below the target forever
-        ..seqTip = 1500 // the verify-time T_seq floor passes (2000 >= 1500+120)…
+        ..seqTip = 1600 // the verify-time T_seq floor passes (2000 >= 1600+120)…
         ..seqTipAfterFirstRead = 1900; // …then the chain moves inside the claim window at the gate
       await expectLater(runDriver(courier), throwsA(isA<Exception>()));
       expect(chain.fundCalls, 0); // NOTHING was funded
@@ -519,7 +525,7 @@ void main() {
       chain
         ..seqTip = 10 // the verify-time T_seq floor passes (150 >= 10+120)
         ..btcFunding = null // the maker's lock never confirms…
-        ..btcTip = 195; // …and Bitcoin is within kXrMinBtcClaimWindow of T_btc=200
+        ..btcTipAfterFirstRead = 195; // …and Bitcoin moves within kXrMinBtcClaimWindow of T_btc=200
       await expectLater(runDriver(courier), throwsA(isA<Exception>()));
       expect(chain.fundCalls, 0);
       expect(courier.fails.last[0], 'fund_window_closed');
