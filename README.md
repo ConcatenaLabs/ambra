@@ -171,6 +171,19 @@ module that implements it.
   asset and state, receive (a request shown as text and QR, copied or shared), send to
   a request, settle now (the refresh fee shown before anything is signed), every coin
   with its dates, the exit drill, board from on-chain, and what the wallet refused.
+- The Swap screen's leaf rail (developer mode, an operator joined, two Sequentia assets;
+  `app/lib/src/data/leaf_rail.dart`, `app/lib/src/screens/leaf_rail_panel.dart`): "Pay
+  from" and "Receive to" offer **Leaf** beside On-chain and Lightning, and a leg on Leaf
+  is settled by the leaf panel in place of the screen's own review. Market, Leaf to Leaf:
+  a take from leaves of the best on-chain order the operator's round can take (a
+  transparent covenant order on the relay), its fill, price, fee and the operator's
+  forfeit window shown first; beside it, accepting another wallet's in-tree swap offer,
+  read first (what is got, given and paid, and the date by which the coins got must be
+  taken on the chain) and accepted only on those terms. Limit, Leaf to Leaf: an in-tree
+  swap offered to another wallet of the same operator (the offer holds the coins and signs
+  nothing), completed with its acceptance in one reassignment the operator co-signs. BTC is
+  never a leaf: a pair with BTC has no Leaf choice. An order placed on the chain from
+  leaves is made in the web wallet or the browser wallet. User mode shows no Leaf choice.
 - More > Contracts (developer mode, `app/lib/src/screens/contracts_screen.dart`): a spend
   of a contract the kit carries (`sequentia/faucet-drip`, `pignus/vault`, `pignus/offer`,
   `pignus/vault-threshold`, `pignus/offer-threshold`, `sequentia/capped-sale`,
@@ -346,7 +359,8 @@ SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocaptu
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test contracts -- --nocapture
 
 # Leaves against a whole operator: a payment received while the app is closed,
-# found by the scheduled job's pass. Needs arca's long-running operator harness
+# found by the scheduled job's pass, and two wallets swapping two assets in the
+# tree through the core (offer, read, acceptance on the terms read, completion). Needs arca's long-running operator harness
 # (bark-cli/tests/arca_operator_for_browsers.rs in the arca repo) at its control
 # address; without the variable the test says so and passes without running.
 AMBRA_LEAVES_HARNESS=http://127.0.0.1:18640 cargo test --test leaves -- --nocapture
