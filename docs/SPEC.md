@@ -184,6 +184,15 @@ Generated bindings live in `app/lib/src/rust/`; the Rust source of truth is
   went out, from the coin its payment left at the staking key), `find_delegation`, `build_delegation_spend` (move or leave,
   signed the way the next block's height requires; refuses when the chain tip
   cannot be read).
+- Stakes (same module): `list_stakes` (every coin of the staking key that is still the
+  holder's Sequence token: bonds under the time lock `(1<<22)|2532` and the height lock
+  43,200, and unbonding outputs, each with its state: pending, bonded, unbondable,
+  unbonding or claimable), `build_unbond` (a bond whose lock has passed into the
+  unbonding output; height lock: bond height + 43,200 <= tip + 1; time lock: the tip's
+  median time >= the median time of the block before the bond's + 2,532 x 512 s),
+  `build_unbond_claim` (an unbonding output to a fresh wallet address once the tip's
+  Bitcoin anchor is at least the unbond block's anchor + 2,016), `broadcast_stake_step`.
+  Both are signed for the next block's height, as record spends are.
 - Bitcoin (testnet4) wallet: `btc_sync`, `btc_prepare`, `btc_broadcast`.
 - SeqDEX same-chain swap: `seqdex_build_swap_request`, `seqdex_sign_accept`.
 - Cross-chain BTC->asset HTLC: `xchain_new_secret`, `xchain_seq_claim_pubkey`,
@@ -217,10 +226,9 @@ library's schedule while the app runs plus a scheduled job while it is closed; t
 reference currency defaults to USD. Backend defaults to the public testnet node
 `https://sequentiatestnet.com` and is user-configurable (More > Node, optional HTTP auth);
 endpoints: `/api`, `/testnet4/api`, `/dex`, `/feerates`, `/prices`,
-`/registry/index.minimal.json`, `/faucet`, `/openamp`, `/lsp`.
+`/registry/index.minimal.json`, `/faucet`, `/openamp`, `/lsp`, `/anchor`.
 
 ## Roadmap (not yet implemented)
 
-- Unstaking/unbonding flow (staking is one-way in the app today).
 - iOS bring-up (scaffold exists; needs a macOS/Xcode machine).
 - Push/background sync for the on-chain wallet (leaves have their scheduled job).

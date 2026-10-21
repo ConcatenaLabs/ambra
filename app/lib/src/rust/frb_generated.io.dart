@@ -204,6 +204,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<Recipient> dco_decode_list_recipient(dynamic raw);
 
   @protected
+  List<StakeEntry> dco_decode_list_stake_entry(dynamic raw);
+
+  @protected
   List<TxRow> dco_decode_list_tx_row(dynamic raw);
 
   @protected
@@ -247,6 +250,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SignedMessage dco_decode_signed_message(dynamic raw);
+
+  @protected
+  StakeEntry dco_decode_stake_entry(dynamic raw);
 
   @protected
   StakerSignedMessage dco_decode_staker_signed_message(dynamic raw);
@@ -477,6 +483,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<Recipient> sse_decode_list_recipient(SseDeserializer deserializer);
 
   @protected
+  List<StakeEntry> sse_decode_list_stake_entry(SseDeserializer deserializer);
+
+  @protected
   List<TxRow> sse_decode_list_tx_row(SseDeserializer deserializer);
 
   @protected
@@ -524,6 +533,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SignedMessage sse_decode_signed_message(SseDeserializer deserializer);
+
+  @protected
+  StakeEntry sse_decode_stake_entry(SseDeserializer deserializer);
 
   @protected
   StakerSignedMessage sse_decode_staker_signed_message(
@@ -810,6 +822,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_stake_entry(
+    List<StakeEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_tx_row(List<TxRow> self, SseSerializer serializer);
 
   @protected
@@ -865,6 +883,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_signed_message(SignedMessage self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_stake_entry(StakeEntry self, SseSerializer serializer);
 
   @protected
   void sse_encode_staker_signed_message(

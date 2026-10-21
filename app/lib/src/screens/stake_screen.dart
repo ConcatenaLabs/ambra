@@ -14,16 +14,18 @@ import '../rust/api.dart' as core;
 import '../data/config.dart';
 import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
+import '../data/stakes.dart';
 import '../data/tx_flow.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
 
 /// Sequentia staking constants (mirror the chain): 40,000 tSEQ minimum; the
-/// stake CSV is TIME-based — SEQUENCE_LOCKTIME_TYPE_FLAG (1<<22) OR
+/// stake's lock is TIME-based: SEQUENCE_LOCKTIME_TYPE_FLAG (1<<22) OR
 /// ceil(posunbonding * posslotinterval / 512) = ceil(43200*30/512) = 2532
-/// (≈15 days). A bare height count (43200) would be parsed height-based by the
-/// node and lock by block-count, not wall-clock.
+/// (≈15 days), the core's `TIME_CSV`. The web wallet and the extension bond with
+/// the height lock (43,200 blocks) instead; the stake list below finds and unbonds
+/// a stake of this wallet's key under either.
 final BigInt _minStakeAtoms = BigInt.from(40000) * BigInt.from(100000000);
 const int _unbondCsv = (1 << 22) | 2532;
 
@@ -141,8 +143,8 @@ class _StakeScreenState extends State<StakeScreen> {
         content: Text(
           'Stake ${formatAtoms(atoms.toString(), 8)} tSEQ to staker key '
           '${key.substring(0, 16)}…\n\n'
-          'Staked tSEQ LEAVES your spendable balance and is locked for ~15 days. '
-          'Unbonding (withdrawing it) is not available yet.',
+          'Staked tSEQ cannot be spent: it is locked for about 15 days. '
+          'After that you can unbond it here, and it returns to your wallet about two weeks later.',
           style: AmbraText.muted,
         ),
         actions: [
@@ -218,15 +220,19 @@ class _StakeScreenState extends State<StakeScreen> {
                 child: Column(children: [
                   _Kv('Spendable tSEQ', formatAtoms(_tseq.toString(), 8)),
                   _Kv('Minimum stake', '40,000 tSEQ'),
-                  _Kv('Unbonding', '~15 days (network minimum)'),
+                  _Kv('Locked for', 'about 15 days'),
+                  _Kv('Unbonding', 'about 2 weeks more'),
                   _Kv('Your staker key', _stakerKey == null ? '…' : '${_stakerKey!.substring(0, 16)}…'),
                 ]),
               ),
               const SizedBox(height: 14),
               const WarnCallout(
-                'Staked tSEQ leaves your visible balance once it confirms and is locked for '
-                '~15 days. Unbonding is not available yet; only stake what you can lock.',
+                'Staked tSEQ cannot be spent while it is staked: it is '
+                'locked for about 15 days, and once you unbond it, it returns to your wallet '
+                'about two weeks (2,016 Bitcoin blocks) later. Only stake what you can lock for a month.',
               ),
+              const SizedBox(height: 26),
+              const _StakesSection(),
               const SizedBox(height: 26),
               const _PoolSection(),
             ]),
@@ -254,6 +260,169 @@ class _Kv extends StatelessWidget {
       );
 }
 
+
+/// Every stake of this wallet's key, whichever wallet made it: under the time lock
+/// this app bonds with or the height lock of the web wallet and the extension. Each
+/// is unbonded here once its lock has passed, and the unbonded coins are returned to
+/// the wallet once the unbonding period has passed (2,016 Bitcoin blocks, counted
+/// from the Bitcoin block the unbond's own block anchors to).
+class _StakesSection extends StatefulWidget {
+  const _StakesSection();
+  @override
+  State<_StakesSection> createState() => _StakesSectionState();
+}
+
+class _StakesSectionState extends State<_StakesSection> {
+  StakeHoldings get _h => StakeHoldings.instance;
+  bool _loading = true;
+  String? _busy; // txid of the stake being acted on
+  int? _tip;
+
+  @override
+  void initState() {
+    super.initState();
+    _h.addListener(_changed);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _h.removeListener(_changed);
+    super.dispose();
+  }
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
+
+  void _snack(String s) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
+  }
+
+  Future<void> _load() async {
+    if (mounted) setState(() => _loading = true);
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m != null) {
+      try {
+        final r = await http
+            .get(Uri.parse('${Backend.esplora}/blocks/tip/height'), headers: Backend.authHeaders)
+            .timeout(const Duration(seconds: 15));
+        if (r.statusCode == 200) _tip = int.tryParse(r.body.trim());
+      } catch (_) {}
+      await _h.refresh(m, force: true, readDelegation: false);
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<bool> _confirm(String title, String body, String action) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AmbraColors.panel,
+        title: Text(title, style: AmbraText.title),
+        content: Text(body, style: AmbraText.muted),
+        actions: [
+          GhostButton(label: 'Cancel', onPressed: () => Navigator.pop(context, false)),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(action, style: const TextStyle(color: AmbraColors.amber2, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
+  Future<void> _step(core.StakeEntry s, {required bool unbond}) async {
+    final amount = '${formatAtoms(s.value.toString(), 8)} tSEQ';
+    final ok = unbond
+        ? await _confirm(
+            'Unbond $amount?',
+            'It stops counting as stake once this confirms, and returns to your wallet about two '
+                'weeks later (2,016 Bitcoin blocks), when you can move it back here. The network '
+                'fee, at most 1% of the stake, is taken from it.',
+            'Unbond')
+        : await _confirm(
+            'Return $amount to your wallet?',
+            'The unbonding period is over: this moves it back into your wallet, where it can be '
+                'spent. The network fee is taken from it.',
+            'Return');
+    if (!ok || !mounted) return;
+    if (!await WalletRepository.instance.requirePaymentAuth()) return _snack('Authentication failed or cancelled.');
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m == null) return;
+    setState(() => _busy = s.txid);
+    try {
+      final raw = unbond
+          ? await core.buildUnbond(
+              mnemonic: m, esploraUrl: Backend.esplora, anchorUrl: Backend.anchorBase, txid: s.txid, vout: s.vout)
+          : await core.buildUnbondClaim(
+              mnemonic: m, esploraUrl: Backend.esplora, anchorUrl: Backend.anchorBase, txid: s.txid, vout: s.vout);
+      final txid = await core.broadcastStakeStep(esploraUrl: Backend.esplora, txHex: raw);
+      _snack('${unbond ? 'Unbonding' : 'Returning to your wallet'} · ${txid.substring(0, 16)}…');
+      await _load();
+    } catch (e) {
+      _snack('Failed: ${friendlyError(e)}');
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final list = _h.stakes;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        const Expanded(child: Text('Your stakes', style: AmbraText.title)),
+        IconButton(
+          onPressed: _loading ? null : _load,
+          icon: const Icon(Icons.refresh, color: AmbraColors.dim, size: 20),
+          tooltip: 'Reload',
+        ),
+      ]),
+      const SizedBox(height: 8),
+      if (_loading && list.isEmpty)
+        const Padding(padding: EdgeInsets.all(12), child: Text('Looking for your stakes…', style: AmbraText.muted))
+      else if (list.isEmpty)
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Text(
+              _h.error != null && _h.readAt == null
+                  ? 'Could not read your stakes: ${friendlyError(_h.error!)}'
+                  : 'No stakes yet. A stake made with this recovery phrase in any Sequentia wallet appears here.',
+              style: AmbraText.muted),
+        )
+      else
+        for (final s in list)
+          Padding(
+            key: Key('stake-${s.txid}'),
+            padding: const EdgeInsets.only(bottom: 8),
+            child: AmbraCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Row(children: [
+                  Expanded(
+                      child: Text('${formatAtoms(s.value.toString(), 8)} tSEQ',
+                          style: AmbraText.mono.copyWith(color: AmbraColors.txt, fontWeight: FontWeight.w700))),
+                  Text('${s.txid.substring(0, 8)}…', style: AmbraText.sub),
+                ]),
+                const SizedBox(height: 6),
+                Text(stakeStatusText(s, tip: _tip), style: AmbraText.sub),
+                if (s.state == 'unbondable' || s.state == 'claimable') ...[
+                  const SizedBox(height: 10),
+                  PrimaryButton(
+                    label: s.state == 'unbondable' ? 'Unbond' : 'Return to wallet',
+                    busy: _busy == s.txid,
+                    icon: s.state == 'unbondable' ? Icons.lock_open : Icons.south_west,
+                    onPressed: _busy != null ? null : () => _step(s, unbond: s.state == 'unbondable'),
+                  ),
+                ],
+              ]),
+            ),
+          ),
+    ]);
+  }
+}
 
 /// A pool as the public board reports it.
 class _Pool {
@@ -314,7 +483,7 @@ class _PoolSection extends StatefulWidget {
 /// Signers this device has delegated to. A HINT for finding a record again, not
 /// a source of truth: a pool with no weight and no announced policy never
 /// appears on the board, so nothing else would remember its key.
-const _hintKey = 'seq.staking.signerHints';
+const _hintKey = StakeHoldings.hintKey;
 
 Future<List<String>> _loadHints() async {
   try {
@@ -385,6 +554,8 @@ class _PoolSectionState extends State<_PoolSection> {
       if (m != null) {
         final d = await core.findDelegation(
             mnemonic: m, esploraUrl: Backend.esplora, probeSigners: await _probeSigners());
+        // The record is the holder's Sequence token: it counts in the balance.
+        StakeHoldings.instance.setDelegation(d);
         if (mounted) setState(() => _deleg = d);
       }
       if (mounted) setState(() => _error = null);

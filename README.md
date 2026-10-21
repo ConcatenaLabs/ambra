@@ -219,11 +219,19 @@ module that implements it.
   and burn (`app/lib/src/screens/assets_screen.dart`). The issued amount, the asset and its
   reissuance token go to the wallet's own addresses as explicit outputs, as a send does
   (`ambra_core/src/issuance.rs`).
-- Stake the Sequence token (tSEQ) for block production: 40,000 tSEQ minimum, time-based
-  CSV lock of roughly 15 days (`app/lib/src/screens/stake_screen.dart`). Staked tSEQ is
-  excluded from the spendable balance. Unbonding is not available in the app, so
-  only stake what you can lock. Staking is the one thing the Sequence token is for; it
-  is not privileged anywhere else in the wallet.
+- Stake the Sequence token (tSEQ) for block production: 40,000 tSEQ minimum, bonded to
+  the staking key m/2/0 under a time-based lock of about 15 days
+  (`app/lib/src/screens/stake_screen.dart`). Staking is the one thing the Sequence token
+  is for; it is not privileged anywhere else in the wallet.
+- Every stake of the wallet's staking key is listed under "Your stakes", whichever
+  Sequentia wallet made it: the app's own time lock and the height lock of 43,200 blocks
+  the web wallet and the extension bond with are both looked up on the explorer, along
+  with unbonding outputs not yet returned. Unbonding takes two steps. Once a stake's lock
+  has passed, **Unbond** moves it into an unbonding output of the same key (the fee, at
+  most 1% of the stake, comes out of it); once the unbonding period has passed (2,016
+  Bitcoin blocks after the Bitcoin block the unbond's block anchors to), **Return to
+  wallet** pays it to a fresh address of the wallet. Where each stake stands is read
+  from the chain every time, so a reorg moves it back (`ambra_core/src/staking.rs`).
 - Faucet screen requesting tSEQ, USDX, EURX, GOLD, SILVR, or OILX from the public
   testnet faucet.
 - Custom node: point the wallet at your own Sequentia node/backend (with optional HTTP
@@ -355,8 +363,9 @@ cargo test --test smoke --test signer_conformance --test payment_limit --test se
 # Network tests (hit the live public testnet; run explicitly)
 cargo test --test sync -- --nocapture
 
-# Staking pools against a local sequentiad on a private elementsregtest chain:
-# join, move and leave confirmed in blocks, wrong signatures refused by a block
+# Staking against a local sequentiad on a private elementsregtest chain: pools
+# (join, move and leave confirmed in blocks, wrong signatures refused by a block) and
+# stakes under both locks found, unbonded and returned (early steps refused by a block)
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocapture
 
 # Contract spends against a local sequentiad: a faucet drip and a Pignus vault

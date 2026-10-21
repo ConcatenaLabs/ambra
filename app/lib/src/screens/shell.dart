@@ -25,6 +25,7 @@ import '../data/openamp_service.dart';
 import '../data/price_service.dart';
 import '../data/registry_service.dart';
 import '../data/seqln_keys.dart' as lnkeys;
+import '../data/stakes.dart';
 import '../data/subasset_buy_service.dart';
 import '../data/subasset_sell_service.dart';
 import '../data/subswap_service.dart';
@@ -1753,6 +1754,7 @@ class MoreTab extends StatelessWidget {
     if (confirm == true) {
       await WalletRepository.instance.removeWallet();
       await WalletCache.clear();
+      StakeHoldings.instance.clear();
     }
   }
 

@@ -43,9 +43,11 @@ use lwk_wollet::elements::{AssetId, Script, Transaction, Txid};
 use lwk_wollet::sequentia_delegation::{delegation_txid_from_hex, p2wpkh_script_pubkey};
 use lwk_wollet::sequentia_stake_records::find_key_coins;
 use lwk_wollet::{
-    build_delegation_create_tx, build_delegation_spend_tx, parse_delegation_script,
-    pos_records_v2_height, sequentia_delegation_script, DelegationCreatePlan, DelegationSpendPlan,
-    Network, StakeRecordSigning, TxBuilder, Wollet,
+    build_delegation_create_tx, build_delegation_spend_tx, build_unbond_claim_tx, build_unbond_tx,
+    parse_delegation_script, pos_records_v2_height, sequentia_delegation_script,
+    sequentia_stake_script, sequentia_unbond_script, DelegationCreatePlan, DelegationSpendPlan,
+    Network, StakeOutput, StakeRecordSigning, TxBuilder, UnbondClaimPlan, UnbondPlan,
+    UnbondingOutput, Wollet,
 };
 
 use crate::api::DelegationRecord;
@@ -82,6 +84,14 @@ pub struct StakeChain {
     /// The first block whose record spends carry the second-generation
     /// signature (`pos_records_v2_height`).
     pub records_v2_height: u32,
+    /// The relative locks a stake of this wallet's key may carry, each looked
+    /// for when the wallet lists its stakes: the height lock the web wallet
+    /// and the extension bond with, and the time lock Ambra bonds with.
+    pub stake_csvs: Vec<u32>,
+    /// Parent-chain blocks an unbonding output waits, counted from the anchor
+    /// of the block that created it (Sequentia blocks on a chain without
+    /// anchors, as the node counts them).
+    pub unbond_depth: u32,
 }
 
 impl StakeChain {
@@ -92,6 +102,8 @@ impl StakeChain {
         StakeChain {
             network,
             records_v2_height,
+            stake_csvs: vec![HEIGHT_CSV, TIME_CSV],
+            unbond_depth: UNBOND_ANCHOR_DEPTH,
         }
     }
 
@@ -570,6 +582,414 @@ pub fn spend_delegation(
         signing,
     };
     build_delegation_spend_tx(&plan).map_err(|e| anyhow!("{e:?}"))
+}
+
+// --- Stakes -------------------------------------------------------------------
+
+/// The height lock the web wallet and the extension bond with: the network's
+/// minimum unbonding period, 43,200 blocks.
+pub const HEIGHT_CSV: u32 = 43_200;
+
+/// The time lock Ambra bonds with: BIP68's time flag and 2,532 units of 512
+/// seconds, ceil(43,200 × 30 / 512), the same minimum period in wall-clock time.
+pub const TIME_CSV: u32 = (1 << 22) | 2532;
+
+/// BIP68's flag for a time-based relative lock, and the mask of its value.
+const CSV_TIME_FLAG: u32 = 1 << 22;
+const CSV_MASK: u32 = 0xffff;
+
+/// Bitcoin blocks an unbonding output waits before it can be claimed, counted
+/// from the anchor of the block that created it.
+pub const UNBOND_ANCHOR_DEPTH: u32 = 2016;
+
+/// The fee of an unbond (one stake in, the unbonding output and the fee out:
+/// 258 vB measured), taken out of the stake, in the Sequence token the stake
+/// holds. Capped by the chain at 1% of the stake.
+pub const UNBOND_FEE_ATOMS: u64 = 600;
+
+/// The fee of a claim (one unbonding output in, one wallet output: 235 vB
+/// measured), taken out of the coins claimed.
+pub const CLAIM_FEE_ATOMS: u64 = 500;
+
+/// Whether `csv` is a time-based relative lock.
+pub fn is_time_csv(csv: u32) -> bool {
+    csv & CSV_TIME_FLAG != 0
+}
+
+/// What a time-based relative lock waits, in seconds.
+pub fn csv_seconds(csv: u32) -> u64 {
+    u64::from(csv & CSV_MASK) * 512
+}
+
+/// Where a coin of the staking key stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StakePhase {
+    /// A bond not yet in a block.
+    Pending,
+    /// Bonded, its lock not yet passed.
+    Bonded,
+    /// Bonded, its lock passed: it can be unbonded.
+    Unbondable,
+    /// Unbonded, waiting out the unbonding depth (or unconfirmed).
+    Unbonding,
+    /// Unbonded and past the depth: it can be claimed back into the wallet.
+    Claimable,
+}
+
+impl StakePhase {
+    /// The phase's name across the FFI.
+    pub fn name(self) -> &'static str {
+        match self {
+            StakePhase::Pending => "pending",
+            StakePhase::Bonded => "bonded",
+            StakePhase::Unbondable => "unbondable",
+            StakePhase::Unbonding => "unbonding",
+            StakePhase::Claimable => "claimable",
+        }
+    }
+}
+
+/// A coin of the staking key that is still the holder's Sequence token: a
+/// bonded stake under either lock, or an unbonding output not yet claimed.
+#[derive(Debug, Clone)]
+pub struct Stake {
+    /// The coin: the bond's staking output, or the unbonding output.
+    pub txid: Txid,
+    pub vout: u32,
+    /// Its value in atoms of the Sequence token.
+    pub value: u64,
+    /// Its script: the staking script, or the unbonding script.
+    pub script: Script,
+    /// The bond's relative lock; `None` for an unbonding output.
+    pub csv: Option<u32>,
+    pub phase: StakePhase,
+    /// The block the coin is in, `None` while unconfirmed.
+    pub height: Option<u32>,
+    /// Height lock: the first block a spend of the bond may enter.
+    pub matures_at_height: Option<u32>,
+    /// Time lock: the median time the chain tip must reach first.
+    pub matures_at_time: Option<u64>,
+    /// The tip's median time, read for a time lock.
+    pub tip_time: Option<u64>,
+    /// Unbonding: the anchor the tip must reach before the claim.
+    pub claimable_at_anchor: Option<u32>,
+    /// Unbonding: the tip's anchor when this was read.
+    pub tip_anchor: Option<u32>,
+}
+
+/// An unspent output at a scripthash, as the explorer lists it.
+struct ExplorerUtxo {
+    txid: String,
+    vout: u32,
+    value: Option<u64>,
+    asset: Option<String>,
+    height: Option<u32>,
+    block_hash: Option<String>,
+}
+
+/// Unspent outputs at `script`. Unlike a probe, a lookup that fails is an
+/// error: an empty list would read as "nothing staked".
+fn utxos_at(esplora_url: &str, script: &Script) -> Result<Vec<ExplorerUtxo>> {
+    let list = get_json(esplora_url, &format!("scripthash/{}/utxo", scripthash(script)))?;
+    let mut out = Vec::new();
+    for u in list.as_array().cloned().unwrap_or_default() {
+        let (Some(txid), Some(vout)) = (
+            u.get("txid").and_then(|v| v.as_str()),
+            u.get("vout").and_then(|v| v.as_u64()),
+        ) else {
+            continue;
+        };
+        let confirmed = u
+            .pointer("/status/confirmed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        out.push(ExplorerUtxo {
+            txid: txid.to_string(),
+            vout: vout as u32,
+            value: u.get("value").and_then(|v| v.as_u64()),
+            asset: u.get("asset").and_then(|v| v.as_str()).map(str::to_string),
+            height: if confirmed {
+                u.pointer("/status/block_height")
+                    .and_then(|v| v.as_u64())
+                    .map(|h| h as u32)
+            } else {
+                None
+            },
+            block_hash: u
+                .pointer("/status/block_hash")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        });
+    }
+    Ok(out)
+}
+
+fn get_text(esplora_url: &str, path: &str) -> Result<String> {
+    let resp = get(esplora_url, path, 30)?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("esplora /{path} returned {}", resp.status()));
+    }
+    Ok(resp.text().map_err(|e| anyhow!("{e:?}"))?.trim().to_string())
+}
+
+/// The hash of the block at `height` on the explorer's chain.
+fn block_hash_at(esplora_url: &str, height: u32) -> Result<String> {
+    get_text(esplora_url, &format!("block-height/{height}"))
+}
+
+/// A block's median time and its parent, per the explorer.
+fn block_times(esplora_url: &str, hash: &str) -> Result<(u64, Option<String>)> {
+    let b = get_json(esplora_url, &format!("block/{hash}"))?;
+    let mtp = b
+        .get("mediantime")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow!("the explorer gives no median time for block {hash}"))?;
+    let prev = b
+        .get("previousblockhash")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Ok((mtp, prev))
+}
+
+/// The Bitcoin height a Sequentia block anchors to, from the node's anchor
+/// service (`<anchor_url>/<block hash>`, answering `{"anchorheight": n}`).
+pub fn anchor_height(anchor_url: &str, block_hash: &str) -> Result<u32> {
+    let v = get_json(anchor_url, block_hash)?;
+    v.get("anchorheight")
+        .or_else(|| v.get("anchor_height"))
+        .and_then(|h| h.as_u64())
+        .map(|h| h as u32)
+        .ok_or_else(|| anyhow!("no anchor height for block {block_hash}"))
+}
+
+/// Every coin of `staker` that is still its Sequence token: each bonded stake
+/// under any of the chain's locks ([`StakeChain::stake_csvs`]) and each
+/// unbonding output not yet claimed, each with where it stands. A stake
+/// claimed back is in the wallet again and is not listed.
+///
+/// Maturity is read from the chain each time, never stored, so a reorg (a
+/// Bitcoin one included) moves it back:
+/// - height lock: a spend enters a block at least `csv` blocks after the
+///   bond's, so the bond is unbondable once `height + csv <= tip + 1`;
+/// - time lock (BIP68): once the tip's median time reaches the median time of
+///   the block before the bond's, plus the lock;
+/// - unbonding: claimable once the tip's anchor reaches the unbond's anchor
+///   plus [`StakeChain::unbond_depth`]. The node judges a claim in its mempool
+///   against the tip's anchor, so that is the one waited for.
+pub fn find_stakes(
+    chain: &StakeChain,
+    esplora_url: &str,
+    anchor_url: &str,
+    staker: &[u8],
+) -> Result<Vec<Stake>> {
+    let tip = tip_height(esplora_url);
+    if tip == 0 {
+        return Err(anyhow!(
+            "could not read the chain's height, which decides when a stake unlocks; try again"
+        ));
+    }
+    let tip_hash = get_text(esplora_url, "blocks/tip/hash")?;
+    let asset = chain.asset().to_string();
+    let mut tip_time: Option<u64> = None;
+    let mut out = Vec::new();
+    for &csv in &chain.stake_csvs {
+        let script = sequentia_stake_script(staker, csv);
+        for u in utxos_at(esplora_url, &script)? {
+            if u.asset.as_deref().is_some_and(|a| a != asset) {
+                continue;
+            }
+            let Some(value) = u.value else { continue };
+            let txid = delegation_txid_from_hex(&u.txid).map_err(|e| anyhow!("{e:?}"))?;
+            let mut stake = Stake {
+                txid,
+                vout: u.vout,
+                value,
+                script: script.clone(),
+                csv: Some(csv),
+                phase: StakePhase::Pending,
+                height: u.height,
+                matures_at_height: None,
+                matures_at_time: None,
+                tip_time: None,
+                claimable_at_anchor: None,
+                tip_anchor: None,
+            };
+            if let Some(h) = u.height {
+                if is_time_csv(csv) {
+                    let bond_hash = match u.block_hash {
+                        Some(b) => b,
+                        None => block_hash_at(esplora_url, h)?,
+                    };
+                    let (_, before) = block_times(esplora_url, &bond_hash)?;
+                    let before = before
+                        .ok_or_else(|| anyhow!("the explorer gives no parent for block {bond_hash}"))?;
+                    let (before_mtp, _) = block_times(esplora_url, &before)?;
+                    let now = match tip_time {
+                        Some(t) => t,
+                        None => {
+                            let t = block_times(esplora_url, &tip_hash)?.0;
+                            tip_time = Some(t);
+                            t
+                        }
+                    };
+                    let at = before_mtp + csv_seconds(csv);
+                    stake.matures_at_time = Some(at);
+                    stake.tip_time = Some(now);
+                    stake.phase = if now >= at {
+                        StakePhase::Unbondable
+                    } else {
+                        StakePhase::Bonded
+                    };
+                } else {
+                    let at = h + (csv & CSV_MASK);
+                    stake.matures_at_height = Some(at);
+                    stake.phase = if tip + 1 >= at {
+                        StakePhase::Unbondable
+                    } else {
+                        StakePhase::Bonded
+                    };
+                }
+            }
+            out.push(stake);
+        }
+    }
+    let unbond = sequentia_unbond_script(staker);
+    let mut tip_anchor: Option<u32> = None;
+    for u in utxos_at(esplora_url, &unbond)? {
+        if u.asset.as_deref().is_some_and(|a| a != asset) {
+            continue;
+        }
+        let Some(value) = u.value else { continue };
+        let mut stake = Stake {
+            txid: delegation_txid_from_hex(&u.txid).map_err(|e| anyhow!("{e:?}"))?,
+            vout: u.vout,
+            value,
+            script: unbond.clone(),
+            csv: None,
+            phase: StakePhase::Unbonding,
+            height: u.height,
+            matures_at_height: None,
+            matures_at_time: None,
+            tip_time: None,
+            claimable_at_anchor: None,
+            tip_anchor: None,
+        };
+        if let Some(h) = u.height {
+            let hash = match u.block_hash {
+                Some(b) => b,
+                None => block_hash_at(esplora_url, h)?,
+            };
+            // An anchor that cannot be read leaves the claim waiting: it is
+            // never offered on a guess.
+            if let Ok(created) = anchor_height(anchor_url, &hash) {
+                let now = match tip_anchor {
+                    Some(a) => Some(a),
+                    None => {
+                        tip_anchor = anchor_height(anchor_url, &tip_hash).ok();
+                        tip_anchor
+                    }
+                };
+                let at = created + chain.unbond_depth;
+                stake.claimable_at_anchor = Some(at);
+                stake.tip_anchor = now;
+                if now.is_some_and(|n| n >= at) {
+                    stake.phase = StakePhase::Claimable;
+                }
+            }
+        }
+        out.push(stake);
+    }
+    Ok(out)
+}
+
+/// The Sequence token held at the staking key across `stakes`: every bonded
+/// stake and every unbonding output, in atoms.
+pub fn staked_total(stakes: &[Stake]) -> u64 {
+    stakes.iter().map(|s| s.value).sum()
+}
+
+/// Build a staking-key spend for the block after the explorer's tip, and check
+/// that the tip has not crossed the height where the signature changes while it
+/// was built; build again if it has.
+fn signed_for_next_block(
+    chain: &StakeChain,
+    esplora_url: &str,
+    build: impl Fn(u32, StakeRecordSigning) -> Result<(String, Txid)>,
+) -> Result<(String, Txid)> {
+    for _ in 0..3 {
+        let tip = tip_height(esplora_url);
+        let signing = chain.signing_after(tip)?;
+        let built = build(tip, signing)?;
+        if chain.signing_after(tip_height(esplora_url))? == signing {
+            return Ok(built);
+        }
+    }
+    Err(anyhow!(
+        "the chain is crossing the height where staking signatures change; try again in a minute"
+    ))
+}
+
+/// Unbonding, step one: the bond `stake` into the unbonding output of the same
+/// key, less the fee, signed for the next block. Refused while the stake's lock
+/// has not passed. Returns `(raw_hex, txid)`.
+pub fn build_unbond(
+    chain: &StakeChain,
+    esplora_url: &str,
+    staker_secret: &SecretKey,
+    stake: &Stake,
+) -> Result<(String, Txid)> {
+    if stake.phase != StakePhase::Unbondable {
+        return Err(anyhow!("this stake cannot be unbonded yet"));
+    }
+    let fee = UNBOND_FEE_ATOMS.min(lwk_wollet::sequentia_stake_records::unbond_fee_cap(stake.value));
+    signed_for_next_block(chain, esplora_url, |tip, signing| {
+        build_unbond_tx(&UnbondPlan {
+            stakes: vec![StakeOutput {
+                txid: stake.txid,
+                vout: stake.vout,
+                value: stake.value,
+                script_pubkey: stake.script.clone(),
+            }],
+            asset: chain.asset(),
+            staker_secret: *staker_secret,
+            fee_atoms: fee,
+            locktime: tip,
+            signing,
+        })
+        .map_err(|e| anyhow!("{e:?}"))
+    })
+}
+
+/// Unbonding, step two: the unbonding output `unbonding` to `destination`, an
+/// unblinded script of the wallet, less the fee, signed for the next block.
+/// Refused before the unbonding depth. Returns `(raw_hex, txid)`.
+pub fn build_claim(
+    chain: &StakeChain,
+    esplora_url: &str,
+    staker_secret: &SecretKey,
+    unbonding: &Stake,
+    destination: Script,
+) -> Result<(String, Txid)> {
+    if unbonding.phase != StakePhase::Claimable {
+        return Err(anyhow!("this stake cannot be claimed yet"));
+    }
+    signed_for_next_block(chain, esplora_url, |tip, signing| {
+        build_unbond_claim_tx(&UnbondClaimPlan {
+            unbonding: vec![UnbondingOutput {
+                txid: unbonding.txid,
+                vout: unbonding.vout,
+                value: unbonding.value,
+            }],
+            asset: chain.asset(),
+            staker_secret: *staker_secret,
+            destination: destination.clone(),
+            fee_atoms: CLAIM_FEE_ATOMS,
+            dust_floor: DUST_FLOOR,
+            locktime: tip,
+            signing,
+        })
+        .map_err(|e| anyhow!("{e:?}"))
+    })
 }
 
 /// Broadcast a raw transaction through the explorer. Returns its txid.
