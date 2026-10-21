@@ -23,6 +23,23 @@ void main() {
     expect(f[y]!.total, BigInt.from(5), reason: 'an asset held only as leaves has its figure');
   });
 
+  test('the Sequence token\'s figure counts what is staked, and the split names only the parts held', () {
+    final f = assetFigures(
+      onchain: {x: BigInt.from(100)},
+      lightning: {x: BigInt.from(7)},
+      staked: {y: BigInt.from(40000)},
+    );
+    final byId = {for (final a in f) a.id: a};
+    expect(byId[y]!.total, BigInt.from(40000), reason: 'all of it staked: the asset still has its figure');
+    expect(byId[x]!.total, BigInt.from(107));
+    expect(splitParts(byId[x]!), [('On-chain', BigInt.from(100)), ('Lightning', BigInt.from(7))]);
+    expect(splitParts(byId[y]!), [('Staked', BigInt.from(40000))]);
+    expect(
+        splitParts(AssetFigure(
+            id: x, onchain: BigInt.one, leaves: BigInt.two, lightning: BigInt.from(3), staked: BigInt.from(4))),
+        [('On-chain', BigInt.one), ('Off-chain', BigInt.two), ('Lightning', BigInt.from(3)), ('Staked', BigInt.from(4))]);
+  });
+
   test('the headline sums every holding at its value, every asset alike, and is null when nothing is priced', () {
     final prices = {'BTC': 2.0, x: 0.5};
     double? value(String k, BigInt a) => prices[k] == null ? null : prices[k]! * a.toDouble();

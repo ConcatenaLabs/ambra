@@ -143,7 +143,7 @@ class _StakeScreenState extends State<StakeScreen> {
         content: Text(
           'Stake ${formatAtoms(atoms.toString(), 8)} tSEQ to staker key '
           '${key.substring(0, 16)}…\n\n'
-          'Staked tSEQ cannot be spent: it is locked for about 15 days. '
+          'Staked tSEQ counts in your balance but cannot be spent: it is locked for about 15 days. '
           'After that you can unbond it here, and it returns to your wallet about two weeks later.',
           style: AmbraText.muted,
         ),
@@ -227,7 +227,7 @@ class _StakeScreenState extends State<StakeScreen> {
               ),
               const SizedBox(height: 14),
               const WarnCallout(
-                'Staked tSEQ cannot be spent while it is staked: it is '
+                'Staked tSEQ counts in your balance but cannot be spent while it is staked: it is '
                 'locked for about 15 days, and once you unbond it, it returns to your wallet '
                 'about two weeks (2,016 Bitcoin blocks) later. Only stake what you can lock for a month.',
               ),

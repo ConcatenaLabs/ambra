@@ -147,4 +147,16 @@ void main() {
     expect(noSnap.provisionable, isTrue);
     expect(noSnap.unfrontable, isFalse);
   });
+
+  test('the Lightning balance is the wallet\'s share with its reserve, what can be sent where none is reported', () {
+    final own = <Map>[
+      {'node_key': 'k1', 'asset': gold, 'asset_label': 'GOLD', 'state': 'CHANNELD_NORMAL', 'spendable_units': 900, 'balance_units': 1000},
+      {'node_key': 'k2', 'asset': gold, 'asset_label': 'GOLD', 'state': 'CHANNELD_NORMAL', 'spendable_units': 50},
+      {'node_key': 'k3', 'asset': gold, 'asset_label': 'GOLD', 'state': 'CHANNELD_AWAITING_LOCKIN', 'spendable_units': 7, 'balance_units': 7},
+      {'asset': gold, 'asset_label': 'GOLD', 'state': 'CHANNELD_NORMAL', 'spendable_units': 5000, 'balance_units': 5000},
+    ];
+    final l = legLiquidity(own, goldT);
+    expect(l.balance, BigInt.from(1057), reason: 'own CHANNELD_* channels only (one still awaiting lock-in); balance_units, else spendable_units');
+    expect(l.spendable, BigInt.from(957), reason: 'what a payment may use is unchanged');
+  });
 }

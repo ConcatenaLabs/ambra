@@ -63,12 +63,22 @@ module that implements it.
   set is the round (`app/lib/src/screens/mix_screen.dart`).
 
 **Balance (dual-chain, no privileged asset)**
-- The headline is one **total balance across all held assets and every rail they are held
-  on (on-chain, Lightning and leaves), valued in a user-chosen reference currency** (USD
-  default; picker in the top bar, fed by the public price server), in both modes. Below
-  it, every held asset is one equal row, its figure the sum of its rails: BTC (Bitcoin testnet4), tSEQ,
-  issued assets, and OpenAMP restricted assets side by side
+- The headline is one **total balance across all held assets and everything held of
+  each, valued in a user-chosen reference currency** (USD default; picker in the top bar,
+  fed by the public price server), in both modes, hidden assets included. Below it, every
+  held asset is one equal row: BTC (Bitcoin testnet4) first, listed at 0 too, then tSEQ,
+  issued assets and OpenAMP restricted assets side by side
   (`app/lib/src/screens/shell.dart`).
+- An asset's figure counts everything the wallet holds of it: on-chain coins, leaves,
+  Lightning (the wallet's own channels in a `CHANNELD_*` state, its share with the
+  channel reserve, `balance_units`, or `spendable_units` from an LSP that does not report
+  it) and, for the Sequence token, what is staked (each bonded stake under either lock,
+  each unbonding output not yet returned, and the delegation record; a stake returned to
+  the wallet is on-chain again and counted there once). User mode shows one figure per
+  row; a tap on the row shows its parts in plain words (On-chain, Off-chain, Lightning,
+  Staked, only those held). Developer mode shows the parts beside each row, with the
+  Lightning controls (`app/lib/src/data/portfolio.dart`, `app/lib/src/data/stakes.dart`).
+  What a payment can use is the spendable part, not the figure.
 - Both chains sync against Esplora-style REST APIs; last-known balances are cached on
   disk and shown instantly on launch, with an explicit offline/stale indicator when a
   scan fails.
@@ -160,7 +170,8 @@ module that implements it.
   uses. **User mode** (the default): one figure per asset, and the wallet chooses how
   value moves. **Developer mode**: every rail by name, side by side (on-chain, leaves and
   Lightning), each with its balance and its manual controls, and the developer tools:
-  each balance row splits into on-chain, leaves and Lightning, and More > Leaves,
+  each balance row splits into on-chain, leaves, Lightning and staked, with the Move to
+  Lightning and Move to chain controls under it, and More > Leaves,
   More > Contracts and More > Lightning payment limit appear.
   BTC has no leaves: a tree on Sequentia holds no BTC (`app/lib/src/data/dev_mode.dart`).
 - A wallet that joined a leaf operator keeps its leaf wallet syncing in either mode, since

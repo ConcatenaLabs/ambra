@@ -44,11 +44,18 @@ bool channelActive(Map c) => '${c['state'] ?? ''}'.toUpperCase().startsWith('CHA
 
 /// Aggregate liquidity across every ACTIVE channel matching [target].
 class LegLiquidity {
-  const LegLiquidity({required this.active, required this.spendable, required this.receivable, required this.count});
+  const LegLiquidity(
+      {required this.active, required this.spendable, required this.receivable, required this.count, BigInt? balance})
+      : balance = balance ?? spendable;
   final bool active;
   final BigInt spendable;
   final BigInt receivable;
   final int count;
+
+  /// The wallet's share of these channels, the reserve included: its Lightning
+  /// balance, what the asset's figure counts. A payment is limited to [spendable].
+  /// A channel reported without `balance_units` (an older LSP) counts its spendable.
+  final BigInt balance;
 }
 
 LegLiquidity legLiquidity(List<Map> channels, RailTarget target) {
@@ -56,6 +63,7 @@ LegLiquidity legLiquidity(List<Map> channels, RailTarget target) {
   var spendable = BigInt.zero;
   var receivable = BigInt.zero;
   var count = 0;
+  var balance = BigInt.zero;
   for (final c in channels) {
     // Only the wallet's OWN device-provisioned channels (which carry a node_key) count for rail
     // liquidity — never the shared/demo-topology channels /status also returns. Keeps the Swap tab
@@ -67,8 +75,9 @@ LegLiquidity legLiquidity(List<Map> channels, RailTarget target) {
     count++;
     spendable += _big(c['spendable_units'] ?? c['spendable'] ?? 0);
     receivable += _big(c['receivable_units'] ?? c['receivable'] ?? 0);
+    balance += _big(c['balance_units'] ?? c['spendable_units'] ?? c['spendable'] ?? 0);
   }
-  return LegLiquidity(active: active, spendable: spendable, receivable: receivable, count: count);
+  return LegLiquidity(active: active, spendable: spendable, receivable: receivable, count: count, balance: balance);
 }
 
 bool hasChannel(List<Map> channels, RailTarget t) => legLiquidity(channels, t).active;
