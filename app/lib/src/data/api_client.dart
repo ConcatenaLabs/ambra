@@ -117,6 +117,21 @@ class ApiClient {
     return FaucetResult('${j['amount']}', '${j['asset']}', '${j['txid']}');
   }
 
+  /// Ask the faucet to pay [asset] (a faucet ticker; empty = tSEQ) to a leaf receive
+  /// [request] this wallet made: the faucet pays it off the chain through the operator.
+  static Future<FaucetResult> faucetLeaf(String request, {String? asset}) async {
+    final body = <String, String>{'request': request, if (asset != null && asset.isNotEmpty) 'asset': asset};
+    final r = await http
+        .post(Uri.parse(Backend.faucet),
+            headers: {'Content-Type': 'application/json', ...Backend.authHeaders}, body: jsonEncode(body))
+        .timeout(const Duration(seconds: 90));
+    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    if (r.statusCode != 200) {
+      throw Exception(j['error']?.toString() ?? 'HTTP ${r.statusCode}');
+    }
+    return FaucetResult('${j['amount']}', '${j['asset']}', '');
+  }
+
   /// The producer fee-acceptance set: {("bitcoin"=tSEQ | ticker | hex): rate}.
   /// rate = atoms-of-asset per reference unit ×1e8 (an integer, consensus-exact).
   /// Parsed losslessly as BigInt; non-integer/garbage rates are dropped.
