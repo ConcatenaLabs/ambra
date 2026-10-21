@@ -96,7 +96,13 @@ There is no CI in this repository. Nothing checks a build or a test for you.
 2. **Changing `ambra_core::api` means regenerating the bridge.** Run
    `flutter_rust_bridge_codegen generate` from `app/` (config: `app/flutter_rust_bridge.yaml`).
    The `flutter_rust_bridge` version is pinned to exactly 2.12.0 on both sides and the codegen
-   binary must match.
+   binary must match. The codegen reads the crate's metadata from `app/`, so whatever makes
+   the sibling checkouts resolvable must be visible from there too: a local
+   `.cargo/config.toml` override of the `SWK`/`seqln` paths belongs at the repository root,
+   not in `ambra_core/`. When the metadata cannot be read the codegen still succeeds but
+   writes `stem: 'UNKNOWN'` into `app/lib/src/rust/frb_generated.dart`, host tests (which load
+   the library from `$AMBRA_CORE_LIB`) still pass, and the app dies at start looking for
+   `libUNKNOWN.so`. Check that line reads `stem: 'ambra_core'` before committing.
 3. **Never claim a change works until it has been exercised on-device.** Analyzer-clean plus
    green Dart tests does not cover the FFI boundary or the native libs. Several commits exist
    solely to fix things that passed everything except a real device.

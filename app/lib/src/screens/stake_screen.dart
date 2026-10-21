@@ -232,7 +232,7 @@ class _StakeScreenState extends State<StakeScreen> {
                 'about two weeks (2,016 Bitcoin blocks) later. Only stake what you can lock for a month.',
               ),
               const SizedBox(height: 26),
-              const _StakesSection(),
+              const StakesSection(),
               const SizedBox(height: 26),
               const _PoolSection(),
             ]),
@@ -266,13 +266,17 @@ class _Kv extends StatelessWidget {
 /// is unbonded here once its lock has passed, and the unbonded coins are returned to
 /// the wallet once the unbonding period has passed (2,016 Bitcoin blocks, counted
 /// from the Bitcoin block the unbond's own block anchors to).
-class _StakesSection extends StatefulWidget {
-  const _StakesSection();
+class StakesSection extends StatefulWidget {
+  const StakesSection({super.key, this.autoLoad = true});
+
+  /// Read the stakes from the chain when shown (off in widget tests, which set
+  /// [StakeHoldings] themselves).
+  final bool autoLoad;
   @override
-  State<_StakesSection> createState() => _StakesSectionState();
+  State<StakesSection> createState() => _StakesSectionState();
 }
 
-class _StakesSectionState extends State<_StakesSection> {
+class _StakesSectionState extends State<StakesSection> {
   StakeHoldings get _h => StakeHoldings.instance;
   bool _loading = true;
   String? _busy; // txid of the stake being acted on
@@ -282,7 +286,11 @@ class _StakesSectionState extends State<_StakesSection> {
   void initState() {
     super.initState();
     _h.addListener(_changed);
-    _load();
+    if (widget.autoLoad) {
+      _load();
+    } else {
+      _loading = false;
+    }
   }
 
   @override
@@ -797,7 +805,7 @@ class _PoolSectionState extends State<_PoolSection> {
         IconButton(
           onPressed: _loading ? null : _load,
           icon: const Icon(Icons.refresh, color: AmbraColors.dim, size: 20),
-          tooltip: 'Refresh',
+          tooltip: 'Reload',
         ),
       ]),
       const Text(

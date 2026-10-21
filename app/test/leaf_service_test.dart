@@ -81,4 +81,39 @@ void main() {
     d = syncDecision({'now': 1, 'next_sync_at': 9, 'due': false}, null, true);
     expect((d.sync, d.why), (true, 'moving'));
   });
+
+  test('care runs at the first sync, then at most every ten minutes, and scans 20 past the kit\'s next index', () {
+    final t = DateTime.utc(2026, 10, 21, 12);
+    expect(careDue(null, t), isTrue, reason: 'never run: due');
+    expect(careDue(t, t.add(const Duration(minutes: 9, seconds: 59))), isFalse);
+    expect(careDue(t, t.add(const Duration(minutes: 10))), isTrue);
+    expect(careArgs(7), {'scan': 27});
+  });
+
+  test('a care answer is counted part by part, refusals named', () {
+    final sum = careSummary({
+      'claims': [
+        {'claim': 'c1', 'leaf_id': 'l1', 'value': '5', 'taken_up': {}},
+        {'claim': 'c2', 'state': 'pending', 'note': 'not open'},
+        {'claim': 'c3', 'refused': 'gone'},
+      ],
+      'cancelled': [
+        {'plan_id': 'p1', 'coin': 'x', 'state': 'cancelled'}
+      ],
+      'planned': [
+        {'plan_id': 'p2'},
+        {'coin': 'y', 'asset': 'a', 'error': 'the operator will not plan in this asset'}
+      ],
+      'refreshing': [
+        {'coin': 'z', 'participation': 'q', 'state': 'waiting', 'error': null}
+      ],
+      'not_yet_planned': 4,
+      'plan_within': 864000,
+      'max_fee_ppm': 2000,
+    });
+    expect((sum.claimed, sum.cancelled, sum.planned, sum.refreshing, sum.later), (1, 1, 1, 1, 4));
+    expect(sum.refusals, ['c3: gone', 'y: the operator will not plan in this asset']);
+    expect(careSummary(null).claimed, 0);
+    expect(careSummary({'claims': {'error': 'no operator'}}).refusals, ['claims: no operator']);
+  });
 }

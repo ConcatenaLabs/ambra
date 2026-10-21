@@ -12,7 +12,8 @@ import '../widgets/widgets.dart';
 
 /// Developer mode: the leaf rail by name. Join an operator, the leaf balance per
 /// asset and state, receive (a request shown and shared), send to a request,
-/// settle now, every coin with its dates, and the exit drill. Every refusal is
+/// settle now, what the wallet keeps by itself (claims, plans), every coin with its
+/// dates, and the exit drill. Every refusal is
 /// shown as the wallet library says it.
 class LeavesScreen extends StatefulWidget {
   const LeavesScreen({super.key});
@@ -64,6 +65,8 @@ class _LeavesScreenState extends State<LeavesScreen> {
               const _SendCard(),
               const SizedBox(height: 14),
               const _SettleCard(),
+              const SizedBox(height: 14),
+              _CareCard(svc: svc),
               const SizedBox(height: 14),
               _CoinsCard(svc: svc),
               const SizedBox(height: 14),
@@ -757,4 +760,185 @@ class _RefusalsCardState extends State<_RefusalsCard> {
           if (_err != null) RefusalText(_err!),
         ]),
       );
+}
+
+// ---------------------------------------------------------------------------
+// What the wallet keeps by itself: claims, plans
+// ---------------------------------------------------------------------------
+
+/// The library's `care`, which the wallet runs by itself at a sync (the first after a
+/// start, then at most every ten minutes, in the app and in the scheduled job): what
+/// it did last, and the lists behind it. Distributions (`distributions`), the claims
+/// named for this wallet's keys (`claims {scan}`), and the plans (`plans`), each open
+/// one with Cancel (`plan_cancel`) and Release: cancel, then refresh the coin in the
+/// next round at the fee shown (`quote`, `participate`).
+class _CareCard extends StatefulWidget {
+  const _CareCard({required this.svc});
+  final LeafService svc;
+  @override
+  State<_CareCard> createState() => _CareCardState();
+}
+
+class _CareCardState extends State<_CareCard> {
+  String? _list; // which list is shown
+  dynamic _rows;
+  LeafRefusal? _err;
+  bool _busy = false;
+  // Release: the coin, and the refresh fee shown for it.
+  String? _releasing;
+  List<dynamic>? _quote;
+
+  Future<void> _show(String what) async {
+    setState(() {
+      _busy = true;
+      _err = null;
+      _list = what;
+      _rows = null;
+    });
+    try {
+      final args = what == 'claims' ? careArgs(await LeafService.scanNext()) : const <String, dynamic>{};
+      _rows = await widget.svc.run(what, args);
+    } catch (e) {
+      _err = LeafRefusal.of(e);
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _careNow() async {
+    setState(() => _busy = true);
+    await widget.svc.careIfDue(force: true);
+    await widget.svc.refresh();
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _cancel(String plan) async {
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    try {
+      await widget.svc.run('plan_cancel', {'plan': plan});
+      await _show('plans');
+    } catch (e) {
+      _err = LeafRefusal.of(e);
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  /// Release a planned coin: cancel its plan, then ask its refresh in the next round.
+  /// The fee is shown before anything is signed; the refresh goes ahead only on it.
+  Future<void> _release(String plan, String coin) async {
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    try {
+      await widget.svc.run('plan_cancel', {'plan': plan});
+      final q = await widget.svc.run('quote', {'leaves': [coin]});
+      _quote = (q is Map ? q['coins'] as List? : null) ?? const [];
+      _releasing = coin;
+    } catch (e) {
+      _err = LeafRefusal.of(e);
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _refresh() async {
+    final coin = _releasing;
+    if (coin == null) return;
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    try {
+      await widget.svc.run('participate', {'leaves': [coin], 'shown': _quote});
+      _releasing = null;
+      _quote = null;
+      await widget.svc.refresh();
+      await _show('plans');
+    } catch (e) {
+      _err = LeafRefusal.of(e);
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Widget _planRow(Map p) {
+    final open = p['state'] == 'open';
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('${_short('${p['plan_id']}', 6)} · ${p['state']} · coin ${_short('${p['coin']}', 6)}', style: AmbraText.mono.copyWith(fontSize: 11)),
+        Text('${_amount('${p['asset']}', p['value'])} · covered until ${_when(p['covered_until'], null)} · sync by ${_when(p['sync_by'], null)}',
+            style: AmbraText.sub),
+        if (p['reason'] != null) Text('${p['reason']}', style: AmbraText.sub),
+        if (open)
+          Row(children: [
+            Expanded(child: SecondaryButton(key: Key('plan-cancel-${p['plan_id']}'), label: 'Cancel', icon: Icons.close, onPressed: _busy ? null : () => _cancel('${p['plan_id']}'))),
+            const SizedBox(width: 8),
+            Expanded(child: SecondaryButton(key: Key('plan-release-${p['plan_id']}'), label: 'Release', icon: Icons.lock_open, onPressed: _busy ? null : () => _release('${p['plan_id']}', '${p['coin']}'))),
+          ]),
+      ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final svc = widget.svc;
+    final sum = careSummary(svc.lastCare);
+    final rows = _rows;
+    final plans = rows is Map ? rows['plans'] : null;
+    return AmbraCard(
+      key: const Key('care-card'),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SectionLabel('Kept by itself'),
+        const SizedBox(height: 8),
+        const Text(
+            'At a sync (the first after the app starts, then at most every ten minutes, here and in the scheduled '
+            'job) the wallet takes up every claim named for an address it handed out, cancels each plan whose coin '
+            'moved, and plans each coin whose first step could run within ten days, two expiries ahead, each step\'s '
+            'fee at most 0.2% of the coin and taken from it in its own asset. A coin of no round (a board, a coin '
+            'received or taken up out of round) is refreshed into a round first and planned at a later sync. A coin '
+            'the operator will not plan stays unplanned and is refreshed by the sync while the app is open. A wallet '
+            'closed within a coin\'s first two weeks or so and kept closed through its step window can lose that coin '
+            'to the operator\'s sweep, as any holder who stays away past an expiry can.',
+            style: AmbraText.sub),
+        const SizedBox(height: 10),
+        Text(
+            svc.lastCareAt == null
+                ? 'Not run yet in this session.'
+                : 'Last run ${svc.lastCareAt!.toLocal().toString().substring(0, 19)}: claims taken up ${sum.claimed} · '
+                    'plans cancelled ${sum.cancelled} · coins planned ${sum.planned} · refreshed into a round '
+                    '${sum.refreshing} · not yet within ten days ${sum.later}',
+            key: const Key('care-summary'),
+            style: AmbraText.body),
+        for (final r in sum.refusals) Text(r, style: const TextStyle(color: AmbraColors.red, fontSize: 12)),
+        if (svc.careError != null) RefusalText(svc.careError!),
+        const SizedBox(height: 10),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          SecondaryButton(key: const Key('care-run'), label: 'Run now', icon: Icons.autorenew, onPressed: _busy ? null : _careNow),
+          SecondaryButton(key: const Key('care-distributions'), label: 'Distributions', icon: Icons.call_split, onPressed: _busy ? null : () => _show('distributions')),
+          SecondaryButton(key: const Key('care-claims'), label: 'Claims', icon: Icons.redeem, onPressed: _busy ? null : () => _show('claims')),
+          SecondaryButton(key: const Key('care-plans'), label: 'Plans', icon: Icons.event_repeat, onPressed: _busy ? null : () => _show('plans')),
+        ]),
+        if (_list == 'plans' && plans is List) ...[
+          if (plans.isEmpty) const Padding(padding: EdgeInsets.only(top: 8), child: Text('No plans.', style: AmbraText.muted)),
+          for (final p in plans.whereType<Map>()) _planRow(p),
+        ] else if (rows != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: SelectableText(const JsonEncoder.withIndent(' ').convert(rows),
+                key: Key('care-$_list'), style: AmbraText.mono.copyWith(fontSize: 11)),
+          ),
+        if (_releasing != null && _quote != null) ...[
+          const SizedBox(height: 10),
+          Text('Refresh ${_short(_releasing!, 6)} in the next round: fee ${_quote!.isEmpty ? 'none quoted' : _quote!.map((c) => c is Map ? _amount('${c['asset']}', c['fee']) : '$c').join(', ')}',
+              style: AmbraText.sub),
+          for (final c in _quote!) SelectableText(jsonEncode(c), style: AmbraText.mono.copyWith(fontSize: 11)),
+          if (_quote!.isNotEmpty)
+            PrimaryButton(key: const Key('release-go'), label: 'Refresh at this fee', icon: Icons.check, busy: _busy, onPressed: _busy ? null : _refresh),
+        ],
+        if (_err != null) RefusalText(_err!),
+      ]),
+    );
+  }
 }

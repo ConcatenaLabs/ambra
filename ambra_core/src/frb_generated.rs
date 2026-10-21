@@ -2845,6 +2845,7 @@ fn wire__crate__api__leaves__leaves_job_impl(
             let api_dir = <String>::sse_decode(&mut deserializer);
             let api_mnemonic = <String>::sse_decode(&mut deserializer);
             let api_node_password = <String>::sse_decode(&mut deserializer);
+            let api_care_json = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -2853,6 +2854,7 @@ fn wire__crate__api__leaves__leaves_job_impl(
                             api_dir,
                             api_mnemonic,
                             api_node_password,
+                            api_care_json,
                         )?;
                         Ok(output_ok)
                     })(),

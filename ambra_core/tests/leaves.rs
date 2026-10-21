@@ -108,7 +108,7 @@ fn a_payment_arrives_while_the_app_is_closed() {
     assert_eq!(again["error"]["code"], "key_reused");
 
     // The scheduled job's pass.
-    let pass = ok(leaves::job(&adir, APP, password.clone()), "the job's pass");
+    let pass = ok(leaves::job(&adir, APP, password.clone(), None), "the job's pass");
     eprintln!("job: arrived {} wake_in {} opened_for_the_job {}", pass["arrived"], pass["wake_in"], pass["opened_for_the_job"]);
     let arrived = pass["arrived"].as_array().unwrap();
     assert_eq!(arrived.len(), 1, "one coin arrived");
@@ -124,9 +124,18 @@ fn a_payment_arrives_while_the_app_is_closed() {
     eprintln!("balance on next open: {}", bal["arca"]);
     assert_eq!(held(&bal), before_balance + 300_000, "the leaf received while closed is in the balance");
     // A second pass finds nothing new.
-    let pass2 = ok(leaves::job(&adir, APP, None), "second pass");
+    // A second pass finds nothing new; with care's arguments it runs care too, as
+    // the app asks when care is due.
+    let pass2 = ok(leaves::job(&adir, APP, None, Some(&json!({"scan": 20}))), "second pass");
     assert_eq!(pass2["arrived"], json!([]));
     assert_eq!(pass2["opened_for_the_job"], false, "the open wallet is used, not opened twice");
+    let care = &pass2["care"];
+    eprintln!("care in the job's pass: {}", care);
+    for k in ["claims", "cancelled", "planned", "refreshing", "not_yet_planned", "plan_within", "max_fee_ppm"] {
+        assert!(care.get(k).is_some(), "care answers {k}: {care}");
+    }
+    let pass3 = ok(leaves::job(&adir, APP, None, None), "a pass with care not due");
+    assert_eq!(pass3["care"], Value::Null, "care runs only when the app asks");
     leaves::stop();
     drop(b);
     let _ = std::fs::remove_dir_all(&adir);
@@ -197,4 +206,123 @@ fn two_wallets_swap_in_the_tree_through_the_core() {
     assert_eq!(live(&mut a, &y), 400_000, "the maker got what it wanted");
     let mp = offer["pays"]["margin"].as_str().unwrap().parse::<u64>().unwrap() + offer["pays"]["margins"].as_str().unwrap().parse::<u64>().unwrap();
     assert_eq!(ax - live(&mut a, &x), 300_000 + mp, "the maker gave what it offered and the margins it was shown");
+}
+
+/// `care`, what the app runs by itself at a sync: a claim of a distribution named by
+/// a key of the main wallet's address at index 25 is not found within the leaf
+/// wallet's own counter plus 20, and is taken up with no prompt once the scan reaches
+/// 20 past the main wallet's next index; the coin it gives is planned once its step
+/// window comes within ten days, and the plan can be cancelled (developer mode's
+/// Cancel).
+#[test]
+fn care_takes_up_a_claim_and_plans_its_coin() {
+    let Ok(h) = std::env::var("AMBRA_LEAVES_HARNESS") else {
+        eprintln!("AMBRA_LEAVES_HARNESS is not set: the operator harness is not running, nothing to test against");
+        return;
+    };
+    const DISTRIBUTOR: &str = "letter advice cage absurd amount doctor acoustic avoid letter advice cage above";
+    const HOLDER: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
+    let state = control(&h, "/state", json!({}));
+    let x = state["x"].as_str().unwrap().to_string();
+    let config = json!({
+        "server": state["server"], "node_url": state["node_url"],
+        "node_user": state["node_user"], "node_password": state["node_password"],
+        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 400,
+    });
+
+    // The holder's key: its main wallet's receive address at index 25 (m/84'/1'/0'/0/25),
+    // past the 20 the leaf wallet looks at by itself.
+    use lwk_common::Signer as _;
+    let signer = lwk_signer::SwSigner::new(HOLDER, false).unwrap();
+    let path: lwk_wollet::bitcoin::bip32::DerivationPath = "m/84'/1'/0'/0/25".parse().unwrap();
+    let key = signer.derive_xpub(&path).unwrap().public_key.to_string();
+
+    // The distributor boards 2,000,000 X and names the key for 500,000.
+    let ddir = dir("distributor");
+    let mut d = LeafWallet::create(&ddir, DISTRIBUTOR, &config).expect("the distributor's wallet");
+    let addr = ok(d.run("address", &json!({})), "address")["result"].clone();
+    control(&h, "/fund", json!({"script": addr["script_pubkey"], "asset": x, "amount": 3_000_000}));
+    control(&h, "/produce", json!({}));
+    ok(d.run("board", &json!({"asset": x, "amount": "2000000"})), "board");
+    control(&h, "/produce", json!({}));
+    control(&h, "/bury", json!({}));
+    ok(d.run("sync", &json!({})), "distributor sync");
+    let claims = json!([{"key": key, "amount": 500000}]);
+    let quote = ok(d.run("distribute_quote", &json!({"asset": x, "claims": claims})), "quote")["result"].clone();
+    eprintln!("distribution quote: {}", quote);
+    let fee = quote["fee"].as_str().map(|s| s.parse::<u64>().unwrap()).or_else(|| quote["fee"].as_u64()).unwrap();
+    let dist = ok(d.run("distribute", &json!({"asset": x, "claims": claims, "shown": fee})), "distribute")["result"].clone();
+    eprintln!("distribution: {}", dist);
+    let round = control(&h, "/round", json!({}));
+    eprintln!("round: {}", round);
+    ok(d.run("sync", &json!({})), "distributor sync after the round");
+    eprintln!("distributions: {}", ok(d.run("distributions", &json!({})), "distributions")["result"]);
+
+    // The holder joins with a new leaf wallet.
+    let hdir = dir("holder");
+    ok(leaves::start(&hdir, HOLDER, Some(&config), None), "the holder joins");
+    let alone = ok(leaves::run("care", &json!({})), "care without a scan")["result"].clone();
+    eprintln!("care, the leaf wallet's own counter: {}", alone);
+    assert_eq!(alone["claims"], json!([]), "index 25 is past the leaf wallet's own 20");
+    // The app scans 20 past the main wallet's next index; say it handed out 26.
+    let care = ok(leaves::run("care", &json!({"scan": 26 + 20})), "care")["result"].clone();
+    eprintln!("care, scan 46: {}", care);
+    let id = dist["distribution"].as_str().unwrap().to_string();
+    let taken: Vec<&Value> = care["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["claim"].as_str().is_some_and(|n| n.starts_with(&id)))
+        .collect();
+    assert_eq!(taken.len(), 1, "{care}");
+    assert!(taken[0]["taken_up"].is_object() && taken[0].get("error").is_none(), "{care}");
+    let coin = taken[0]["taken_up"]["kept"][0]["leaf_id"].as_str().unwrap().to_string();
+    let bal = ok(leaves::run("balance", &json!({})), "balance")["result"].clone();
+    eprintln!("holder's balance: {}", bal["arca"]);
+
+    // The coin a claim gives is out of round, which no plan can start from: once its
+    // step window is within ten days, care asks its refresh in a round; the round's
+    // new leaf is planned by a later care, once within ten days in its turn.
+    let until = |what: &str, key: &str| -> Value {
+        for step in 0..30 {
+            let c = ok(leaves::run("care", &json!({"scan": 46})), "care")["result"].clone();
+            if !c[key].as_array().unwrap().is_empty() {
+                eprintln!("care, {what}, after {} days on: {}", 2 * step, c);
+                return c;
+            }
+            control(&h, "/advance", json!({"seconds": 2 * 86_400}));
+            control(&h, "/produce", json!({}));
+        }
+        panic!("care never {what}");
+    };
+    let refreshing = until("refreshing the claimed coin", "refreshing");
+    let r = &refreshing["refreshing"][0];
+    assert_eq!(r["coin"], json!(coin));
+    assert!(r["error"].is_null(), "{refreshing}");
+    let live = |v: &Value| -> Vec<String> {
+        v.as_array().unwrap().iter().filter(|c| c["state"] == "live").map(|c| c["leaf_id"].as_str().unwrap().to_string()).collect()
+    };
+    let before = live(&ok(leaves::run("coins", &json!({})), "coins")["result"]);
+    let round = control(&h, "/round", json!({}));
+    eprintln!("refresh round: {}", round);
+    ok(leaves::run("sync", &json!({})), "the holder's sync takes the refresh up");
+    let after = live(&ok(leaves::run("coins", &json!({})), "coins")["result"]);
+    let fresh = after.iter().find(|c| !before.contains(c)).expect("the refreshed leaf").clone();
+    assert!(!after.contains(&coin), "the coin out of round is spent into the round");
+    assert_ne!(fresh, coin, "a leaf of the round in place of the coin out of round");
+    let planned = until("planning the refreshed leaf", "planned");
+    let p = &planned["planned"][0];
+    assert!(p.get("error").is_none(), "the coin is planned: {planned}");
+    let plans = ok(leaves::run("plans", &json!({})), "plans")["result"].clone();
+    eprintln!("plans: {}", plans);
+    let plan = plans["plans"].as_array().unwrap().iter().find(|p| p["coin"] == json!(fresh)).expect("a plan names the refreshed leaf");
+    assert_eq!(plan["state"], "open");
+    let again = ok(leaves::run("care", &json!({"scan": 46})), "care again")["result"].clone();
+    assert_eq!(again["planned"], json!([]), "a planned coin is not planned twice: {again}");
+    let cancelled = ok(leaves::run("plan_cancel", &json!({"plan": plan["plan_id"]})), "plan_cancel")["result"].clone();
+    eprintln!("cancel: {}", cancelled);
+    leaves::stop();
+    drop(d);
+    let _ = std::fs::remove_dir_all(&ddir);
+    let _ = std::fs::remove_dir_all(&hdir);
 }
