@@ -47,9 +47,17 @@ BigInt proportionalBtcForwardCeil(BigInt offerBtc, BigInt offerAsset, BigInt sli
 /// refuses a slice below the offer's minimum fillable lot before any BTC is locked (the maker also
 /// enforces its own min and would `fail` the courier, but rejecting locally is faster + clearer). A null
 /// or ≥offer [requestedAtoms] keeps the exact whole-offer behaviour unchanged.
+/// A buy's maker timeouts, each against its own chain (xswap.js): the Bitcoin refund height at most this
+/// many testnet4 blocks past the tip, and the Sequentia refund height at least this many Sequentia blocks
+/// past its tip, so the asset leg can be claimed in time.
+const int kMaxBtcLockDelta = 400;
+const int kMinSeqClaimWindow = 120;
+
 String? validateCrossTerms({
   required CrossOffer offer,
   required CrossTerms terms,
+  required int btcTip,
+  required int seqTip,
   BigInt? requestedAtoms,
   BigInt? minFill,
 }) {
@@ -76,10 +84,19 @@ String? validateCrossTerms({
   if (terms.makerBtcClaimPub.isEmpty || terms.makerSeqRefundPub.isEmpty) {
     return 'The maker\'s terms were missing a key; not proceeding.';
   }
-  // Safe locktime ordering: the taker's BTC (the FIRST leg locked) must refund LATER than the maker's
-  // asset leg, so the taker is never forced to reveal into a window where only its own refund has matured.
-  if (terms.btcLocktime <= terms.seqLocktime) {
-    return 'Bad locktime ordering (the Bitcoin refund must mature after the asset refund); not proceeding.';
+  // Each timeout against its own chain. btcLocktime is a testnet4 height and seqLocktime a Sequentia
+  // height: comparing the two with each other refused every trade once Sequentia's height passed
+  // testnet4's. [btcTip] and [seqTip] are -1 when they could not be read.
+  if (btcTip < 0 || seqTip < 0) {
+    return 'Could not read the chain tips to check the maker\'s timeouts; not proceeding.';
+  }
+  if (!(terms.btcLocktime > btcTip && terms.btcLocktime <= btcTip + kMaxBtcLockDelta)) {
+    return 'The maker\'s Bitcoin timeout (block ${terms.btcLocktime}) is not within $kMaxBtcLockDelta blocks of the '
+        'testnet4 tip $btcTip; not proceeding.';
+  }
+  if (terms.seqLocktime < seqTip + kMinSeqClaimWindow) {
+    return 'The maker\'s Sequentia timeout (block ${terms.seqLocktime}) leaves less than $kMinSeqClaimWindow blocks '
+        'past the tip $seqTip to claim the asset; not proceeding.';
   }
   // Fee sanity: refuse a punitive maker fee (> ~1% of the trade + 1000 sats slack), matching the web
   // wallet (xswap.js: tFee > atBtc/100 + 1000). Defends against a maker quoting a punitive fee once the

@@ -214,9 +214,8 @@ class XchainSwapService {
       throw Exception('You already have a cross-chain swap in progress with locked Bitcoin. '
           'Finish or refund it first (open it from the Swap tab) before starting another.');
     }
-    if (!(terms.btcLocktime > terms.seqLocktime)) {
-      throw Exception('terms rejected: the BTC timeout must exceed the Sequentia timeout');
-    }
+    // The timeouts were checked against their own chains' tips by validateCrossTerms; they are heights
+    // on two different chains and are not compared with each other.
     final secret = await core.xchainNewSecret();
     final seqClaimPub = await core.xchainSeqClaimPubkey(mnemonic: m);
     final btcRefundPub = await core.xchainBtcRefundPubkey(mnemonic: m);

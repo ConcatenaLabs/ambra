@@ -3,6 +3,7 @@ import 'cross_courier.dart';
 import 'cross_terms.dart';
 import 'seqob_client.dart' show CrossOffer;
 import 'xchain_swap_service.dart';
+import 'xr_swap_service.dart' show XrSwapService;
 
 /// Orchestrates a cross (BTC<->asset) lift over the relay order-book courier — the mobile twin of the web
 /// wallet's runForwardCourier. The PRE-LOCK phase (open session -> request + validate the maker's terms)
@@ -31,7 +32,9 @@ class CrossLiftService {
       await courier.send({'type': XcType.termsRequest});
       final t = await courier.recv(XcType.terms, timeout: const Duration(seconds: 30));
       final terms = _parseTerms(t);
-      final err = validateCrossTerms(offer: offer, terms: terms, requestedAtoms: whole ? null : requestedAtoms);
+      final tips = await Future.wait([XrSwapService.chain.btcTipHeight(), XrSwapService.chain.seqTipHeight()]);
+      final err = validateCrossTerms(
+          offer: offer, terms: terms, btcTip: tips[0], seqTip: tips[1], requestedAtoms: whole ? null : requestedAtoms);
       if (err != null) {
         await courier.fail('terms_mismatch', err); // tell the maker + close; nothing was spent
         throw Exception(err);
