@@ -27,7 +27,8 @@ Protocol documentation lives in the node repo:
 - iOS is not released. The `app/ios/` scaffold exists but iOS bring-up has not happened
   (it needs a macOS + Xcode machine).
 - Free testnet funds: the in-app faucet (More tab) dispenses tSEQ and the demo assets;
-  for BTC use any public Bitcoin testnet4 faucet with the wallet's receive address.
+  for BTC use any public Bitcoin testnet4 faucet with the wallet's receive address. In
+  developer mode, a wallet that joined an operator can ask to be paid as a leaf instead.
 
 ## What the wallet does
 

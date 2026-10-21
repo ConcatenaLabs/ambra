@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../rust/api.dart' as core;
 import '../data/api_client.dart';
 import '../data/config.dart';
+import '../data/dev_mode.dart';
+import '../data/leaf_service.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
@@ -17,7 +19,20 @@ class _FaucetScreenState extends State<FaucetScreen> {
   String? _address;
   bool _busy = false;
   bool _error = false;
+  bool _asLeaf = false; // developer mode, joined wallet: be paid as a leaf instead of on-chain
   String? _status;
+
+  /// A leaf can be asked for only by a wallet that joined an operator, in developer mode.
+  bool get _leafOffered => DevMode.instance.on && LeafService.instance.joined;
+
+  /// The asset id of a faucet ticker ('' = tSEQ).
+  static String _hexOf(String ticker) {
+    if (ticker.isEmpty) return SeqAssets.policy;
+    for (final id in SeqAssets.resolvedIds) {
+      if (SeqAssets.labelFor(id).ticker == ticker) return id;
+    }
+    return ticker;
+  }
 
   @override
   void initState() {
@@ -41,9 +56,19 @@ class _FaucetScreenState extends State<FaucetScreen> {
       _status = 'Requesting from the faucet…';
     });
     try {
-      final r = await ApiClient.faucet(addr, asset: asset);
-      if (mounted) {
-        setState(() => _status = 'Sent ${r.amount} ${r.asset}. It will appear on Balance once it confirms (~30s).');
+      if (_asLeaf && _leafOffered) {
+        // A receive request from the leaf wallet, paid by the faucet off the chain.
+        final made = await LeafService.instance.run('receive', {'asset': _hexOf(asset)});
+        final request = (made is Map ? made['request'] : null)?.toString();
+        if (request == null || request.isEmpty) throw Exception('the leaf wallet made no request');
+        final r = await ApiClient.faucetLeaf(request, asset: asset);
+        await LeafService.instance.refresh();
+        if (mounted) setState(() => _status = 'Paid ${r.amount} ${r.asset} as a leaf. It shows under Leaves.');
+      } else {
+        final r = await ApiClient.faucet(addr, asset: asset);
+        if (mounted) {
+          setState(() => _status = 'Sent ${r.amount} ${r.asset}. It will appear on Balance once it confirms (about a minute).');
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -93,11 +118,23 @@ class _FaucetScreenState extends State<FaucetScreen> {
               for (final a in SeqAssets.faucetAssets)
                 _FaucetButton(
                   label: a.isEmpty ? 'tSEQ' : a,
-                  primary: a.isEmpty,
                   onTap: (_busy || _address == null) ? null : () => _request(a),
                 ),
             ],
           ),
+          if (_leafOffered) ...[
+            const SizedBox(height: 8),
+            SwitchListTile(
+              key: const Key('faucet-as-leaf'),
+              contentPadding: EdgeInsets.zero,
+              activeThumbColor: AmbraColors.amber,
+              value: _asLeaf,
+              onChanged: _busy ? null : (v) => setState(() => _asLeaf = v),
+              title: const Text('Receive as a leaf', style: AmbraText.body),
+              subtitle: const Text('Paid off the chain through the operator you joined, to a request this wallet makes.',
+                  style: AmbraText.sub),
+            ),
+          ],
           const SizedBox(height: 20),
           AmbraCard(
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: const [
@@ -130,13 +167,13 @@ class _FaucetScreenState extends State<FaucetScreen> {
 }
 
 class _FaucetButton extends StatelessWidget {
-  const _FaucetButton({required this.label, required this.onTap, this.primary = false});
+  const _FaucetButton({required this.label, required this.onTap});
   final String label;
   final VoidCallback? onTap;
-  final bool primary;
 
   @override
   Widget build(BuildContext context) {
+    // Every asset's button looks the same: none of them is the faucet's main one.
     return Opacity(
       opacity: onTap == null ? 0.5 : 1,
       child: InkWell(
@@ -145,14 +182,11 @@ class _FaucetButton extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
           decoration: BoxDecoration(
-            gradient: primary ? AmbraColors.goldGradient : null,
-            color: primary ? null : AmbraColors.buttonSurface,
-            border: primary ? null : Border.all(color: AmbraColors.line),
+            color: AmbraColors.buttonSurface,
+            border: Border.all(color: AmbraColors.line),
             borderRadius: BorderRadius.circular(AmbraRadii.control),
           ),
-          child: Text(label,
-              style: TextStyle(
-                  color: primary ? AmbraColors.onGold : AmbraColors.txt, fontWeight: FontWeight.w700)),
+          child: Text(label, style: const TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w700)),
         ),
       ),
     );
