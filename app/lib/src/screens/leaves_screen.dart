@@ -130,8 +130,10 @@ class _JoinCard extends StatefulWidget {
 }
 
 class _JoinCardState extends State<_JoinCard> {
-  final _server = TextEditingController();
-  final _node = TextEditingController();
+  // The node this wallet uses serves an operator and a read-only node RPC beside it, and needs no
+  // credentials for them: the form starts there, and any other operator can be typed instead.
+  final _server = TextEditingController(text: Backend.arcaOperator);
+  final _node = TextEditingController(text: Backend.nodeRpc);
   final _user = TextEditingController();
   final _password = TextEditingController();
   LeafRefusal? _err;

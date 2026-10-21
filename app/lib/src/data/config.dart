@@ -33,6 +33,8 @@ class Backend {
   static String get prices => '$_origin/prices';
   static String get registry => '$_origin/registry/index.minimal.json';
   static String get faucet => '$_origin/faucet';
+  static String get arcaOperator => '$_origin/arca'; // the node's leaf operator (Leaves > Join)
+  static String get nodeRpc => '$_origin/node-rpc'; // the node's read-only RPC for the leaf wallet
 
   /// The public staking pool board's feed: every signer producing blocks, the
   /// weight lent to it, how reliably it produces, and what it has committed
