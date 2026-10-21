@@ -1,5 +1,5 @@
 //! The leaf service against a whole operator: a payment that arrives while the app
-//! is closed. Runs against arca's long-running operator harness
+//! is closed, and an in-tree swap between two wallets. Runs against arca's long-running operator harness
 //! (`bark-cli/tests/arca_operator_for_browsers.rs` in ConcatenaLabs/arca), named by
 //! its control address:
 //!
@@ -131,4 +131,70 @@ fn a_payment_arrives_while_the_app_is_closed() {
     drop(b);
     let _ = std::fs::remove_dir_all(&adir);
     let _ = std::fs::remove_dir_all(&bdir);
+}
+
+/// Two wallets swap two assets in the tree through the core, as the swap screen's leaf
+/// panel runs it: the maker's offer holds its coin, the taker's read shows what it gives,
+/// gets and pays, the acceptance carries those terms, and the maker completes it.
+#[test]
+fn two_wallets_swap_in_the_tree_through_the_core() {
+    let Ok(h) = std::env::var("AMBRA_LEAVES_HARNESS") else {
+        eprintln!("AMBRA_LEAVES_HARNESS is not set: the operator harness is not running, nothing to test against");
+        return;
+    };
+    let state = control(&h, "/state", json!({}));
+    let (x, y) = (state["x"].as_str().unwrap().to_string(), state["y"].as_str().unwrap().to_string());
+    let config = json!({
+        "server": state["server"], "node_url": state["node_url"],
+        "node_user": state["node_user"], "node_password": state["node_password"],
+        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 400,
+    });
+    let live = |w: &mut LeafWallet, asset: &str| -> u64 {
+        let b = ok(w.run("balance", &json!({})), "balance")["result"].clone();
+        b["arca"][asset].as_object().map(|m| m.values().filter_map(|v| v.as_str()?.parse::<u64>().ok()).sum()).unwrap_or(0)
+    };
+    let board = |w: &mut LeafWallet, funds: &[(&str, u64)], asset: &str, fee: &str| {
+        let addr = ok(w.run("address", &json!({})), "address")["result"].clone();
+        for (a, v) in funds {
+            control(&h, "/fund", json!({"script": addr["script_pubkey"], "asset": a, "amount": v}));
+        }
+        control(&h, "/produce", json!({}));
+        ok(w.run("board", &json!({"asset": asset, "amount": "2000000", "fee_asset": fee})), "board");
+    };
+    let mut a = LeafWallet::create(&dir("swap-maker"), "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong", &config).expect("the maker's wallet");
+    let mut b = LeafWallet::create(&dir("swap-taker"), "letter advice cage absurd amount doctor acoustic avoid letter advice cage above", &config)
+        .expect("the taker's wallet");
+    board(&mut a, &[(&x, 3_000_000)], &x, &x);
+    board(&mut b, &[(&y, 3_000_000), (&x, 500_000)], &y, &x);
+    control(&h, "/produce", json!({}));
+    control(&h, "/bury", json!({}));
+    for _ in 0..60 {
+        ok(a.run("sync", &json!({})), "maker sync");
+        ok(b.run("sync", &json!({})), "taker sync");
+        if live(&mut a, &x) >= 2_000_000 && live(&mut b, &y) >= 2_000_000 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    let (ax, bx, by) = (live(&mut a, &x), live(&mut b, &x), live(&mut b, &y));
+
+    let offer = ok(a.run("swap_offer", &json!({"give_asset": x, "give": "300000", "want_asset": y, "want": "400000"})), "offer")["result"].clone();
+    let text = offer["offer"].as_str().unwrap().to_string();
+    let read = ok(b.run("swap_read", &json!({"offer": text})), "read")["result"].clone();
+    eprintln!("read: gets {} gives {} pays {}", read["gets"], read["gives"], read["pays"]);
+    assert_eq!(read["gets"], json!({"asset": x, "value": "300000"}));
+    let mut wrong = read.clone();
+    wrong["gives"]["value"] = json!("399999");
+    let e = b.run("swap_accept", &json!({"offer": text, "shown": wrong})).expect_err("terms other than those shown");
+    eprintln!("refused: {}", leaves::refusal_message(&e));
+    assert!(leaves::refusal_message(&e).contains("the swap's terms changed since they were shown"));
+    let acc = ok(b.run("swap_accept", &json!({"offer": text, "shown": read})), "accept")["result"].clone();
+    ok(a.run("swap_complete", &json!({"accept": acc["accept"]})), "complete");
+    ok(b.run("mailbox", &json!({})), "taker mailbox");
+    let paid: u64 = read["pays"]["margins"].as_str().unwrap().parse().unwrap();
+    assert_eq!(live(&mut b, &x) - bx, 300_000, "the taker got what it was offered");
+    assert_eq!(by - live(&mut b, &y), 400_000 + paid, "the taker gave what it wanted and the margins it was shown");
+    assert_eq!(live(&mut a, &y), 400_000, "the maker got what it wanted");
+    let mp = offer["pays"]["margin"].as_str().unwrap().parse::<u64>().unwrap() + offer["pays"]["margins"].as_str().unwrap().parse::<u64>().unwrap();
+    assert_eq!(ax - live(&mut a, &x), 300_000 + mp, "the maker gave what it offered and the margins it was shown");
 }

@@ -16,6 +16,9 @@ import '../data/format.dart';
 import '../data/hidden_assets.dart';
 import '../data/lightning_service.dart';
 import '../data/ln_rail.dart';
+import '../data/leaf_rail.dart';
+import '../data/leaf_service.dart';
+import '../data/dev_mode.dart';
 import '../data/ln_take_service.dart';
 import '../data/lsp_bridge_service.dart';
 import '../data/lsp_client.dart' show LnOffer, LspSwapResult;
@@ -42,6 +45,7 @@ import '../widgets/widgets.dart';
 import '../data/cross_walk.dart';
 import 'cross_lift_screen.dart';
 import 'cross_walk_screen.dart';
+import 'leaf_rail_panel.dart';
 import 'my_orders_screen.dart';
 import 'subasset_buy_screen.dart';
 import 'subasset_sell_screen.dart';
@@ -129,8 +133,17 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
   // Lightning (true) or on-chain (false). RAIL-BLIND (spec §5): these never touch the book/matching/price
   // — they are honored at settlement. They start NULL — there is NO default (spec §6.5): an order cannot
   // be placed until BOTH are chosen, on EVERY pair. Fed into [route] as settlement prefs only.
-  bool? _payRailLn;
-  bool? _recvRailLn;
+  //
+  // A leg's rail is on-chain, Lightning, or (developer mode, two Sequentia assets) a leaf. The older
+  // yes/no Lightning preference reads off it ([railLn]): a leaf reads as on-chain there, so the book
+  // and the quote render, while [LeafRailPanel] settles the trade in place of this screen's placement.
+  SettleRail? _payRail;
+  SettleRail? _recvRail;
+  bool? get _payRailLn => railLn(_payRail);
+  set _payRailLn(bool? v) => _payRail = railFromLn(v);
+  bool? get _recvRailLn => railLn(_recvRail);
+  set _recvRailLn(bool? v) => _recvRail = railFromLn(v);
+  bool get _leafChosen => _payRail == SettleRail.leaf || _recvRail == SettleRail.leaf;
   XchainSwapRecord? _xInFlight; // a persisted cross-swap with locked BTC needing resume/refund (banner)
   // Multi-record in-flight surfaces (one card PER record, gap 12): every persisted non-terminal trade of
   // every rail-crossing kind renders its own composer card, so no live record is ever invisible.
@@ -248,6 +261,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     // Repaint when Lightning comes up / goes down: it gates the rail toggles and the
     // route a BTC pair resolves to (the composer no longer wraps a ListenableBuilder).
     LightningService.instance.addListener(_onLnChanged);
+    DevMode.instance.addListener(_onModeChanged);
     _payAmount.addListener(_onPayChanged);
     _recvAmount.addListener(_onRecvChanged);
     _priceAmount.addListener(_onPriceChanged);
@@ -309,6 +323,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     _poll?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     LightningService.instance.removeListener(_onLnChanged);
+    DevMode.instance.removeListener(_onModeChanged);
     _payAmount.removeListener(_onPayChanged);
     _recvAmount.removeListener(_onRecvChanged);
     _priceAmount.removeListener(_onPriceChanged);
@@ -330,6 +345,17 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
   /// Lightning came up or went down: repaint so the rail toggles and route summary
   /// reflect it. When Lightning drops, forget any stale LN rail pick so a BTC pair
   /// falls back to the proven on-chain cross route.
+  /// The wallet left developer mode: a leg on Leaf goes back to unselected (user mode has no leaf rail).
+  void _onModeChanged() {
+    if (!mounted) return;
+    setState(() {
+      if (!DevMode.instance.on) {
+        if (_payRail == SettleRail.leaf) _payRail = null;
+        if (_recvRail == SettleRail.leaf) _recvRail = null;
+      }
+    });
+  }
+
   void _onLnChanged() {
     if (!mounted) return;
     setState(() {
@@ -2048,7 +2074,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
           _recentActivity(),
         ]),
       ),
-      if (canQuote)
+      if (canQuote && !_leafChosen)
         BottomActionBar(children: [
           PrimaryButton(
             // The CTA label comes from the ROUTE (never a hardcoded rail promise): a pure-LN route in
@@ -2143,6 +2169,20 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
       _priceField(), // editable limit price / read-only market estimate — IDENTICAL on every pair (§6.4)
       const SizedBox(height: 4),
       _railPicks(), // both settlement rails, always present (spec §5/§6.5)
+      if (_leafChosen) ...[
+        LeafRailPanel(
+          pay: _payAsset,
+          recv: _receiveAsset,
+          payRail: _payRail,
+          recvRail: _recvRail,
+          mode: _mode,
+          payAmount: _payAmount,
+          recvAmount: _recvAmount,
+          amount: (hex, atoms) =>
+              '${formatAtoms('${atoms ?? 0}', SeqAssets.labelFor(hex).precision)} ${SeqAssets.labelFor(hex).ticker} (${atoms ?? 0} atoms)',
+        ),
+        const SizedBox(height: 14),
+      ] else ...[
       // Same-chain both-Lightning (priority D): the pure-LN asset↔asset route, settled composer-native
       // ([_startLnTake]); the note states the settlement + the way to a durable limit order.
       if (!isCross && r.kind == SwapRouteKind.ln) _sameChainLnNote(),
@@ -2166,6 +2206,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
             label: 'Fee rate (${_tk(_feeAssetHex)}/vB, optional)', controller: _feeRateCtl, hint: 'suggested'),
         const SizedBox(height: 8),
         Text(_feeNoteText(), style: AmbraText.sub),
+      ],
       ],
       // The book: the same-chain covenant ladder (price-level aggregated, three empty states) OR the cross
       // (BTC<->asset) book. Same control, different contents.
@@ -2391,13 +2432,19 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     // real _lnChannels + _frontable snapshot, so each leg is judged on its OWN liquidity.
     final ra = LightningService.instance.configured ? _railAvail() : null;
     // ln is NULLABLE: null = unselected (no default). Neither button highlights until the user picks.
-    Widget leg(String label, bool? ln, LegOption? verdict, ValueChanged<bool> onChanged) {
-      Widget opt(String text, IconData icon, bool value) {
-        final on = ln == value;
+    // Developer mode, an operator joined, two Sequentia assets: each leg also offers Leaf
+    // (data/leaf_rail.dart), which LeafRailPanel settles.
+    final leafOff = leafRailOffered(
+        dev: DevMode.instance.on, joined: LeafService.instance.open, pay: _payAsset, recv: _receiveAsset);
+    Widget leg(String label, bool? ln, LegOption? verdict, ValueChanged<bool> onChanged,
+        {bool leafOn = false, VoidCallback? onLeaf}) {
+      Widget opt(String text, IconData icon, bool value, {bool? isOn, VoidCallback? tap, Key? key}) {
+        final on = isOn ?? (!leafOn && ln == value);
         return Expanded(
           child: InkWell(
+            key: key,
             borderRadius: BorderRadius.circular(AmbraRadii.input),
-            onTap: () => onChanged(value),
+            onTap: tap ?? () => onChanged(value),
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
               alignment: Alignment.center,
@@ -2423,6 +2470,10 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
           opt('On-chain', Icons.link, false),
           const SizedBox(width: 10),
           opt('Lightning', Icons.bolt, true),
+          if (leafOff.offered) ...[
+            const SizedBox(width: 10),
+            opt(LeafWords.button, Icons.park_outlined, false, isOn: leafOn, key: ValueKey('leafRail-$label'), tap: onLeaf),
+          ],
         ]),
         // Honest per-leg note (spec §5), gated on the PER-LEG verdict — never the global LN flag. A leg
         // with a funded channel (ok) reads live; a channel-less-but-frontable leg (provisionable) is
@@ -2450,9 +2501,15 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
           : 'Settlement preference · the book matches on price, not rail.',
           style: AmbraText.sub),
       const SizedBox(height: 8),
-      leg('Pay from', _payRailLn, ra?.payLn, _setPayRailLn),
+      leg('Pay from', _payRailLn, ra?.payLn, _setPayRailLn,
+          leafOn: _payRail == SettleRail.leaf, onLeaf: () => _setLeaf(leafOff.usable, leafOff.why, pay: true)),
       const SizedBox(height: 12),
-      leg('Receive to', _recvRailLn, ra?.recvLn, _setRecvRailLn),
+      leg('Receive to', _recvRailLn, ra?.recvLn, _setRecvRailLn,
+          leafOn: _recvRail == SettleRail.leaf, onLeaf: () => _setLeaf(leafOff.usable, leafOff.why, pay: false)),
+      if (leafOff.why != null && leafOff.offered) ...[
+        const SizedBox(height: 6),
+        Text(leafOff.why!, style: AmbraText.sub),
+      ],
       const SizedBox(height: 14),
     ]);
   }
@@ -2464,6 +2521,15 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
   void _setPayRailLn(bool v) => setState(() => _payRailLn = v);
 
   void _setRecvRailLn(bool v) => setState(() => _recvRailLn = v);
+
+  /// A leg set to Leaf (developer mode; refused with the reason when the rail cannot be used yet).
+  void _setLeaf(bool usable, String? why, {required bool pay}) {
+    if (!usable) {
+      if (why != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(why)));
+      return;
+    }
+    setState(() => pay ? _payRail = SettleRail.leaf : _recvRail = SettleRail.leaf);
+  }
 
   /// TRUE when the user is PAYING real Bitcoin ON-CHAIN. The "keep resting while offline" peg is
   /// relevant ONLY for this pay leg (not Lightning, not paying a Sequentia asset).
