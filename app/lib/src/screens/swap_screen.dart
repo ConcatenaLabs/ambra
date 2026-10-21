@@ -37,6 +37,7 @@ import '../data/xchain_swap_service.dart';
 import '../data/xr_swap_service.dart';
 import '../rust/api.dart' as core;
 import '../theme/theme.dart';
+import '../widgets/asset_sheet.dart';
 import '../widgets/widgets.dart';
 import '../data/cross_walk.dart';
 import 'cross_lift_screen.dart';
@@ -1232,133 +1233,45 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     if (picked != null) setState(() => _feeAsset = picked);
   }
 
-  /// The composer's searchable asset sheet.
+  /// The composer's searchable asset sheet ([showAssetSheet]).
   ///
-  /// With [registrySearch] (the pay/receive pickers): the DEFAULT (empty-search)
-  /// view shows ONLY assets this wallet holds — on-chain or in Lightning — plus
-  /// native BTC (first-class, listed even at 0), minus assets hidden on the
-  /// Balance tab; a hint row says how to reach the rest. Typing searches EVERY
-  /// candidate (the full registry, hidden included) by ticker/name/id, and a
-  /// pasted 64-hex id that matches nothing known synthesizes a selectable,
-  /// TRADEABLE row (id-prefix ticker, precision 8 — see [pickerMatches]); picking
-  /// it registers the id for the session so validation never drops it.
-  /// Without [registrySearch] (the fee picker): the plain filter over [ids] —
-  /// fee assets are whitelist-constrained, so synthesizing arbitrary ids there
-  /// would offer a fee the relay refuses.
+  /// With [registrySearch] (the pay/receive pickers) the empty search shows native
+  /// BTC (first, listed even at 0) and the assets this wallet holds, on-chain or in
+  /// Lightning, minus those hidden on the Balance tab; typing searches every
+  /// candidate, and a pasted 64-hex id becomes a tradeable row that is registered
+  /// for the session so validation never drops it. Without it (the fee picker) the
+  /// search only filters [ids].
   Future<String?> _assetSheet(String title, List<String> ids,
       {bool withBalance = false, bool registrySearch = false}) {
     // Trailing balance = TOTAL holdings (on-chain + Lightning), so a fully-moved
     // asset never reads "0" while listed as held.
     String balStr(String id) {
       final total = (BigInt.tryParse(_bal(id)) ?? BigInt.zero) + _lnAtoms(id);
-      return formatAtoms(total.toString(), SeqAssets.labelFor(id).precision);
+      return formatAtoms(total.toString(), id == kBtcSentinel ? 8 : SeqAssets.labelFor(id).precision);
     }
 
-    // Candidate rows, built once per open. held/hidden feed pickerMatches'
-    // default-vs-search visibility (registrySearch mode only).
+    // BTC first, then what you hold, then the rest: the same order in every picker.
+    final offered = ids.toSet();
+    final ordered = pickerOrder(held: ids.where(_holds), known: ids)
+        .where(offered.contains)
+        .toList();
     final rows = [
-      for (final id in ids)
+      for (final id in ordered)
         AssetPickerItem(
           hex: id,
-          ticker: SeqAssets.labelFor(id).ticker,
-          name: SeqAssets.labelFor(id).subtitle,
+          ticker: id == kBtcSentinel ? 'BTC' : SeqAssets.labelFor(id).ticker,
+          name: id == kBtcSentinel ? 'Bitcoin' : SeqAssets.labelFor(id).subtitle,
           held: id == kBtcSentinel || _holds(id),
           hidden: HiddenAssets.instance.isHidden(id),
         ),
     ];
-    return showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: AmbraColors.panel,
-      // Let the sheet grow and SCROLL, capped at 70% of the screen, so a long asset list is never
-      // clipped behind the bottom navigation bar (SafeArea pads for it). Was a non-scrollable Column
-      // whose last rows (e.g. GOLD) hid behind the nav bar and could not be selected.
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(AmbraRadii.card))),
-      builder: (_) {
-        final search = TextEditingController();
-        return SafeArea(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
-            child: StatefulBuilder(
-              builder: (context, setSheet) {
-                final q = search.text.trim();
-                final ql = q.toLowerCase();
-                // registrySearch: default = held + BTC − hidden; typed = full sweep + pasted-id
-                // synthesis. Plain mode: filter by ticker OR name, case-insensitive (unchanged).
-                final shown = registrySearch
-                    ? pickerMatches(rows, q)
-                    : (q.isEmpty
-                        ? rows
-                        : rows
-                            .where((it) =>
-                                it.ticker.toLowerCase().contains(ql) ||
-                                (it.name?.toLowerCase().contains(ql) ?? false))
-                            .toList());
-                return Column(mainAxisSize: MainAxisSize.min, children: [
-                  Padding(padding: const EdgeInsets.all(16), child: Text(title, style: AmbraText.title)),
-                  // Search box — always for a registry-searching picker (the registry is only
-                  // reachable by typing); otherwise only when the list warrants it.
-                  if (registrySearch || ids.length > 6)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: TextField(
-                        controller: search,
-                        style: AmbraText.body,
-                        decoration: InputDecoration(
-                          hintText: registrySearch ? 'Search assets, or paste an asset id' : 'Search assets',
-                          prefixIcon: const Icon(Icons.search, size: 20),
-                          isDense: true,
-                        ),
-                        onChanged: (_) => setSheet(() {}),
-                      ),
-                    ),
-                  if (shown.isEmpty && q.isNotEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text('No asset matches your search.', style: AmbraText.muted),
-                    )
-                  else if (shown.isEmpty && !registrySearch)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text('No assets available.', style: AmbraText.muted),
-                    ),
-                  Flexible(
-                    child: ListView(
-                      shrinkWrap: true,
-                      padding: const EdgeInsets.only(bottom: 8),
-                      children: [
-                        for (final it in shown)
-                          ListTile(
-                            title: Text(it.ticker, style: AmbraText.body),
-                            subtitle: it.name != null
-                                ? Text(it.name!, style: AmbraText.sub)
-                                : (it.pasted
-                                    ? const Text('Unregistered asset · trades by id', style: AmbraText.sub)
-                                    : null),
-                            trailing: withBalance ? Text(balStr(it.hex), style: AmbraText.mono) : null,
-                            onTap: () {
-                              // A pasted-id pick is registered for the session so the payable/
-                              // receivable sets keep offering it and validation never clears it.
-                              if (it.pasted) _SwapCache.pastedIds.add(it.hex);
-                              Navigator.pop(context, it.hex);
-                            },
-                          ),
-                        // The default view holds only your assets + BTC: say how to reach the rest.
-                        if (registrySearch && q.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
-                            child: Text('Type to search every registry asset, or paste an asset id.',
-                                style: AmbraText.sub),
-                          ),
-                      ],
-                    ),
-                  ),
-                ]);
-              },
-            ),
-          ),
-        );
-      },
+    return showAssetSheet(
+      context,
+      title: title,
+      rows: rows,
+      balanceOf: withBalance ? balStr : null,
+      registrySearch: registrySearch,
+      onPasted: _SwapCache.pastedIds.add,
     );
   }
 
