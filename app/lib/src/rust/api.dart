@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_fee_and_finish`, `base64_encode`, `btc_params`, `clear_scan_marks`, `controller_and_signer`, `ct_str`, `ct_u64`, `derive_maker_payout`, `derive_maker_secret`, `enclave_prevout_to_txout`, `enclave_prevouts_to_txouts`, `enclave_sighash_inner`, `err`, `esplora_client`, `fetch_utxo`, `fresh_unblinded_spk`, `hexbytes`, `hexstr_bytes`, `last_scan`, `maker_identity_priv`, `mark_scanned`, `openamp_keypair`, `order_from_terms`, `parse_openamp_tx`, `priv32`, `recoverable_signature`, `rerr`, `scan_into`, `scanned_recently`, `select_taker_inputs`, `seq_addr_params`, `tohex`, `with_synced_wollet`, `wollet_cache`
+// These functions are ignored because they are not marked as `pub`: `apply_fee_and_finish`, `base64_encode`, `btc_params`, `clear_scan_marks`, `controller_and_signer`, `covenant_display_ids`, `ct_str`, `ct_u64`, `derive_maker_payout`, `derive_maker_secret`, `enclave_prevout_to_txout`, `enclave_prevouts_to_txouts`, `enclave_sighash_inner`, `err`, `esplora_client`, `fetch_utxo`, `fresh_unblinded_spk`, `hexbytes`, `hexstr_bytes`, `last_scan`, `maker_identity_priv`, `mark_scanned`, `openamp_keypair`, `order_from_terms`, `parse_openamp_tx`, `policy_native_rate`, `priv32`, `recoverable_signature`, `rerr`, `rev_hex`, `scan_into`, `scanned_recently`, `select_taker_inputs`, `seq_addr_params`, `tohex`, `with_synced_wollet`, `wollet_cache`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 
 /// The active Sequentia network's identifier, e.g. `"sequentia-testnet"`.
@@ -719,8 +719,8 @@ Future<double> cpfpSuggestedFeerate({
 );
 
 /// Issue a brand-new asset: mint `asset_sats` of it plus `token_sats` reissuance
-/// tokens, both to this wallet. The new asset's id appears after the tx
-/// confirms and the wallet re-syncs.
+/// tokens, both to this wallet as explicit outputs (`crate::issuance`). The new
+/// asset's id appears after the tx confirms and the wallet re-syncs.
 Future<String> buildIssueTx({
   required String mnemonic,
   required String esploraUrl,
@@ -737,7 +737,8 @@ Future<String> buildIssueTx({
   feeAsset: feeAsset,
 );
 
-/// Reissue more of an existing asset (needs its reissuance token in this wallet).
+/// Reissue more of an existing asset (needs its reissuance token in this
+/// wallet), to this wallet as an explicit output (`crate::issuance`).
 Future<String> buildReissueTx({
   required String mnemonic,
   required String esploraUrl,

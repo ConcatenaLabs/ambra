@@ -21,6 +21,9 @@ pub mod api;
 // implementation; api/mod.rs calls into it directly.
 /// SeqDEX same-chain atomic swap helpers (JSON serializer + bip32 strip).
 mod seqdex;
+/// Issuing and reissuing an asset with explicit outputs. `api` wraps it for
+/// the testnet.
+pub mod issuance;
 /// Staking pools on any Sequentia chain: join, find, move and leave a
 /// delegation record. `api` wraps it for the testnet.
 pub mod staking;

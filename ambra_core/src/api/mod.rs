@@ -2039,8 +2039,8 @@ pub fn cpfp_suggested_feerate(
 // --- M7: asset issuance / reissue / burn + staking --------------------------
 
 /// Issue a brand-new asset: mint `asset_sats` of it plus `token_sats` reissuance
-/// tokens, both to this wallet. The new asset's id appears after the tx
-/// confirms and the wallet re-syncs.
+/// tokens, both to this wallet as explicit outputs (`crate::issuance`). The new
+/// asset's id appears after the tx confirms and the wallet re-syncs.
 pub fn build_issue_tx(
     mnemonic: String,
     esplora_url: String,
@@ -2050,14 +2050,14 @@ pub fn build_issue_tx(
     fee_asset: Option<FeeAsset>,
 ) -> Result<String> {
     with_synced_wollet(&mnemonic, &esplora_url, |wollet| {
-        let b = TxBuilder::new(crate::sequentia_testnet())
-            .issue_asset(asset_sats, None, token_sats, None, None)
-            .map_err(rerr)?;
+        let b = crate::issuance::issue_builder(crate::sequentia_testnet(), wollet, asset_sats, token_sats)
+            .map_err(err)?;
         apply_fee_and_finish(b, wollet, fee_rate_sat_kvb, fee_asset.as_ref())
     })
 }
 
-/// Reissue more of an existing asset (needs its reissuance token in this wallet).
+/// Reissue more of an existing asset (needs its reissuance token in this
+/// wallet), to this wallet as an explicit output (`crate::issuance`).
 pub fn build_reissue_tx(
     mnemonic: String,
     esplora_url: String,
@@ -2068,9 +2068,8 @@ pub fn build_reissue_tx(
 ) -> Result<String> {
     with_synced_wollet(&mnemonic, &esplora_url, |wollet| {
         let asset = AssetId::from_str(&asset_id).map_err(rerr)?;
-        let b = TxBuilder::new(crate::sequentia_testnet())
-            .reissue_asset(asset, satoshi, None, None)
-            .map_err(rerr)?;
+        let b = crate::issuance::reissue_builder(crate::sequentia_testnet(), wollet, asset, satoshi)
+            .map_err(err)?;
         apply_fee_and_finish(b, wollet, fee_rate_sat_kvb, fee_asset.as_ref())
     })
 }
