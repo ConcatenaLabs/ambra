@@ -100,6 +100,22 @@ String _amount(String asset, Object? atoms) {
   return '${formatAtoms('${atoms ?? '0'}', l.precision)} ${l.ticker}';
 }
 
+/// [_amount] under a name the board card's own `_amount` field does not hide.
+String _leafAmount(String asset, Object? atoms) => _amount(asset, atoms);
+
+/// Fees by asset as the library quotes them (`{asset: atoms}`, or a list of `{asset, amount}`), in words.
+String _fees(Object? fees) {
+  final parts = <String>[];
+  if (fees is Map) {
+    fees.forEach((a, v) => parts.add(_amount('$a', v)));
+  } else if (fees is List) {
+    for (final f in fees.whereType<Map>()) {
+      parts.add(_amount('${f['asset']}', f['amount']));
+    }
+  }
+  return parts.isEmpty ? 'none' : parts.join(' + ');
+}
+
 /// A median time as a date and how far it is from the chain's now.
 String _when(Object? t, Object? now) {
   if (t is! num) return 'not yet known';
@@ -517,14 +533,37 @@ class _CoinsCardState extends State<_CoinsCard> {
   String? _busy;
 
   Future<void> _exit(String leaf) async {
+    // The fees are shown before anything is signed: the library quotes this run of the drill, and
+    // the run broadcasts only on the fees shown.
+    setState(() {
+      _busy = leaf;
+      _exitErr.remove(leaf);
+    });
+    Map q;
+    try {
+      final r = await LeafService.instance.run('exit_quote', {'leaf_id': leaf});
+      q = r is Map ? r : const {};
+    } catch (e) {
+      _exitErr[leaf] = LeafRefusal.of(e);
+      if (mounted) setState(() => _busy = null);
+      return;
+    }
+    if (mounted) setState(() => _busy = null);
+    if (!mounted) return;
+    final steps = (q['steps'] as List?)?.length ?? 0;
+    final claim = q['claim'] is Map ? q['claim'] as Map : const {};
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: AmbraColors.panel,
         title: const Text('Run the exit drill?', style: AmbraText.title),
-        content: const Text(
+        content: Text(
             'This takes the coin on-chain without the operator: its path from the batch is published, and once the '
-            'exit delay has run, it is claimed to an address of this wallet. Run it again, or sync, to move it on.',
+            'exit delay has run, it is claimed to an address of this wallet. Run it again, or sync, to move it on.\n\n'
+            'This run: $steps transaction(s), fee ${_fees(q['unroll'])}. The claim later: fee '
+            '${claim['fee'] != null ? _fees(claim['fee']) : 'quoted when it is made'}. Each fee is the node\'s floor now, '
+            'in its asset\'s own atoms; the run goes ahead only on the fees shown.',
+            key: const Key('exit-quote'),
             style: AmbraText.muted),
         actions: [
           GhostButton(label: 'Cancel', onPressed: () => Navigator.pop(context, false)),
@@ -538,7 +577,11 @@ class _CoinsCardState extends State<_CoinsCard> {
       _exitErr.remove(leaf);
     });
     try {
-      final r = await LeafService.instance.run('exit', {'leaf_id': leaf});
+      final r = await LeafService.instance.run('exit', {
+        'leaf_id': leaf,
+        'shown': q['unroll'] ?? const {},
+        if (q['fee_asset'] != null) 'fee_asset': q['fee_asset'],
+      });
       _exitSaid[leaf] = const JsonEncoder.withIndent(' ').convert(r);
       await LeafService.instance.refresh();
     } catch (e) {
@@ -617,7 +660,35 @@ class _BoardCardState extends State<_BoardCard> {
       _done = null;
     });
     try {
-      final r = await LeafService.instance.run('board', {'asset': _asset.text.trim(), 'amount': _amount.text.trim()});
+      // The fee is shown before anything is signed: the library quotes the board, and boards only on
+      // the fee shown.
+      final args = {'asset': _asset.text.trim(), 'amount': _amount.text.trim()};
+      final q = await LeafService.instance.run('board_quote', args);
+      final quote = q is Map ? q : const {};
+      if (!mounted) return;
+      final fee = quote['fee'] is Map ? quote['fee'] as Map : const {};
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AmbraColors.panel,
+          title: const Text('Board this coin?', style: AmbraText.title),
+          content: Text(
+              'Board ${_leafAmount(args['asset']!, args['amount'])}: fee ${_leafAmount('${fee['asset']}', fee['amount'])}, the '
+              'node\'s floor now; ${quote['vsize']} vB, spending ${quote['inputs']} coin(s). The board goes ahead only on '
+              'this fee.',
+              key: const Key('board-quote'),
+              style: AmbraText.muted),
+          actions: [
+            GhostButton(label: 'Cancel', onPressed: () => Navigator.pop(context, false)),
+            TextButton(key: const Key('board-confirm'), onPressed: () => Navigator.pop(context, true), child: const Text('Sign and board')),
+          ],
+        ),
+      );
+      if (ok != true) {
+        if (mounted) setState(() => _busy = false);
+        return;
+      }
+      final r = await LeafService.instance.run('board', {...args, 'shown': quote['fee']});
       _done = const JsonEncoder.withIndent(' ').convert(r);
       await LeafService.instance.refresh();
     } catch (e) {
