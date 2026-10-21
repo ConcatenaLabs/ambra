@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../rust/api.dart' as core;
 import '../data/api_client.dart';
 import '../data/config.dart';
+import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/tx_flow.dart';
 import '../data/wallet_repository.dart';
@@ -26,6 +27,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
   final _otherAmount = TextEditingController();
   List<core.AssetBalance> _balances = [];
   Map<String, BigInt> _feeRates = {}; // /feerates, keyed by ticker or hex
+  Map<String, BigInt> _largest = {}; // each asset's largest coin, for the fee-asset rule
   bool _busy = false;
 
   @override
@@ -48,7 +50,12 @@ class _AssetsScreenState extends State<AssetsScreen> {
     if (m == null) return;
     try {
       final s = await core.syncWallet(mnemonic: m, esploraUrl: Backend.esplora);
-      if (mounted) setState(() => _balances = s.balances);
+      if (mounted) {
+        setState(() {
+          _balances = s.balances;
+          _largest = largestCoinsOf(s);
+        });
+      }
     } catch (_) {}
     try {
       final rates = await ApiClient.feeRates();
@@ -65,37 +72,19 @@ class _AssetsScreenState extends State<AssetsScreen> {
 
   bool _tooBig(BigInt v) => v >= (BigInt.one << 64);
 
-  /// 1:1 reference-unit fallback for an asset the node doesn't price (the fee
-  /// still builds and the relay/producers decide). Mirrors the send screen.
-  static final BigInt _refScale = BigInt.from(100000000);
+  /// The fee asset by the wallet rule ([walletFeeAsset]): [moved] when the node
+  /// accepts it, else the accepted asset whose largest coin covers the most fees.
+  /// [spendsAllOf] names an asset this transaction takes whole (a burn of the full
+  /// balance), which then cannot pay the fee too. null = nothing the node accepts.
+  String? _pickFeeAsset(String? moved, {String? spendsAllOf}) => walletFeeAsset(
+        moved: moved,
+        rates: _feeRates,
+        largestCoin: _largest,
+        exclude: {?spendsAllOf},
+      );
 
-  /// The node's fee rate for an asset, looked up by ticker or hex (deployments
-  /// vary). null = the node doesn't price this asset for fees.
-  BigInt? _rateFor(String hex) {
-    final t = SeqAssets.labelFor(hex).ticker;
-    return _feeRates[t] ?? _feeRates[hex];
-  }
-
-  /// Asset ids you actually hold (positive balance). Any of these can fund the
-  /// network fee — no asset is privileged, including tSEQ.
-  List<String> _heldIds() =>
-      _balances.where((b) => (BigInt.tryParse(b.atoms) ?? BigInt.zero) > BigInt.zero).map((b) => b.assetId).toList();
-
-  /// Pick the asset to pay the fee in. Prefer [preferHex] when it's held;
-  /// otherwise the largest holding (tSEQ gets no special treatment). Returns
-  /// null only when the wallet holds nothing.
-  String? _pickFeeAsset(String? preferHex) {
-    final held = _heldIds();
-    if (held.isEmpty) return null;
-    if (preferHex != null && held.contains(preferHex)) return preferHex;
-    held.sort((a, b) => _bal(b).compareTo(_bal(a)));
-    return held.first;
-  }
-
-  /// The fee_asset argument for the builders: null when paying in tSEQ (the
-  /// policy asset, the builder's native default), else an explicit FeeAsset.
-  core.FeeAsset? _feeAssetParam(String hex) =>
-      hex == SeqAssets.policy ? null : core.FeeAsset(assetId: hex, rate: _rateFor(hex) ?? _refScale);
+  /// The fee argument for the builders, at the node's rate (never an invented one).
+  core.FeeAsset? _feeAssetParam(String hex) => feeAssetParam(hex, feeRateFor(_feeRates, hex)!);
 
   String _feeTicker(String hex) => SeqAssets.labelFor(hex).ticker;
   void _snack(String s) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
@@ -140,7 +129,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
     if (tok < BigInt.zero) return _snack('Reissuance token count cannot be negative');
     if (_tooBig(amt) || _tooBig(tok)) return _snack('Amount is too large');
     final feeHex = _pickFeeAsset(null);
-    if (feeHex == null) return _snack('You need some funds to pay the network fee. Use the faucet (More tab).');
+    if (feeHex == null) return _snack(noFeeAssetMessage);
     final ok = await _confirm(
       title: 'Issue new asset',
       body: 'Mint ${formatAtoms(amt.toString(), _issuePrecision)} units of a new asset'
@@ -158,10 +147,10 @@ class _AssetsScreenState extends State<AssetsScreen> {
     final amt = parseAtoms(_otherAmount.text, label.precision);
     if (id.length != 64 || amt == null || amt <= BigInt.zero) return _snack('Enter a 64-hex asset id + amount');
     if (_tooBig(amt)) return _snack('Amount is too large');
-    // Reissue defaults the fee to the asset being reissued; burn defaults to the
-    // largest holding so destroying your whole balance still leaves a fee source.
-    final feeHex = _pickFeeAsset(burn ? null : id);
-    if (feeHex == null) return _snack('You need some funds to pay the network fee. Use the faucet (More tab).');
+    // The fee follows the asset reissued or burned; a burn of the whole balance
+    // leaves nothing of it for the fee, so the rule looks past it.
+    final feeHex = _pickFeeAsset(id, spendsAllOf: burn && amt >= _bal(id) ? id : null);
+    if (feeHex == null) return _snack(noFeeAssetMessage);
     final known = label.subtitle != null; // a built-in asset => precision is known
     // Show the raw atom count only for an unknown-precision asset, where the body copy below relies
     // on it ("the atom amount above ..."); for a known asset it is just jargon, so drop the suffix.

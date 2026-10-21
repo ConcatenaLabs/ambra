@@ -115,8 +115,13 @@ on-chain coins used for boards and exit fees.
 
 ## Fees (open fee market)
 
-Sequentia sends default the fee to the asset being sent; a fee-asset picker offers
-any asset the network publishes an exchange rate for (`/feerates`). A manual
+Every Sequentia transaction Ambra builds takes its fee asset from one rule: the asset
+being moved when the node accepts it (it publishes a rate for it in `/feerates`), else
+the accepted asset whose largest coin covers the most fees (largest coin × rate). The
+Sequence token is chosen only by that rule, never as a default or a fallback, and a
+wallet holding nothing the node accepts is told so rather than sent to it. Every fee is
+valued at the node's rate, the Sequence token's included. A fee-asset picker offers
+every held asset the network publishes an exchange rate for. A manual
 fee-rate override is always denominated in the chosen fee asset's own units per
 vByte, never "sat/vB" (sats are Bitcoin-only). Parent-chain BTC sends pay their own
 fee in BTC at sat/vB, with no fee-asset market (that is Bitcoin, not Sequentia).

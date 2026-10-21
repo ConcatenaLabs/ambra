@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../rust/api.dart' as core;
 import 'api_client.dart';
 import 'config.dart';
+import 'fee_asset_rule.dart';
 import 'lightning_service.dart';
 import 'lsp_client.dart';
 import 'trade_receipts.dart';
@@ -450,7 +451,7 @@ class SubassetBuyService {
         esploraUrl: Backend.esplora,
         recipients: [core.Recipient(address: r.p2sh, assetId: r.quoteAsset!, satoshi: r.btcSats)],
         feeRateSatKvb: null,
-        feeAsset: null,
+        feeAsset: await walletFeeParam(m, moved: r.quoteAsset, movedAtoms: r.btcSats),
       );
       final signed = await core.signPset(mnemonic: m, pset: pset);
       r.step = SubBuyStep.funding;

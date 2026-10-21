@@ -5547,11 +5547,13 @@ impl SseDecode for crate::api::WalletSync {
         let mut var_tipHeight = <u32>::sse_decode(deserializer);
         let mut var_tipHash = <String>::sse_decode(deserializer);
         let mut var_balances = <Vec<crate::api::AssetBalance>>::sse_decode(deserializer);
+        let mut var_largestCoins = <Vec<crate::api::AssetBalance>>::sse_decode(deserializer);
         let mut var_nextIndex = <u32>::sse_decode(deserializer);
         return crate::api::WalletSync {
             tip_height: var_tipHeight,
             tip_hash: var_tipHash,
             balances: var_balances,
+            largest_coins: var_largestCoins,
             next_index: var_nextIndex,
         };
     }
@@ -6403,6 +6405,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::WalletSync {
             self.tip_height.into_into_dart().into_dart(),
             self.tip_hash.into_into_dart().into_dart(),
             self.balances.into_into_dart().into_dart(),
+            self.largest_coins.into_into_dart().into_dart(),
             self.next_index.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -7043,6 +7046,7 @@ impl SseEncode for crate::api::WalletSync {
         <u32>::sse_encode(self.tip_height, serializer);
         <String>::sse_encode(self.tip_hash, serializer);
         <Vec<crate::api::AssetBalance>>::sse_encode(self.balances, serializer);
+        <Vec<crate::api::AssetBalance>>::sse_encode(self.largest_coins, serializer);
         <u32>::sse_encode(self.next_index, serializer);
     }
 }

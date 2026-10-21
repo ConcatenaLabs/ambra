@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 
 import '../rust/api.dart' as core;
 import '../data/config.dart';
+import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/tx_flow.dart';
 import '../data/wallet_repository.dart';
@@ -154,12 +155,16 @@ class _StakeScreenState extends State<StakeScreen> {
 
     setState(() => _busy = true);
     try {
-      final txid = await authorizeBuildBroadcast((m) => core.buildStakeTx(
+      // The stake moves tSEQ, so its fee follows the wallet rule from there: in tSEQ when the node
+      // accepts it and more is held than is staked, else in the accepted asset whose largest coin
+      // covers the most fees.
+      final txid = await authorizeBuildBroadcast((m) async => core.buildStakeTx(
             mnemonic: m,
             esploraUrl: Backend.esplora,
             stakerPubkey: key,
             csv: _unbondCsv,
             satoshi: atoms,
+            feeAsset: await walletFeeParam(m, moved: SeqAssets.policy, movedAtoms: atoms),
           ));
       if (mounted) {
         _amount.clear();
@@ -480,8 +485,12 @@ class _PoolSectionState extends State<_PoolSection> {
     final resumed = await core.delegateWithKeyCoin(
         mnemonic: m, esploraUrl: Backend.esplora, signerPubkey: target);
     if (resumed != null) return resumed;
+    // The payment moves tSEQ to the staking key; its fee follows the wallet rule.
     final pset = await core.buildDelegateTx(
-        mnemonic: m, esploraUrl: Backend.esplora, signerPubkey: target);
+        mnemonic: m,
+        esploraUrl: Backend.esplora,
+        signerPubkey: target,
+        feeAsset: await walletFeeParam(m, moved: SeqAssets.policy));
     final signed = await core.signPset(mnemonic: m, pset: pset);
     return core.broadcastDelegation(
         mnemonic: m, esploraUrl: Backend.esplora, pset: signed, signerPubkey: target);

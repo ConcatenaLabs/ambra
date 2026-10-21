@@ -5725,13 +5725,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   WalletSync dco_decode_wallet_sync(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return WalletSync(
       tipHeight: dco_decode_u_32(arr[0]),
       tipHash: dco_decode_String(arr[1]),
       balances: dco_decode_list_asset_balance(arr[2]),
-      nextIndex: dco_decode_u_32(arr[3]),
+      largestCoins: dco_decode_list_asset_balance(arr[3]),
+      nextIndex: dco_decode_u_32(arr[4]),
     );
   }
 
@@ -6602,11 +6603,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_tipHeight = sse_decode_u_32(deserializer);
     var var_tipHash = sse_decode_String(deserializer);
     var var_balances = sse_decode_list_asset_balance(deserializer);
+    var var_largestCoins = sse_decode_list_asset_balance(deserializer);
     var var_nextIndex = sse_decode_u_32(deserializer);
     return WalletSync(
       tipHeight: var_tipHeight,
       tipHash: var_tipHash,
       balances: var_balances,
+      largestCoins: var_largestCoins,
       nextIndex: var_nextIndex,
     );
   }
@@ -7350,6 +7353,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.tipHeight, serializer);
     sse_encode_String(self.tipHash, serializer);
     sse_encode_list_asset_balance(self.balances, serializer);
+    sse_encode_list_asset_balance(self.largestCoins, serializer);
     sse_encode_u_32(self.nextIndex, serializer);
   }
 

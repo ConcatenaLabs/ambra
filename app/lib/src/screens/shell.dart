@@ -5,13 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../rust/api.dart' as core;
-import '../data/api_client.dart';
 import '../data/asset_picker.dart';
 import '../data/btc_state.dart';
 import '../data/channel_move_service.dart';
 import '../data/config.dart';
 import '../data/descriptor.dart';
 import '../data/dev_mode.dart';
+import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/hidden_assets.dart';
 import '../data/leaf_service.dart';
@@ -881,8 +881,9 @@ void _showCloseDialog(BuildContext context, _Leg leg, List<Map> channels, VoidCa
 
 /// Build + sign + broadcast the on-chain deposit that funds a Lightning channel — a normal
 /// wallet-signed send (the LSP never holds the key). BTC uses the parent-chain path; a Sequentia
-/// asset pays the funding fee strictly in the asset being moved when a producer prices it, else in
-/// the tx-format's native tSEQ path (open fee market, no privileged coin).
+/// asset pays the funding fee by the wallet rule ([walletFeeFor]): in the asset moved when the node
+/// accepts it, else in the accepted asset whose largest coin covers the most fees, never tSEQ by
+/// default.
 Future<void> _sendChannelDeposit(String mnemonic, _Leg leg, BigInt atoms, String address) async {
   if (leg.chain == 'btc') {
     final tx = await core.btcPrepare(
@@ -891,14 +892,7 @@ Future<void> _sendChannelDeposit(String mnemonic, _Leg leg, BigInt atoms, String
     return;
   }
   final asset = leg.asset!;
-  core.FeeAsset? feeAsset;
-  if (asset != SeqAssets.policy) {
-    try {
-      final rates = await ApiClient.feeRates();
-      final rate = rates[leg.ticker] ?? rates[asset];
-      if (rate != null) feeAsset = core.FeeAsset(assetId: asset, rate: rate);
-    } catch (_) {/* fall back to the native tSEQ fee path */}
-  }
+  final feeAsset = await walletFeeParam(mnemonic, moved: asset, movedAtoms: atoms);
   final pset = await core.buildSendTx(
     mnemonic: mnemonic,
     esploraUrl: Backend.esplora,

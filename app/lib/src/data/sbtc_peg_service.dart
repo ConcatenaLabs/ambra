@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../rust/api.dart' as core;
 import 'config.dart';
+import 'fee_asset_rule.dart';
 import 'placed_orders.dart';
 import 'sbtc_client.dart';
 import 'seqdex_client.dart' show pick;
@@ -285,9 +286,9 @@ class SbtcPegService {
     }
 
     onStatus?.call('Funding the order on-chain…');
-    // The covenant funding is a SEQUENTIA tx, so its fee is paid in the policy asset (tSEQ, universally
-    // accepted) from the wallet's own coins — never in the advertised BTC (not a Sequentia asset) nor in
-    // the sold SBTC (which must transfer whole into the covenant). null => the builder's policy default.
+    // The covenant funding is a SEQUENTIA tx: its fee follows the wallet rule — in the sold asset when the
+    // node accepts it and the wallet holds more of it than goes into the covenant, else in the accepted asset
+    // whose largest coin covers the most fees. Never the advertised BTC (not a Sequentia asset).
     final pset = await core.buildSendTx(
       mnemonic: mnemonic,
       esploraUrl: Backend.esplora,
@@ -295,7 +296,7 @@ class SbtcPegService {
         core.Recipient(address: prepared.covenantAddress, assetId: sellAsset, satoshi: sellAtoms),
       ],
       feeRateSatKvb: null,
-      feeAsset: null,
+      feeAsset: await walletFeeParam(mnemonic, moved: sellAsset, movedAtoms: sellAtoms),
     );
     final signed = await core.signPset(mnemonic: mnemonic, pset: pset);
     final covTxid = await core.finalizeAndBroadcast(mnemonic: mnemonic, esploraUrl: Backend.esplora, pset: signed);
@@ -405,7 +406,9 @@ class SbtcPegService {
       esploraUrl: Backend.esplora,
       recipients: [core.Recipient(address: sbtcAddr, assetId: sbtcHex, satoshi: atoms)],
       feeRateSatKvb: null,
-      feeAsset: null, // policy default (tSEQ) — never SBTC, so the full amount reaches the bridge
+      // The wallet rule: SBTC pays only when more of it is held than goes to the bridge, so the full
+      // amount still reaches the bridge.
+      feeAsset: await walletFeeParam(mnemonic, moved: sbtcHex, movedAtoms: atoms),
     );
     final signed = await core.signPset(mnemonic: mnemonic, pset: pset);
     return await core.finalizeAndBroadcast(mnemonic: mnemonic, esploraUrl: Backend.esplora, pset: signed);
