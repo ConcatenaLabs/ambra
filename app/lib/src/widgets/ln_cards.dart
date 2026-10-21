@@ -403,6 +403,17 @@ class _LnPayCardState extends State<LnPayCard> {
   }
 }
 
+/// The BOLT11 invoice in [raw] (optionally behind a `lightning:` URI prefix), or null when it is not
+/// a Lightning invoice. Matches the human-readable prefixes of Bitcoin main/test/signet/regtest
+/// (lnbc / lntb / lntbs / lnbcrt) and of Sequentia's asset nodes, testnet/regtest/mainnet
+/// (lntsqt / lnsqrt / lnsqt, seqln's bitcoin/chainparams.c), case-insensitively.
+String? bolt11Of(String raw) {
+  var s = raw.trim();
+  if (s.toLowerCase().startsWith('lightning:')) s = s.substring('lightning:'.length).trim();
+  final ok = RegExp(r'^ln(bcrt|tbs|tsqt|sqrt|sqt|bc|tb)[0-9]', caseSensitive: false).hasMatch(s);
+  return ok ? s : null;
+}
+
 /// A full-screen wrapper around [LnPayCard] with an optional prefilled invoice, so a scanned BOLT11
 /// can be routed straight to the pay card without editing the (un-owned) Send screen.
 class LnPayScreen extends StatelessWidget {
