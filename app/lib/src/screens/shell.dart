@@ -105,7 +105,13 @@ class _ShellState extends State<Shell> {
     // Finish any Move to Lightning whose deposit already landed: the funds are ON the user's hosted
     // node with no channel, and before this there was no record that one was owed — the sheet polled
     // for four minutes, said "check back shortly" and forgot. Re-drives from the persisted record.
-    unawaited(ChannelMoveService.resume());
+    // Then bring every hosted node of this wallet back online (a node restarted while this phone was
+    // away answers nothing until its device is attached, and its channels look gone), and finish a
+    // deposit no record remembers: a reinstall loses the records, never the nodes.
+    unawaited(() async {
+      await ChannelMoveService.resume();
+      await ChannelMoveService.recoverFromNodes();
+    }());
     // Fund-recovery on cold start: resume any in-flight sub-asset swap so a locked BTC HTLC settles or
     // refunds (BUY) and an unclaimed BTC gets re-claimed (SELL) even if the user never re-opens Swap.
     // Fire-and-forget: each loads its own persisted record and no-ops when there is nothing to resume.

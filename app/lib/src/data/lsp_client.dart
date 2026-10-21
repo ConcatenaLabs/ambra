@@ -153,6 +153,15 @@ class LspClient {
     return ProvisionedNode.fromJson(_decode(await _postJson('/node/provision', body)));
   }
 
+  /// What ONE of this wallet's hosted nodes holds, as the node itself reports it (`GET /node/onchain`):
+  /// whether it answers, its on-chain coins, and its channels by state. Null when the service has no
+  /// node under [nodeKey] (this wallet never provisioned it).
+  static Future<NodeOnchain?> nodeOnchain(String nodeKey) async {
+    final r = await _get('/node/onchain?node=${Uri.encodeComponent(nodeKey)}');
+    if (r.statusCode == 404) return null;
+    return NodeOnchain.fromJson(_decode(r));
+  }
+
   /// Readiness of ONE provisioned node (by its registry key). A freshly-provisioned node boots +
   /// rescans, so its rpc is unanswerable for the first seconds; poll this before funding.
   static Future<NodeInfo> nodeGetinfo(String nodeKey) async =>
@@ -1129,4 +1138,39 @@ class BridgeJobStatus {
       raw: j,
     );
   }
+}
+
+/// One hosted node's own report of its coins and channels (`GET /node/onchain`).
+class NodeOnchain {
+  NodeOnchain({required this.nodeUp, required this.onchainAtoms, required this.channels, required this.channelStates});
+
+  /// The node answered. A keyless node whose device is away waits at start-up and answers nothing,
+  /// so then the rest says nothing about it.
+  final bool nodeUp;
+
+  /// Its confirmed coins of its asset (or bitcoin) on chain, in atoms.
+  final BigInt onchainAtoms;
+
+  /// How many channels it has open.
+  final int channels;
+
+  /// The state of every channel it ever had, closed ones included; null when it could not say.
+  final List<String>? channelStates;
+
+  static NodeOnchain fromJson(Map<String, dynamic> j) {
+    final msat = BigInt.tryParse('${j['onchain_msat'] ?? 0}') ?? BigInt.zero;
+    final cs = j['channel_states'];
+    return NodeOnchain(
+      nodeUp: j['node_up'] == true,
+      onchainAtoms: msat ~/ BigInt.from(1000),
+      channels: (j['channels'] as num?)?.toInt() ?? 0,
+      channelStates: cs is List ? [for (final c in cs) if (c is Map) '${c['state'] ?? ''}'] : null,
+    );
+  }
+
+  /// A Move to Lightning whose deposit landed on the node and never became a channel: coins on
+  /// chain, no channel now, and none ever. (Coins a closed channel returned to the node are not
+  /// a move the wallet was asked for.)
+  bool get owesChannel =>
+      nodeUp && onchainAtoms > BigInt.zero && channels == 0 && channelStates != null && channelStates!.isEmpty;
 }
