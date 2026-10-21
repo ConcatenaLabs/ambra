@@ -197,7 +197,9 @@ module that implements it.
 
 **Assets, staking, faucet, node**
 - Issue a new asset, reissue (mint more of) an asset you hold the reissuance token for,
-  and burn (`app/lib/src/screens/assets_screen.dart`).
+  and burn (`app/lib/src/screens/assets_screen.dart`). The issued amount, the asset and its
+  reissuance token go to the wallet's own addresses as explicit outputs, as a send does
+  (`ambra_core/src/issuance.rs`).
 - Stake the Sequence token (tSEQ) for block production: 40,000 tSEQ minimum, time-based
   CSV lock of roughly 15 days (`app/lib/src/screens/stake_screen.dart`). Staked tSEQ is
   excluded from the spendable balance. Unbonding is not available in the app, so

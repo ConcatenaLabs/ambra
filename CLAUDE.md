@@ -58,6 +58,7 @@ cargo test --test smoke --test signer_conformance
 cargo test --test sync -- --nocapture
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocapture
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test contracts -- --nocapture
+SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test issuance -- --nocapture
 AMBRA_LEAVES_HARNESS=http://127.0.0.1:18640 cargo test --test leaves -- --nocapture
 ```
 
@@ -65,7 +66,7 @@ The `leaves` test drives the leaf service against arca's long-running operator h
 (`bark-cli/tests/arca_operator_for_browsers.rs` in the arca repo); without the variable it
 passes without running.
 
-A bare `cargo test` runs the network tests too, and fails `stake_records` unless
+A bare `cargo test` runs the network tests too, and fails `stake_records`, `contracts` and `issuance` unless
 `SEQUENTIAD_EXEC` points at a `sequentiad` (it starts one on a private
 `elementsregtest` chain), so prefer the explicit forms.
 
