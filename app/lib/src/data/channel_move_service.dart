@@ -249,6 +249,16 @@ class ChannelMoveService {
       final copy = movePhaseCopy(job.status);
       if (copy != null) say(copy);
       if (job.isActive) {
+        // The service answers "active" when it ADOPTED a channel this node already had open, without
+        // funding one from the deposit (its guard against funding twice). Then the deposit is still on
+        // the node's own wallet: say so rather than report the move done.
+        if (job.raw['reused_existing'] == true) {
+          final stillOnNode = await _depositStillOnNode(record);
+          if (stillOnNode != null) {
+            await ChannelMoveStore.remove(record.id, reason: 'deposit left on the node: an open channel was reused');
+            throw Exception(stillOnNode);
+          }
+        }
         await ChannelMoveStore.remove(record.id, reason: 'channel active');
         return job;
       }
@@ -322,6 +332,22 @@ class ChannelMoveService {
       } catch (e) {
         storeLog('channel move recover: $key not finished ($e)');
       }
+    }
+  }
+
+  /// The words for a move whose deposit is still on the node's own wallet after the service reported
+  /// it active by reusing an open channel, or null when the deposit is not there (it went into the
+  /// channel, or the node cannot say).
+  static Future<String?> _depositStillOnNode(ChannelMove rec) async {
+    try {
+      final info = await LspClient.nodeOnchain(rec.nodeKey);
+      final amount = BigInt.tryParse(rec.amountAtoms) ?? BigInt.zero;
+      if (info == null || !info.nodeUp || amount <= BigInt.zero || info.onchainAtoms < amount) return null;
+      storeLog('channel move: ${rec.id} reported active on a reused channel; ${info.onchainAtoms} still on the node');
+      return 'Your ${rec.ticker} reached your Lightning node, but no new channel was opened for it: the Lightning '
+          'service kept your existing channel instead. The amount stays on your Lightning node, and it is yours.';
+    } catch (_) {
+      return null;
     }
   }
 
