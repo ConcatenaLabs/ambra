@@ -21,6 +21,7 @@ import '../data/wallet_cache.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
 import '../widgets/asset_sheet.dart';
+import '../widgets/ln_cards.dart';
 import '../widgets/widgets.dart';
 import 'scan_screen.dart';
 
@@ -318,6 +319,13 @@ class _SendTabState extends State<SendTab> {
   }
 
   Future<void> _review() async {
+    // A Lightning invoice in the recipient field is paid over Lightning, whatever asset is picked:
+    // the invoice names its own amount, and the pay screen its asset.
+    final invoice = bolt11Of(_addr.text);
+    if (invoice != null && LightningService.instance.configured) {
+      await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LnPayScreen(invoice: invoice)));
+      return;
+    }
     if (_isBtc) return _reviewBtc();
     if (_isRestricted) return _reviewOpenamp();
     final label = SeqAssets.labelFor(_assetId);
@@ -525,7 +533,9 @@ class _SendTabState extends State<SendTab> {
               AmbraField(
                 label: _isRestricted ? 'Recipient account id (AID)' : 'Recipient address',
                 controller: _addr,
-                hint: _isRestricted ? 'their OpenAMP account id' : 'tb1… or tsqb1…',
+                hint: _isRestricted
+                    ? 'their OpenAMP account id'
+                    : (LightningService.instance.configured ? 'tb1…, tsqb1… or a Lightning invoice' : 'tb1… or tsqb1…'),
                 mono: true,
                 suffix: _isRestricted
                     ? null

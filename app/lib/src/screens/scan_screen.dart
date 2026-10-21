@@ -107,7 +107,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       // (the caller's Send screen only handles addresses). Only when Lightning is deployed — when
       // dormant, pop the raw string so Send can show its own "not a valid address" message rather
       // than opening a dead LN screen.
-      final invoice = _bolt11(trimmed);
+      final invoice = bolt11Of(trimmed);
       if (invoice != null && LightningService.instance.configured) {
         Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => LnPayScreen(invoice: invoice)));
       } else {
@@ -116,16 +116,6 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       return;
     }
     _busy = false;
-  }
-
-  /// The BOLT11 invoice in [raw] (optionally behind a `lightning:` URI prefix), or null if the code
-  /// isn't a Lightning invoice. Matches the human-readable prefix for Bitcoin main/test/signet/regtest
-  /// (lnbc / lntb / lntbs / lnbcrt), case-insensitively.
-  static String? _bolt11(String raw) {
-    var s = raw.trim();
-    if (s.toLowerCase().startsWith('lightning:')) s = s.substring('lightning:'.length).trim();
-    final ok = RegExp(r'^(lnbcrt|lntbs|lnbc|lntb)[0-9]', caseSensitive: false).hasMatch(s);
-    return ok ? s : null;
   }
 
   /// Decode a QR from the frame's luminance (Y) plane. Returns null when there's

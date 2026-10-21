@@ -102,6 +102,8 @@ module that implements it.
   asset id, reaches the rest. The list scrolls, whatever its length and the screen's.
 - Bitcoin (testnet4) send: BTC pays its own fee in sat/vB (correct there, it is the
   Bitcoin chain).
+- A Lightning invoice, scanned or pasted into the recipient field, opens the Lightning pay
+  screen, for BTC and for Sequentia assets (`lntsqt…` on the testnet).
 - QR scanning of recipient addresses using the first-party CameraX preview plus a
   **pure-Dart ZXing decoder (`zxing2`)**, so the app needs no Google ML Kit and no Play
   Services (`app/lib/src/screens/scan_screen.dart`).
