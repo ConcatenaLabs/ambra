@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../data/config.dart';
+import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/placed_orders.dart';
 import '../data/sbtc_peg_service.dart';
@@ -102,8 +103,10 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
           await _delistOnRelay(m, rec);
         } catch (_) {/* delist is best-effort; the on-chain reclaim is what frees the funds */}
       }
-      // Fee in tSEQ (universally accepted); the reclaimed asset returns whole. If the
-      // sold asset IS tSEQ the core takes the fee from the reclaimed value instead.
+      // The fee by the wallet rule: in the reclaimed asset when the node accepts it (the
+      // core then takes it from the reclaimed value), else in the accepted asset whose
+      // largest coin covers the most fees. Sized at the reference value of 2,000 atoms.
+      final fee = await walletFeeFor(m, moved: rec.pay);
       final built = await core.covenantBuildRefundTx(
         mnemonic: m,
         esploraUrl: Backend.esplora,
@@ -111,8 +114,8 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
         covenantTxid: rec.covTxid,
         covenantVout: rec.covVout,
         makerIndex: rec.makerIndex,
-        feeAsset: SeqAssets.policy,
-        feeAtoms: BigInt.from(2000),
+        feeAsset: fee.asset,
+        feeAtoms: feeAtomsIn(fee.rate, BigInt.from(2000)),
       );
       final txid = await core.xchainSeqBroadcast(seqEsplora: Backend.esplora, txHex: built.rawHex);
       // SBTC silent peg: the reclaimed asset is SBTC, but the maker paid BTC and expects BTC back. Redeem

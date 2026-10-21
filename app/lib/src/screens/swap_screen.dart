@@ -12,6 +12,7 @@ import '../data/asset_picker.dart';
 import '../data/book_levels.dart';
 import '../data/btc_state.dart';
 import '../data/config.dart';
+import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/hidden_assets.dart';
 import '../data/lightning_service.dart';
@@ -117,6 +118,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
   // a first-class picker asset and sources every BTC pair the composer can route.
   List<XchainMarket> _xmarkets = [];
   List<core.AssetBalance> _balances = [];
+  Map<String, BigInt> _largest = {}; // each asset's largest coin, for the fee-asset rule
   Map<String, BigInt> _feeRates = {};
   int _tipHeight = 0;
 
@@ -628,6 +630,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
         _markets = markets;
         _xmarkets = xmarkets;
         _balances = s.balances;
+        _largest = largestCoinsOf(s);
         _tipHeight = s.tipHeight;
         _lnChannels = lnCh;
         _frontable = frontable;
@@ -822,19 +825,23 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
   /// else. Keeping the privilege offered the user a fee asset the mempool then
   /// rejects with a generic "min relay fee not met". The published whitelist is
   /// the whole truth on both sides.
-  bool _acceptedFee(String hex) {
-    if (hex == kBtcSentinel) return false;
-    final t = SeqAssets.labelFor(hex).ticker;
-    return _feeRates[t] != null || _feeRates[hex] != null;
-  }
+  bool _acceptedFee(String hex) => hex != kBtcSentinel && feeRateFor(_feeRates, hex) != null;
 
-  BigInt _rateFor(String hex) {
-    // Read tSEQ's rate from the /feerates feed like every other asset — no SEQ=1 privilege (principle 3).
-    // The numeraire is a sovereign per-producer config; fall back to the reference scale ONLY when the
-    // feed doesn't price tSEQ (i.e. when tSEQ IS the reference), never as a hardcoded assumption.
-    final t = SeqAssets.labelFor(hex).ticker;
-    return _feeRates[t] ?? _feeRates[hex] ?? _kScale;
-  }
+  /// The node's rate for a fee asset. Every fee asset the composer uses is accepted
+  /// ([walletFeeAsset] picks only those), so the reference scale here only keeps an
+  /// estimate drawable while no fee asset is held.
+  BigInt _rateFor(String hex) => feeRateFor(_feeRates, hex) ?? _kScale;
+
+  /// Each asset's largest coin for the fee-asset rule (the balances stand in until a
+  /// sync of this session has reported coins).
+  Map<String, BigInt> get _coinsForRule => _largest.isNotEmpty
+      ? _largest
+      : {for (final b in _balances) b.assetId: BigInt.tryParse(b.atoms) ?? BigInt.zero};
+
+  /// The wallet rule ([walletFeeAsset]) for a fee paid alongside moving [moved]:
+  /// '' when the wallet holds nothing the node accepts.
+  String _ruleFeeAsset(String? moved, {Set<String> exclude = const {}}) =>
+      walletFeeAsset(moved: moved, rates: _feeRates, largestCoin: _coinsForRule, exclude: exclude) ?? '';
 
   /// THE SINGLE AUTHORITY on which asset pays the fee, mirroring the web wallet's
   /// feeAssetPolicy. Three rules, one place, so the picker and the display can
@@ -859,13 +866,13 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     return _payAsset; // rule 1 and rule 2 both lock to the asset being paid
   }
 
+  /// Rule 3's default is the wallet rule: the asset paid when the node accepts it, else
+  /// the accepted asset whose largest coin covers the most fees; '' when nothing held is
+  /// accepted (the actions then refuse), never a tSEQ fallback.
   String _defaultFeeAsset() {
     final locked = _lockedFeeAsset;
     if (locked != null) return locked;
-    final opts = _feeOptions();
-    if (_payAsset != null && opts.contains(_payAsset)) return _payAsset!;
-    if (opts.isNotEmpty) return opts.first;
-    return SeqAssets.policy; // nothing on offer: name something rather than crash
+    return _ruleFeeAsset(_payAsset);
   }
 
   /// FORCED from the policy: a manual pick only survives while it is still offered,
@@ -899,9 +906,8 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
   /// asset A (= what the taker receives), which the fill builder rejects.
   String _takeFeeAsset() {
     final chosen = _feeAssetHex;
-    if (chosen != _receiveAsset) return chosen;
-    if (_payAsset != null && _acceptedFee(_payAsset!) && _payAsset != _receiveAsset) return _payAsset!;
-    return SeqAssets.policy == _receiveAsset ? (_payAsset ?? SeqAssets.policy) : SeqAssets.policy;
+    if (chosen.isNotEmpty && chosen != _receiveAsset) return chosen;
+    return _ruleFeeAsset(_payAsset, exclude: {?_receiveAsset});
   }
 
   /// The network fee, in the given fee asset, from the (optional) per-vB override
@@ -1305,6 +1311,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     if (buyAtoms == null || buyAtoms <= BigInt.zero) return _snack('Enter your price: how much ${_tk(recv)} you want');
     final payBal = BigInt.tryParse(_bal(pay)) ?? BigInt.zero;
     if (sellAtoms > payBal) return _snack('Not enough ${_tk(pay)} to rest this order');
+    if (_feeAssetHex.isEmpty) return _snack(noFeeAssetMessage);
 
     final txid = await showModalBottomSheet<String>(
       context: context,
@@ -1350,6 +1357,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     }
 
     final feeAsset = _takeFeeAsset();
+    if (feeAsset.isEmpty) return _snack(noFeeAssetMessage);
     final feeAtoms = _feeAtomsFor(feeAsset); // per fill (each level is its own on-chain settlement)
     final feeInPay = feeAsset == pay;
     final n = BigInt.from(plan.fills.length);
@@ -1389,6 +1397,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     if (sellAtoms > payBal) return _snack('Not enough ${_tk(pay)} to rest this order');
 
     final feeAsset = _feeAssetHex;
+    if (feeAsset.isEmpty) return _snack(noFeeAssetMessage);
     final txid = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -1452,6 +1461,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     // FUND-SAFETY: the wallet must hold the pay for BOTH legs — the take fills (takenPay) and the rested
     // covenant's locked funds (restPay) — plus the take fees when they are paid in the pay asset.
     final takeFeeAsset = _takeFeeAsset();
+    if (takeFeeAsset.isEmpty) return _snack(noFeeAssetMessage);
     final takeFeeAtoms = _feeAtomsFor(takeFeeAsset);
     final n = BigInt.from(plan.fills.length);
     final feeInPay = takeFeeAsset == pay;
@@ -1465,6 +1475,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     }
 
     final restFeeAsset = _feeAssetHex;
+    if (willRest && restFeeAsset.isEmpty) return _snack(noFeeAssetMessage);
     final txid = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -1561,7 +1572,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     return (neg ? '-' : '') + grouped + frac;
   }
 
-  String _tk(String? hex) => hex == null ? '—' : SeqAssets.labelFor(hex).ticker;
+  String _tk(String? hex) => (hex == null || hex.isEmpty) ? '—' : SeqAssets.labelFor(hex).ticker;
 
   // --- reference-currency valuation + price field (spec §6.2, §6.4) ----------
 
@@ -3601,9 +3612,10 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     if (payAsset > payBal) {
       return _snack('Not enough ${_tk(asset)} to fill this (needs ${formatAtoms(payAsset.toString(), aprec)}).');
     }
-    // Fee in the policy asset (tSEQ): the fill builder rejects the covenant's sold asset A (= the SBTC we
-    // RECEIVE) as the fee asset, and tSEQ is universally accepted. Funded from the taker's own coins.
-    final feeAsset = SeqAssets.policy;
+    // The fee by the wallet rule, never in the covenant's sold asset A (the SBTC we RECEIVE), which
+    // the fill builder refuses. Funded from the taker's own coins.
+    final feeAsset = _ruleFeeAsset(asset, exclude: {offer.baseAsset});
+    if (feeAsset.isEmpty) return _snack(noFeeAssetMessage);
     final feeAtoms = _feeAtomsFor(feeAsset);
     if ((BigInt.tryParse(_bal(feeAsset)) ?? BigInt.zero) < feeAtoms) {
       return _snack('Not enough ${_tk(feeAsset)} to pay the network fee.');
@@ -4176,7 +4188,7 @@ Future<String> _executeRestPost({
   );
 
   onStatus?.call('Funding the order on-chain…');
-  final fa = feeAsset == SeqAssets.policy ? null : core.FeeAsset(assetId: feeAsset, rate: feeRate);
+  final fa = feeAssetParam(feeAsset, feeRate);
   final pset = await core.buildSendTx(
     mnemonic: mnemonic,
     esploraUrl: Backend.esplora,

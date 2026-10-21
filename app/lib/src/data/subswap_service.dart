@@ -40,6 +40,7 @@ import 'package:http/http.dart' as http;
 import '../rust/api.dart' as core;
 import 'api_client.dart';
 import 'config.dart';
+import 'fee_asset_rule.dart';
 import 'cross_courier.dart';
 import 'lightning_service.dart';
 import 'lsp_client.dart';
@@ -1529,12 +1530,12 @@ class SubswapService {
       final String fundTxid;
       try {
         fundTxid = await authorizeBuildBroadcast(
-          (mnemonic) => core.buildSendTx(
+          (mnemonic) async => core.buildSendTx(
             mnemonic: mnemonic,
             esploraUrl: Backend.esplora,
             recipients: [core.Recipient(address: htlc.p2ShAddress, assetId: rec.asset, satoshi: rec.assetAtoms)],
             feeRateSatKvb: null,
-            feeAsset: null,
+            feeAsset: await walletFeeParam(mnemonic, moved: rec.asset, movedAtoms: rec.assetAtoms),
           ),
           onAboutToBroadcast: () async {
             broadcastHookFired = true;

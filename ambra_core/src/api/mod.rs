@@ -1537,6 +1537,10 @@ pub struct WalletSync {
     pub tip_height: u32,
     pub tip_hash: String,
     pub balances: Vec<AssetBalance>,
+    /// Each asset's largest single coin (atoms), for the fee-asset rule: when the asset
+    /// moved cannot pay the fee, the wallet pays it in the accepted asset whose largest
+    /// coin covers the most fees.
+    pub largest_coins: Vec<AssetBalance>,
     pub next_index: u32,
 }
 
@@ -1555,11 +1559,21 @@ pub fn sync_wallet(mnemonic: String, esplora_url: String) -> Result<WalletSync> 
                 atoms: atoms.to_string(),
             })
             .collect();
+        let mut largest: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+        for u in wollet.utxos().map_err(rerr)? {
+            let e = largest.entry(u.unblinded.asset.to_string()).or_insert(0);
+            *e = (*e).max(u.unblinded.value);
+        }
+        let largest_coins = largest
+            .into_iter()
+            .map(|(asset_id, atoms)| AssetBalance { asset_id, atoms: atoms.to_string() })
+            .collect();
         let next_index = wollet.address(None).map_err(rerr)?.index();
         Ok(WalletSync {
             tip_height: tip.height(),
             tip_hash: tip.hash().to_string(),
             balances,
+            largest_coins,
             next_index,
         })
     })
@@ -1852,19 +1866,43 @@ pub fn clear_wallet_cache() {
 /// build path here applies at least this.
 const DEFAULT_FEERATE_SAT_KVB: f32 = 2000.0;
 
-/// Chain a fee rate (defaulted when absent) + optional any-asset fee onto a
-/// builder, finish.
+/// Chain a fee rate (defaulted when absent) and the fee asset onto a builder, finish.
+///
+/// The rate is in reference atoms per kvB. A fee asset is valued at its node rate
+/// (`value = atoms * rate / 1e8`), the policy asset included: the node holds no asset
+/// at 1:1. The builder pays the policy asset natively, at a rate in its own atoms, so
+/// that rate is the reference rate converted at the policy asset's node rate; every
+/// other asset the builder converts itself. With no fee asset the builder pays the
+/// policy asset at the reference rate unconverted, which only callers that never
+/// learned the node's rate still do.
 fn apply_fee_and_finish(
     mut b: TxBuilder,
     wollet: &lwk_wollet::Wollet,
     fee_rate_sat_kvb: Option<f32>,
     fee_asset: Option<&FeeAsset>,
 ) -> Result<String> {
-    b = b.fee_rate(Some(fee_rate_sat_kvb.unwrap_or(DEFAULT_FEERATE_SAT_KVB)));
-    if let Some(fa) = fee_asset {
-        b = b.fee_asset(AssetId::from_str(&fa.asset_id).map_err(rerr)?, fa.rate);
+    let reference_rate = fee_rate_sat_kvb.unwrap_or(DEFAULT_FEERATE_SAT_KVB);
+    match fee_asset {
+        Some(fa) => {
+            if fa.rate == 0 {
+                return Err(err(format!("the node does not accept {} for fees (its rate is 0)", fa.asset_id)));
+            }
+            let asset = AssetId::from_str(&fa.asset_id).map_err(rerr)?;
+            if asset == wollet.policy_asset() {
+                b = b.fee_rate(Some(policy_native_rate(reference_rate, fa.rate)));
+            } else {
+                b = b.fee_rate(Some(reference_rate)).fee_asset(asset, fa.rate);
+            }
+        }
+        None => b = b.fee_rate(Some(reference_rate)),
     }
     Ok(b.finish(wollet).map_err(rerr)?.to_string())
+}
+
+/// A reference fee rate (atoms/kvB) as a rate in the policy asset's own atoms, at
+/// the node's rate for it: `reference * 1e8 / rate`.
+fn policy_native_rate(reference_rate: f32, policy_rate: u64) -> f32 {
+    ((reference_rate as f64) * 100_000_000f64 / policy_rate as f64) as f32
 }
 
 /// The network fee of a built PSET: the fee output's asset and amount (atoms).
@@ -2625,6 +2663,23 @@ pub fn decode_enclave_spend(
         my_inputs_spent,
         any_confidential,
     })
+}
+
+#[cfg(test)]
+mod fee_rate_tests {
+    use super::policy_native_rate;
+
+    #[test]
+    fn a_policy_fee_is_valued_at_the_node_rate() {
+        // At a rate of 1e8 an atom of the policy asset is worth a reference atom.
+        assert_eq!(policy_native_rate(2000.0, 100_000_000), 2000.0);
+        // The testnet feed rates tSEQ at 36,168,727: an atom is worth 0.3617 reference
+        // atoms, so 2 reference atoms/vB take 5.53 tSEQ atoms/vB, and the fee keeps its
+        // value: 5529.6 * 36168727 / 1e8 = 2000.
+        let r = policy_native_rate(2000.0, 36_168_727);
+        assert!((r - 5529.65).abs() < 0.1, "{r}");
+        assert!(((r as f64) * 36_168_727f64 / 1e8 - 2000.0).abs() < 0.1);
+    }
 }
 
 #[cfg(test)]

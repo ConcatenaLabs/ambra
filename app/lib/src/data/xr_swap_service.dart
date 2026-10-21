@@ -47,6 +47,7 @@ import 'package:http/http.dart' as http;
 import '../rust/api.dart' as core;
 import 'api_client.dart';
 import 'config.dart';
+import 'fee_asset_rule.dart';
 import 'cross_courier.dart';
 import 'seqob_client.dart' show CrossOffer;
 import 'store_log.dart';
@@ -1272,12 +1273,12 @@ class XrChainLive implements XrChain {
       required BigInt amountAtoms,
       required Future<void> Function() onAboutToBroadcast}) {
     return authorizeBuildBroadcast(
-      (mnemonic) => core.buildSendTx(
+      (mnemonic) async => core.buildSendTx(
         mnemonic: mnemonic,
         esploraUrl: Backend.esplora,
         recipients: [core.Recipient(address: address, assetId: assetId, satoshi: amountAtoms)],
         feeRateSatKvb: null,
-        feeAsset: null,
+        feeAsset: await walletFeeParam(mnemonic, moved: assetId, movedAtoms: amountAtoms),
       ),
       onAboutToBroadcast: onAboutToBroadcast,
     );

@@ -8,6 +8,7 @@ import '../data/api_client.dart';
 import '../data/asset_picker.dart';
 import '../data/btc_state.dart';
 import '../data/config.dart';
+import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/hidden_assets.dart';
 import '../data/leaf_service.dart';
@@ -38,8 +39,9 @@ class _SendTabState extends State<SendTab> {
   core.BtcBalance? _btc; // parent-chain (testnet4) balance, sendable like any asset
   List<Map> _lnChannels = const []; // this wallet's own Lightning channels, for the picker's holdings
   Map<String, BigInt> _feeRates = {};
+  Map<String, BigInt> _largestCoins = {}; // each asset's largest coin, for the fee-asset rule
   String _assetId = _btcId; // BTC is the first-class default pick (principle 2), not tSEQ
-  String? _feeAsset; // null = pay the fee in tSEQ (the builder's default)
+  String? _feeAsset; // the fee asset's id; null = the wallet holds nothing the node accepts
   bool _feeManual = false; // true once the user explicitly picks a fee asset
   bool _loading = true;
   String? _error;
@@ -153,6 +155,7 @@ class _SendTabState extends State<SendTab> {
       setState(() {
         _error = null; // a successful load clears any earlier (transient) error
         _balances = [...s.balances, ...amp];
+        _largestCoins = largestCoinsOf(s);
         if (btc != null) _btc = btc;
         if (lnCh != null) _lnChannels = lnCh;
         // The send asset is the user's pick, BTC until they make one (principle 2); a
@@ -208,59 +211,34 @@ class _SendTabState extends State<SendTab> {
     return null;
   }
 
-  /// The published fee rate (atoms per reference unit) for an asset, keyed in
-  /// /feerates by ticker or hex (deployments vary). null = not fee-priced.
-  BigInt? _rateFor(String hex) {
-    // The policy asset (tSEQ) is keyed "bitcoin" in the feed (Elements naming). Resolve it from
-    // that key like any other asset — so tSEQ is priced ONLY when this node's feed prices it. NO
-    // privilege: a node whose fee reference is USD and ignores SEQ omits "bitcoin" -> tSEQ unpriced
-    // -> gated out of the fee options, exactly like any unpriced asset (first-principle: SEQ equal
-    // standing). We never fabricate a rate.
-    if (hex == SeqAssets.policy) return _feeRates['bitcoin'];
-    final t = SeqAssets.labelFor(hex).ticker;
-    return _feeRates[t] ?? _feeRates[hex]; // already filtered to >0 in feeRates()
-  }
+  /// The node's rate for an asset from its fee-rate feed; null = not accepted for fees.
+  BigInt? _rateFor(String hex) => feeRateFor(_feeRates, hex);
 
-  String get _feeLabel => _feeAsset == null ? 'tSEQ' : SeqAssets.labelFor(_feeAsset!).ticker;
-
-  /// The policy asset (tSEQ) is the Elements tx format's NATIVE fee unit: a tSEQ fee is built
-  /// natively by the PSET builder (no FeeAsset passed) at the reference scale. This is a STRUCTURAL
-  /// fact of the tx format, not a privilege — whether tSEQ is OFFERED as a fee choice is still gated
-  /// purely on the producer feed (see _rateFor / _feeOptions).
-  static final BigInt _policyScale = BigInt.from(100000000);
+  /// The fee asset's ticker, or a dash when the wallet holds nothing the node accepts.
+  String get _feeLabel => _feeAsset == null ? '—' : SeqAssets.labelFor(_feeAsset!).ticker;
 
   /// True when the send asset is a restricted (OpenAMP enclave) asset — moved via
   /// the enclave transfer flow, not an on-chain PSET, and addressed by account id.
   bool get _isRestricted => OpenAmpService.instance.isRestricted(_assetId);
 
-  /// A held asset is a valid fee option iff some producer prices it for fees (it's in the /feerates
-  /// feed) — no asset is privileged, tSEQ (the '' sentinel) is judged by the exact same feed as
-  /// every issued asset. Restricted (enclave-held) assets can't pay an on-chain fee, so excluded.
-  /// An unpriced held asset is NOT offered (a fabricated rate would build a fee no producer accepts).
+  /// The fee picker's rows: every asset held on-chain that the node accepts for fees,
+  /// tSEQ judged like any other. Restricted (enclave-held) assets cannot pay an
+  /// on-chain fee.
   List<String> _feeOptions() => _heldIds()
       .where((id) => !OpenAmpService.instance.isRestricted(id) && _rateFor(id) != null)
-      .map((id) => id == SeqAssets.policy ? '' : id)
       .toList();
 
-  /// The fee defaults to the asset being sent WHEN a producer prices it; else tSEQ when the feed
-  /// prices it; else the first priced held asset. No privileged tSEQ fallback — if the feed doesn't
-  /// price SEQ, tSEQ isn't chosen. (null = pay natively in tSEQ.)
-  String? _defaultFeeFor(String assetId) {
-    if (assetId != SeqAssets.policy && _rateFor(assetId) != null) return assetId;
-    if (_rateFor(SeqAssets.policy) != null) return null; // tSEQ, only because the feed prices it
-    final priced = _feeOptions();
-    if (priced.isEmpty) return null;                     // feed unavailable: fall to the tx-format's native tSEQ path
-    return priced.first.isEmpty ? null : priced.first;
-  }
-
-  /// Build rate for a chosen NON-policy fee asset: the node's published rate. Fee options are gated
-  /// to priced assets (see _feeOptions), so this is always present; a null here is a programming
-  /// error (an unpriced asset must never reach the builder), surfaced as a hard error.
-  BigInt _feeRate(String assetId) => _rateFor(assetId)!;
-
-  /// True when the chosen fee asset isn't priced by the node. With strict gating this should never
-  /// hold for an offered asset; kept as a last-line guard.
-  bool get _feeUnpriced => _feeAsset != null && _rateFor(_feeAsset!) == null;
+  /// The fee asset by the wallet rule ([walletFeeAsset]): the asset sent when the node
+  /// accepts it, else the accepted asset whose largest coin covers the most fees; null
+  /// when the wallet holds nothing the node accepts. Never a tSEQ fallback.
+  String? _defaultFeeFor(String assetId) => walletFeeAsset(
+        moved: assetId,
+        rates: _feeRates,
+        // Before the first sync of this session, the cached balances stand in for the largest coins.
+        largestCoin: _largestCoins.isNotEmpty
+            ? _largestCoins
+            : {for (final b in _balances) b.assetId: BigInt.tryParse(b.atoms) ?? BigInt.zero},
+      );
 
   Future<void> _pickAsset() async {
     final rows = [
@@ -286,7 +264,7 @@ class _SendTabState extends State<SendTab> {
         // Re-apply the "fee in the asset being sent" default for the new asset.
         // (BTC pays its own fee in BTC, so the fee-asset picker doesn't apply.)
         _feeManual = false;
-        _feeAsset = picked == _btcId ? null : _defaultFeeFor(picked);
+        _feeAsset = _defaultFeeFor(picked);
         _feeRateCtl.clear(); // the rate unit differs (sat/vB for BTC, asset/vB otherwise)
       });
     }
@@ -298,21 +276,14 @@ class _SendTabState extends State<SendTab> {
       title: 'Pay fee in',
       rows: [
         for (final id in _feeOptions())
-          AssetPickerItem(
-            hex: id,
-            ticker: id.isEmpty ? 'tSEQ' : SeqAssets.labelFor(id).ticker,
-            name: SeqAssets.labelFor(id.isEmpty ? SeqAssets.policy : id).subtitle,
-          ),
+          AssetPickerItem(hex: id, ticker: SeqAssets.labelFor(id).ticker, name: SeqAssets.labelFor(id).subtitle),
       ],
-      balanceOf: (id) {
-        final hex = id.isEmpty ? SeqAssets.policy : id;
-        return formatAtoms(_balanceOf(hex), SeqAssets.labelFor(hex).precision);
-      },
+      balanceOf: (id) => formatAtoms(_balanceOf(id), SeqAssets.labelFor(id).precision),
     );
     if (picked != null) {
       setState(() {
         _feeManual = true;
-        _feeAsset = picked.isEmpty ? null : picked;
+        _feeAsset = picked;
       });
     }
   }
@@ -324,12 +295,6 @@ class _SendTabState extends State<SendTab> {
     }
     return '0';
   }
-
-  /// Warning copy when the chosen fee asset isn't priced by this node — the rate
-  /// is estimated and producers may reject it (rescue via RBF).
-  String _feeUnpricedMessage() =>
-      '$_feeLabel isn\'t priced for fees by this node, so the fee rate is estimated. '
-      'Producers may not accept it. If it stalls, speed it up or replace it (RBF) from History.';
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(ambraSnack(m));
 
@@ -366,34 +331,28 @@ class _SendTabState extends State<SendTab> {
 
     // Fund checks (fees are multi-asset — another asset's balance can't cover a
     // fee), so the user isn't asked to authorize a doomed payment.
-    core.FeeAsset? feeAsset;
-    if (_feeAsset == null) {
-      // Paying in the policy asset (tSEQ) — only happens when you're sending it;
-      // leave a little behind for the fee.
-      if (_assetId == SeqAssets.policy && atoms == bal) {
-        return _snack('Leave a little tSEQ for the network fee; send a bit less.');
-      }
-    } else {
-      final feeBal = BigInt.tryParse(_balanceOf(_feeAsset!)) ?? BigInt.zero;
-      if (feeBal <= BigInt.zero) return _snack('You have no $_feeLabel to pay the fee with.');
-      // The chosen fee asset is gated to producer-priced (see _feeOptions), so its rate is present.
-      feeAsset = core.FeeAsset(assetId: _feeAsset!, rate: _feeRate(_feeAsset!));
+    final feeHex = _feeAsset;
+    final feeRate = feeHex == null ? null : _rateFor(feeHex);
+    if (feeHex == null || feeRate == null) return _snack(noFeeAssetMessage);
+    // The fee comes out of the same asset when it is the one sent: leave a little behind.
+    if (feeHex == _assetId && atoms == bal) {
+      return _snack('Leave a little ${label.ticker} for the network fee; send a bit less.');
     }
+    final feeBal = BigInt.tryParse(_balanceOf(feeHex)) ?? BigInt.zero;
+    if (feeBal <= BigInt.zero) return _snack('You have no $_feeLabel to pay the fee with.');
+    final feeAsset = feeAssetParam(feeHex, feeRate);
 
     // Optional fee rate in the chosen asset's own units per vByte (never sat/vB,
     // which is a Bitcoin unit). Convert it to the internal rate lwk needs:
-    // r × 10^precision × R / 1e5, where R is the asset's published rate (tSEQ, the
-    // native asset, uses the 1e8 reference scale). Empty = network default.
+    // r × 10^precision × R / 1e5, where R is the asset's published rate (tSEQ's
+    // included). Empty = the network default.
     double? feeRateSatKvb;
     final frText = _feeRateCtl.text.trim();
     if (frText.isNotEmpty) {
       final fr = double.tryParse(frText);
       if (fr == null || fr <= 0) return _snack('Enter a valid fee rate, or leave it blank.');
-      final label = SeqAssets.labelFor(_feeAsset ?? SeqAssets.policy);
-      // Policy asset (tSEQ) pays natively at the reference scale (structural); a non-policy fee asset
-      // is gated to priced, so its published rate is present — no fabricated fallback.
-      final rate = (_feeAsset == null) ? _policyScale : _rateFor(_feeAsset!)!;
-      feeRateSatKvb = fr * math.pow(10, label.precision) * rate.toDouble() / 100000;
+      final label = SeqAssets.labelFor(feeHex);
+      feeRateSatKvb = fr * math.pow(10, label.precision) * feeRate.toDouble() / 100000;
     }
 
     final txid = await showModalBottomSheet<String>(
@@ -600,14 +559,12 @@ class _SendTabState extends State<SendTab> {
                   onTap: canPickFee ? _pickFee : null,
                 ),
                 const SizedBox(height: 10),
-                if (_feeUnpriced)
-                  WarnCallout(_feeUnpricedMessage())
+                if (_feeAsset == null)
+                  const WarnCallout(noFeeAssetMessage)
                 else
                   Text(
-                    _feeAsset == null
-                        ? 'Fee paid in tSEQ at the network rate.'
-                        : 'Fee paid in $_feeLabel at the node\'s published rate. '
-                            'Confirmation depends on producers accepting it.',
+                    'Fee paid in $_feeLabel at the node\'s published rate. '
+                    'Confirmation depends on producers accepting it.',
                     style: AmbraText.sub,
                   ),
                 const SizedBox(height: 16),

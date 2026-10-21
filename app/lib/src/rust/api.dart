@@ -2017,12 +2017,18 @@ class WalletSync {
   final int tipHeight;
   final String tipHash;
   final List<AssetBalance> balances;
+
+  /// Each asset's largest single coin (atoms), for the fee-asset rule: when the asset
+  /// moved cannot pay the fee, the wallet pays it in the accepted asset whose largest
+  /// coin covers the most fees.
+  final List<AssetBalance> largestCoins;
   final int nextIndex;
 
   const WalletSync({
     required this.tipHeight,
     required this.tipHash,
     required this.balances,
+    required this.largestCoins,
     required this.nextIndex,
   });
 
@@ -2031,6 +2037,7 @@ class WalletSync {
       tipHeight.hashCode ^
       tipHash.hashCode ^
       balances.hashCode ^
+      largestCoins.hashCode ^
       nextIndex.hashCode;
 
   @override
@@ -2041,6 +2048,7 @@ class WalletSync {
           tipHeight == other.tipHeight &&
           tipHash == other.tipHash &&
           balances == other.balances &&
+          largestCoins == other.largestCoins &&
           nextIndex == other.nextIndex;
 }
 

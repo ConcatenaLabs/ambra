@@ -87,8 +87,12 @@ module that implements it.
 
 **Send**
 - Sequentia send of any held asset, with the signature Sequentia feature: an **any-asset
-  fee picker**. The fee defaults to the asset being sent and can be paid in any asset the
-  network accepts, at the node's published exchange rates. Optional fee-rate override,
+  fee picker**. The fee asset follows the wallet rule wherever Ambra builds a Sequentia
+  transaction (`app/lib/src/data/fee_asset_rule.dart`): the asset being moved when the node
+  accepts it, else the accepted asset whose largest coin covers the most fees. The Sequence
+  token is never a default or a fallback; a wallet holding nothing the node accepts is told
+  so. Any accepted asset can be picked instead, at the node's published exchange rates, the
+  Sequence token's included. Optional fee-rate override,
   always denominated in **the chosen fee asset's own units per vByte** (never sat/vB;
   sats are Bitcoin-only) (`app/lib/src/screens/send_screen.dart`).
 - One asset picker, shared with the swap composer (`app/lib/src/widgets/asset_sheet.dart`):

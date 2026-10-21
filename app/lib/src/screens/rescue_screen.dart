@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../rust/api.dart' as core;
 import '../data/api_client.dart';
+import '../data/asset_picker.dart';
 import '../data/config.dart';
+import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
+import '../widgets/asset_sheet.dart';
 import '../widgets/widgets.dart';
 
 enum RescueMode { bump, replace, cpfp }
@@ -58,6 +61,74 @@ Future<String?> showRescueActions(BuildContext context, core.TxRow tx) async {
   );
 }
 
+/// The fee asset and rate of a rescue. The asset follows the wallet rule
+/// ([walletFeeAsset]) from the asset the transaction moves; the rate field is in
+/// that asset's own units per vByte, and keeps its value in reference terms when
+/// the user picks another asset.
+class _RescueFee {
+  _RescueFee(this.refPerVb);
+  final rate = TextEditingController();
+  double refPerVb; // reference atoms per vByte
+  Map<String, BigInt> rates = {};
+  Map<String, BigInt> largest = {};
+  String? asset; // null = nothing the node accepts
+
+  String get label => asset == null ? '—' : SeqAssets.labelFor(asset!).ticker;
+
+  /// Held assets the node accepts for fees, tSEQ judged like any other.
+  List<String> options(Map<String, BigInt> held) =>
+      [for (final e in held.entries) if (e.value > BigInt.zero && feeRateFor(rates, e.key) != null) e.key];
+
+  void choose(String? moved, {String? spendsAllOf}) {
+    asset = walletFeeAsset(moved: moved, rates: rates, largestCoin: largest, exclude: {?spendsAllOf});
+    show();
+  }
+
+  void show() {
+    final a = asset;
+    if (a == null) return;
+    rate.text = formatAssetRate(assetRateFromReference(refPerVb, feeRateFor(rates, a)!, SeqAssets.labelFor(a).precision));
+  }
+
+  /// Keep what is typed, in reference terms, before the asset changes.
+  void remember() {
+    final a = asset;
+    final v = double.tryParse(rate.text.trim());
+    if (a == null || v == null || v <= 0) return;
+    refPerVb = referenceKvbFromAssetRate(v, feeRateFor(rates, a)!, SeqAssets.labelFor(a).precision) / 1000;
+  }
+
+  /// The core's arguments for what is typed, or an error to show.
+  ({core.FeeAsset? param, double kvb, String? error}) read() {
+    final a = asset;
+    if (a == null) return (param: null, kvb: 0, error: noFeeAssetMessage);
+    final v = double.tryParse(rate.text.trim());
+    if (v == null || v <= 0) return (param: null, kvb: 0, error: 'Enter a fee rate');
+    final r = feeRateFor(rates, a)!;
+    return (param: feeAssetParam(a, r), kvb: referenceKvbFromAssetRate(v, r, SeqAssets.labelFor(a).precision), error: null);
+  }
+
+  Future<void> pick(BuildContext context, Map<String, BigInt> held, VoidCallback changed) async {
+    final picked = await showAssetSheet(
+      context,
+      title: 'Pay fee in',
+      rows: [
+        for (final id in options(held))
+          AssetPickerItem(hex: id, ticker: SeqAssets.labelFor(id).ticker, name: SeqAssets.labelFor(id).subtitle),
+      ],
+      balanceOf: (id) => formatAtoms((held[id] ?? BigInt.zero).toString(), SeqAssets.labelFor(id).precision),
+    );
+    if (picked == null) return;
+    remember();
+    asset = picked;
+    show();
+    changed();
+  }
+}
+
+Map<String, BigInt> _heldMap(List<core.AssetBalance> balances) =>
+    {for (final b in balances) b.assetId: BigInt.tryParse(b.atoms) ?? BigInt.zero};
+
 class _RescueFeeSheet extends StatefulWidget {
   const _RescueFeeSheet({required this.tx, required this.mode});
   final core.TxRow tx;
@@ -67,10 +138,8 @@ class _RescueFeeSheet extends StatefulWidget {
 }
 
 class _RescueFeeSheetState extends State<_RescueFeeSheet> {
-  final _rate = TextEditingController(text: '10'); // sat/vB; an aggressive rescue rate
+  final _fee = _RescueFee(10); // an aggressive rescue rate: 10 reference atoms per vByte
   List<core.AssetBalance> _balances = [];
-  Map<String, BigInt> _feeRates = {};
-  String? _feeAsset; // null = pay the fee in tSEQ (the builder's default)
   bool _loading = true;
   bool _busy = false;
   String? _error;
@@ -85,9 +154,12 @@ class _RescueFeeSheetState extends State<_RescueFeeSheet> {
 
   @override
   void dispose() {
-    _rate.dispose();
+    _fee.rate.dispose();
     super.dispose();
   }
+
+  /// The asset the stuck transaction paid its fee in: the one it moves for the rule.
+  String get _txFeeAsset => widget.tx.feeAsset.isEmpty ? SeqAssets.policy : widget.tx.feeAsset;
 
   Future<void> _load() async {
     try {
@@ -110,12 +182,14 @@ class _RescueFeeSheetState extends State<_RescueFeeSheet> {
       if (!mounted) return;
       setState(() {
         _balances = s.balances;
-        _feeRates = rates;
-        // The field is sat/vB; convert the suggested sat/kvB child rate down.
+        _fee.rates = rates;
+        _fee.largest = largestCoinsOf(s);
+        // The suggested child rate is in reference atoms per kvB.
         if (suggested != null && suggested > 0) {
           final vb = (suggested / 1000).ceil();
-          _rate.text = (vb < 1 ? 1 : vb).toString();
+          _fee.refPerVb = (vb < 1 ? 1 : vb).toDouble();
         }
+        _fee.choose(_txFeeAsset);
         _loading = false;
       });
     } catch (e) {
@@ -128,11 +202,6 @@ class _RescueFeeSheetState extends State<_RescueFeeSheet> {
     }
   }
 
-  BigInt? _rateFor(String hex) {
-    final t = SeqAssets.labelFor(hex).ticker;
-    return _feeRates[t] ?? _feeRates[hex];
-  }
-
   String _balanceOf(String id) {
     for (final b in _balances) {
       if (b.assetId == id) return b.atoms;
@@ -140,57 +209,17 @@ class _RescueFeeSheetState extends State<_RescueFeeSheet> {
     return '0';
   }
 
-  List<String> _feeEligible() => _balances
-      .map((b) => b.assetId)
-      .where((id) =>
-          id != SeqAssets.policy && _rateFor(id) != null && (BigInt.tryParse(_balanceOf(id)) ?? BigInt.zero) > BigInt.zero)
-      .toList();
-
-  String get _feeLabel => _feeAsset == null ? 'tSEQ' : SeqAssets.labelFor(_feeAsset!).ticker;
-
-  Future<void> _pickFee() async {
-    final ids = ['', ..._feeEligible()];
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: AmbraColors.panel,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(AmbraRadii.card))),
-      builder: (_) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Padding(padding: EdgeInsets.all(16), child: Text('Pay fee in', style: AmbraText.title)),
-          for (final id in ids)
-            ListTile(
-              title: Text(id.isEmpty ? 'tSEQ' : SeqAssets.labelFor(id).ticker, style: AmbraText.body),
-              onTap: () => Navigator.pop(context, id),
-            ),
-          const SizedBox(height: 8),
-        ]),
-      ),
-    );
-    if (picked != null) setState(() => _feeAsset = picked.isEmpty ? null : picked);
-  }
-
   Future<void> _confirm() async {
-    final rateVb = double.tryParse(_rate.text.trim());
-    if (rateVb == null || rateVb <= 0) {
-      setState(() => _error = 'Enter a fee rate');
+    final f = _fee.read();
+    if (f.error != null) {
+      setState(() => _error = f.error);
       return;
     }
-    final rate = rateVb * 1000; // sat/vB → sat/kvB
-    core.FeeAsset? feeAsset;
-    if (_feeAsset != null) {
-      final r = _rateFor(_feeAsset!);
-      if (r == null) {
-        setState(() => _error = 'No published fee rate for $_feeLabel');
-        return;
-      }
-      feeAsset = core.FeeAsset(assetId: _feeAsset!, rate: r);
-    }
-    final feeBal =
-        BigInt.tryParse(_feeAsset == null ? _balanceOf(SeqAssets.policy) : _balanceOf(_feeAsset!)) ?? BigInt.zero;
+    final rate = f.kvb;
+    final feeAsset = f.param;
+    final feeBal = BigInt.tryParse(_balanceOf(_fee.asset!)) ?? BigInt.zero;
     if (feeBal <= BigInt.zero) {
-      setState(() => _error = _feeAsset == null
-          ? 'You need some tSEQ to pay the fee.'
-          : 'You have no $_feeLabel to pay the fee with.');
+      setState(() => _error = 'You have no ${_fee.label} to pay the fee with.');
       return;
     }
     setState(() {
@@ -231,7 +260,8 @@ class _RescueFeeSheetState extends State<_RescueFeeSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final canFeeAsset = _feeEligible().isNotEmpty;
+    final held = _heldMap(_balances);
+    final canFeeAsset = _fee.options(held).length > 1;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
@@ -251,7 +281,7 @@ class _RescueFeeSheetState extends State<_RescueFeeSheet> {
                 const SizedBox(height: 8),
                 InkWell(
                   borderRadius: BorderRadius.circular(AmbraRadii.input),
-                  onTap: canFeeAsset ? _pickFee : null,
+                  onTap: canFeeAsset ? () => _fee.pick(context, held, () => setState(() {})) : null,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                     decoration: BoxDecoration(
@@ -260,14 +290,14 @@ class _RescueFeeSheetState extends State<_RescueFeeSheet> {
                       borderRadius: BorderRadius.circular(AmbraRadii.input),
                     ),
                     child: Row(children: [
-                      Text(_feeLabel, style: AmbraText.body),
+                      Text(_fee.label, style: AmbraText.body),
                       const Spacer(),
                       if (canFeeAsset) const Icon(Icons.expand_more, color: AmbraColors.dim, size: 20),
                     ]),
                   ),
                 ),
                 const SizedBox(height: 16),
-                AmbraField(label: 'Fee rate ($_feeLabel/vB)', controller: _rate),
+                AmbraField(label: 'Fee rate (${_fee.label}/vB)', controller: _fee.rate),
                 const SizedBox(height: 16),
                 if (_error != null)
                   Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(_error!, style: const TextStyle(color: AmbraColors.red))),
@@ -320,11 +350,9 @@ class _RescueReplaceSheet extends StatefulWidget {
 class _RescueReplaceSheetState extends State<_RescueReplaceSheet> {
   final _addr = TextEditingController();
   final _amount = TextEditingController();
-  final _rate = TextEditingController(text: '10'); // sat/vB
+  final _fee = _RescueFee(10); // an aggressive rate: 10 reference atoms per vByte
   List<core.AssetBalance> _balances = [];
-  Map<String, BigInt> _feeRates = {};
-  String _assetId = SeqAssets.policy;
-  String? _feeAsset; // null = tSEQ
+  String? _assetId; // the asset the replacement sends; the original's until the user picks
   bool _loading = true;
   bool _busy = false;
   String? _error;
@@ -339,7 +367,7 @@ class _RescueReplaceSheetState extends State<_RescueReplaceSheet> {
   void dispose() {
     _addr.dispose();
     _amount.dispose();
-    _rate.dispose();
+    _fee.rate.dispose();
     super.dispose();
   }
 
@@ -355,9 +383,12 @@ class _RescueReplaceSheetState extends State<_RescueReplaceSheet> {
       if (!mounted) return;
       setState(() {
         _balances = s.balances;
-        _feeRates = rates;
-        final held = _heldIds();
-        if (held.isNotEmpty && !held.contains(_assetId)) _assetId = held.first;
+        _fee.rates = rates;
+        _fee.largest = largestCoinsOf(s);
+        // The replacement sends what the original sent (the asset it took the most of), never a
+        // preferred asset; the fee follows it by the wallet rule.
+        _assetId ??= _originalAsset();
+        _fee.choose(_assetId);
         _loading = false;
       });
     } catch (e) {
@@ -381,53 +412,51 @@ class _RescueReplaceSheetState extends State<_RescueReplaceSheet> {
     return '0';
   }
 
-  BigInt? _rateFor(String hex) {
-    final t = SeqAssets.labelFor(hex).ticker;
-    return _feeRates[t] ?? _feeRates[hex];
+  /// The asset the original transaction moved out of this wallet the most of.
+  String? _originalAsset() {
+    String? best;
+    BigInt most = BigInt.zero;
+    for (final d in widget.tx.deltas) {
+      final out = -(BigInt.tryParse(d.atoms) ?? BigInt.zero);
+      if (out > most) {
+        most = out;
+        best = d.assetId;
+      }
+    }
+    return best;
   }
 
-  List<String> _feeEligible() => _balances
-      .map((b) => b.assetId)
-      .where((id) =>
-          id != SeqAssets.policy && _rateFor(id) != null && (BigInt.tryParse(_balanceOf(id)) ?? BigInt.zero) > BigInt.zero)
-      .toList();
-  String get _feeLabel => _feeAsset == null ? 'tSEQ' : SeqAssets.labelFor(_feeAsset!).ticker;
-
-  Future<void> _pick(String title, List<String> ids, void Function(String) onPick) async {
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: AmbraColors.panel,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(AmbraRadii.card))),
-      builder: (_) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Padding(padding: const EdgeInsets.all(16), child: Text(title, style: AmbraText.title)),
-          for (final id in ids)
-            ListTile(
-              title: Text(id.isEmpty ? 'tSEQ' : SeqAssets.labelFor(id).ticker, style: AmbraText.body),
-              onTap: () => Navigator.pop(context, id),
-            ),
-          const SizedBox(height: 8),
-        ]),
-      ),
+  Future<void> _pickAsset() async {
+    final held = _heldIds();
+    final picked = await showAssetSheet(
+      context,
+      title: 'Choose asset',
+      rows: [
+        for (final id in held)
+          AssetPickerItem(hex: id, ticker: SeqAssets.labelFor(id).ticker, name: SeqAssets.labelFor(id).subtitle),
+      ],
+      balanceOf: (id) => formatAtoms(_balanceOf(id), SeqAssets.labelFor(id).precision),
     );
-    if (picked != null) onPick(picked);
+    if (picked == null) return;
+    setState(() {
+      _fee.remember();
+      _assetId = picked;
+      _fee.choose(picked);
+    });
   }
 
   Future<void> _confirm() async {
-    final label = SeqAssets.labelFor(_assetId);
+    final assetId = _assetId;
+    if (assetId == null) return setState(() => _error = 'Choose the asset to send');
+    final label = SeqAssets.labelFor(assetId);
     final addr = _addr.text.trim();
     final atoms = parseAtoms(_amount.text, label.precision);
-    final rateVb = double.tryParse(_rate.text.trim());
     if (addr.isEmpty) return setState(() => _error = 'Enter a recipient address');
     if (atoms == null || atoms <= BigInt.zero) return setState(() => _error = 'Enter a valid amount');
     if (atoms >= (BigInt.one << 64)) return setState(() => _error = 'Amount is too large');
-    if (rateVb == null || rateVb <= 0) return setState(() => _error = 'Enter a fee rate');
-    core.FeeAsset? feeAsset;
-    if (_feeAsset != null) {
-      final r = _rateFor(_feeAsset!);
-      if (r == null) return setState(() => _error = 'No published fee rate for $_feeLabel');
-      feeAsset = core.FeeAsset(assetId: _feeAsset!, rate: r);
-    }
+    final f = _fee.read();
+    if (f.error != null) return setState(() => _error = f.error);
+    final feeAsset = f.param;
     setState(() {
       _busy = true;
       _error = null;
@@ -447,8 +476,8 @@ class _RescueReplaceSheetState extends State<_RescueReplaceSheet> {
         mnemonic: m,
         esploraUrl: Backend.esplora,
         txid: widget.tx.txid,
-        newRecipients: [core.Recipient(address: addr, assetId: _assetId, satoshi: atoms)],
-        feeRateSatKvb: rateVb * 1000,
+        newRecipients: [core.Recipient(address: addr, assetId: assetId, satoshi: atoms)],
+        feeRateSatKvb: f.kvb,
         feeAsset: feeAsset,
       );
       final signed = await core.signPset(mnemonic: m, pset: pset);
@@ -466,9 +495,10 @@ class _RescueReplaceSheetState extends State<_RescueReplaceSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final label = SeqAssets.labelFor(_assetId);
+    final label = SeqAssets.labelFor(_assetId ?? '');
     final held = _heldIds();
-    final canFeeAsset = _feeEligible().isNotEmpty;
+    final heldMap = _heldMap(_balances);
+    final canFeeAsset = _fee.options(heldMap).length > 1;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
@@ -487,8 +517,8 @@ class _RescueReplaceSheetState extends State<_RescueReplaceSheet> {
                   const SectionLabel('Asset'),
                   const SizedBox(height: 8),
                   _RescuePicker(
-                    label: label.ticker,
-                    onTap: held.isEmpty ? null : () => _pick('Choose asset', held, (v) => setState(() => _assetId = v)),
+                    label: _assetId == null ? '—' : label.ticker,
+                    onTap: held.isEmpty ? null : _pickAsset,
                   ),
                   const SizedBox(height: 14),
                   AmbraField(label: 'Recipient address', controller: _addr, hint: 'tb1… or tsqb1…', mono: true),
@@ -498,14 +528,11 @@ class _RescueReplaceSheetState extends State<_RescueReplaceSheet> {
                   const SectionLabel('Pay fee in'),
                   const SizedBox(height: 8),
                   _RescuePicker(
-                    label: _feeLabel,
-                    onTap: canFeeAsset
-                        ? () => _pick('Pay fee in', ['', ..._feeEligible()],
-                            (v) => setState(() => _feeAsset = v.isEmpty ? null : v))
-                        : null,
+                    label: _fee.label,
+                    onTap: canFeeAsset ? () => _fee.pick(context, heldMap, () => setState(() {})) : null,
                   ),
                   const SizedBox(height: 14),
-                  AmbraField(label: 'Fee rate ($_feeLabel/vB)', controller: _rate),
+                  AmbraField(label: 'Fee rate (${_fee.label}/vB)', controller: _fee.rate),
                   const SizedBox(height: 16),
                   if (_error != null)
                     Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(_error!, style: const TextStyle(color: AmbraColors.red))),
