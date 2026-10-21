@@ -1,23 +1,30 @@
-/// One asset's figure across every rail the wallet holds it on: on-chain, leaves and
-/// Lightning. The figure is their sum, in both modes; developer mode also shows the
-/// split. Native BTC is never a leaf (a tree on Sequentia holds no BTC).
+/// One asset's figure across everything the wallet holds of it: on-chain, leaves,
+/// Lightning (the wallet's own channels, the reserve included) and, for the Sequence
+/// token, what is staked (bonded stakes, unbonding outputs not yet returned, the
+/// delegation record). The figure is their sum, in both modes; user mode shows the
+/// parts one tap away ([splitParts]), developer mode beside each row. Native BTC is
+/// never a leaf (a tree on Sequentia holds no BTC) and never staked.
 class AssetFigure {
-  const AssetFigure({required this.id, required this.onchain, required this.leaves, required this.lightning});
+  AssetFigure(
+      {required this.id, required this.onchain, required this.leaves, required this.lightning, BigInt? staked})
+      : staked = staked ?? BigInt.zero;
   final String id;
   final BigInt onchain;
   final BigInt leaves;
   final BigInt lightning;
-  BigInt get total => onchain + leaves + lightning;
+  final BigInt staked;
+  BigInt get total => onchain + leaves + lightning + staked;
 }
 
-/// Every Sequentia asset held on any rail, each with its figure. No asset comes
-/// first: the order is the caller's.
+/// Every Sequentia asset held anywhere, each with its figure. No asset comes first:
+/// the order is the caller's.
 List<AssetFigure> assetFigures({
   required Map<String, BigInt> onchain,
   Map<String, BigInt> leaves = const {},
   Map<String, BigInt> lightning = const {},
+  Map<String, BigInt> staked = const {},
 }) {
-  final ids = <String>{...onchain.keys, ...leaves.keys, ...lightning.keys};
+  final ids = <String>{...onchain.keys, ...leaves.keys, ...lightning.keys, ...staked.keys};
   return [
     for (final id in ids)
       AssetFigure(
@@ -25,9 +32,19 @@ List<AssetFigure> assetFigures({
         onchain: onchain[id] ?? BigInt.zero,
         leaves: leaves[id] ?? BigInt.zero,
         lightning: lightning[id] ?? BigInt.zero,
+        staked: staked[id] ?? BigInt.zero,
       ),
   ];
 }
+
+/// The parts of a figure in the plain words user mode shows one tap away, only the
+/// parts held: On-chain, Off-chain (leaves), Lightning, Staked.
+List<(String, BigInt)> splitParts(AssetFigure f) => [
+      ('On-chain', f.onchain),
+      ('Off-chain', f.leaves),
+      ('Lightning', f.lightning),
+      ('Staked', f.staked),
+    ].where((p) => p.$2 > BigInt.zero).toList();
 
 /// The headline: every holding valued in the reference unit and summed, every asset
 /// on equal terms. [value] answers a holding's value, or null when it has no price;

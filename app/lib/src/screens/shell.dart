@@ -197,6 +197,7 @@ class _BalanceTabState extends State<BalanceTab> {
     PriceService.instance.addListener(_onPrice);
     DevMode.instance.addListener(_onPrice);
     LeafService.instance.addListener(_onPrice);
+    StakeHoldings.instance.addListener(_onPrice);
     // Asset labels can arrive after first paint (network registry); rebuild so
     // rows show the real ticker/precision instead of a hex placeholder.
     RegistryService.instance.addListener(_onPrice);
@@ -232,6 +233,7 @@ class _BalanceTabState extends State<BalanceTab> {
     PriceService.instance.removeListener(_onPrice);
     DevMode.instance.removeListener(_onPrice);
     LeafService.instance.removeListener(_onPrice);
+    StakeHoldings.instance.removeListener(_onPrice);
     RegistryService.instance.removeListener(_onPrice);
     super.dispose();
   }
@@ -267,6 +269,9 @@ class _BalanceTabState extends State<BalanceTab> {
       // Read back this device's OWN Lightning channels for the per-row split (best-effort; dormant
       // when LN isn't deployed). Non-blocking so the balance render never waits on the LSP.
       unawaited(_refreshLn(m, s.balances));
+      // What is staked is the holder's Sequence token and counts in its figure; read
+      // from the explorer at most every few minutes (the stake screen reads it at once).
+      unawaited(StakeHoldings.instance.refresh(m));
       if (mounted) {
         setState(() {
           _sync = s;
@@ -330,17 +335,21 @@ class _BalanceTabState extends State<BalanceTab> {
     // last-known values instantly instead of a spinner. tSEQ is not privileged,
     // so a 0 balance is hidden like any other asset's.
     final onchainBalances = _sync?.balances ?? _cachedBalances;
-    // Every rail counts in each asset's one figure and in the headline, in both modes:
-    // on-chain, leaves (once this wallet joined an operator; the leaf wallet syncs in
-    // either mode) and Lightning. Developer mode also splits the figure by rail.
+    // Everything the wallet holds of an asset counts in its one figure and in the
+    // headline, in both modes: on-chain, leaves (once this wallet joined an operator;
+    // the leaf wallet syncs in either mode), Lightning (its own channels, the reserve
+    // included) and, for the Sequence token, what is staked. User mode shows one figure
+    // per row, its parts one tap away; developer mode splits it beside the row and
+    // keeps the Lightning controls.
     final dev = DevMode.instance.on;
-    final rails = dev && LeafService.instance.joined;
     final leafAtoms = LeafService.instance.joined ? LeafService.instance.leafAtoms() : const <String, BigInt>{};
     final onchainOf = {
       for (final b in onchainBalances ?? const <core.AssetBalance>[]) b.assetId: BigInt.tryParse(b.atoms) ?? BigInt.zero
     };
     final chans = _lnChannels.cast<Map>();
-    BigInt lnOf(String id) => legLiquidity(chans, RailTarget.asset(hex: id, ticker: SeqAssets.labelFor(id).ticker)).spendable;
+    BigInt lnOf(String id) => legLiquidity(chans, RailTarget.asset(hex: id, ticker: SeqAssets.labelFor(id).ticker)).balance;
+    final stakedAtoms = StakeHoldings.instance.stakedAtoms;
+    final staked = {if (stakedAtoms > BigInt.zero) SeqAssets.policy: stakedAtoms};
     final lnAssets = <String>{
       for (final c in chans)
         if ('${c['node_key'] ?? ''}'.isNotEmpty && '${c['leg'] ?? ''}' != 'btc' && '${c['asset'] ?? ''}'.isNotEmpty) '${c['asset']}',
@@ -351,6 +360,7 @@ class _BalanceTabState extends State<BalanceTab> {
             onchain: onchainOf,
             leaves: leafAtoms,
             lightning: {for (final id in {...onchainOf.keys, ...leafAtoms.keys, ...lnAssets}) id: lnOf(id)},
+            staked: staked,
           );
     final figureOf = {for (final f in figures ?? const <AssetFigure>[]) f.id: f};
     final balances = figures == null
@@ -368,7 +378,7 @@ class _BalanceTabState extends State<BalanceTab> {
     // scan failed) plus Lightning. Its row comes first and is listed even at 0.
     final btcSatsStr = _btc?.balanceSats ?? _btcCachedSats;
     final btcOnchain = BigInt.tryParse(btcSatsStr ?? '0') ?? BigInt.zero;
-    final btcLn = legLiquidity(chans, RailTarget.btc()).spendable;
+    final btcLn = legLiquidity(chans, RailTarget.btc()).balance;
     final btcTotal = btcOnchain + btcLn;
     final hasBtc = btcTotal > BigInt.zero;
     // Headline total: computed over EVERY asset and every rail, hidden assets
@@ -445,15 +455,17 @@ class _BalanceTabState extends State<BalanceTab> {
                 _BtcRow(
                       sats: btcTotal.toString(),
                       onchainSats: btcOnchain,
+                      lightningSats: btcLn,
                       stale: _btcStale,
                       channels: _lnChannels,
                       onChanged: _refresh,
-                      rails: rails),
+                      dev: dev),
                 for (final h in part.visible)
                   _AssetRow(
                     balance: byId[h]!,
-                    onchain: figureOf[h]?.onchain ?? BigInt.tryParse(byId[h]!.atoms) ?? BigInt.zero,
-                    rails: rails ? (onchain: figureOf[h]?.onchain ?? BigInt.zero, leaves: figureOf[h]?.leaves ?? BigInt.zero) : null,
+                    figure: figureOf[h],
+                    dev: dev,
+                    leavesJoined: LeafService.instance.joined,
                     channels: _lnChannels,
                     onChanged: _refresh,
                     onHide: () async {
@@ -480,32 +492,54 @@ class _BalanceTabState extends State<BalanceTab> {
   }
 }
 
-class _AssetRow extends StatelessWidget {
-  const _AssetRow({required this.balance, required this.onchain, this.rails, this.channels = const [], this.onChanged, this.onHide});
-  // The row's figure: every rail of the asset together.
+class _AssetRow extends StatefulWidget {
+  const _AssetRow(
+      {required this.balance,
+      this.figure,
+      this.dev = false,
+      this.leavesJoined = false,
+      this.channels = const [],
+      this.onChanged,
+      this.onHide});
+  // The row's figure: everything the wallet holds of the asset.
   final core.AssetBalance balance;
-  // What of it is on-chain, which the Lightning card moves.
-  final BigInt onchain;
-  // Developer mode: the row's figure split by rail (on-chain, leaves); Lightning
-  // comes from [channels]. null in user mode.
-  final ({BigInt onchain, BigInt leaves})? rails;
+  // Its parts (null for a restricted asset, which is held in the enclave alone).
+  final AssetFigure? figure;
+  // Developer mode: the parts beside the row and the Lightning controls. User mode:
+  // one figure, its parts one tap away.
+  final bool dev;
+  final bool leavesJoined;
   final List<Map<dynamic, dynamic>> channels;
   final VoidCallback? onChanged;
   // Per-asset Hide control (quiet trailing icon). null = no control — the BTC row
   // ([_BtcRow]) has no such parameter at all: the parent-chain asset is never hideable.
   final VoidCallback? onHide;
   @override
+  State<_AssetRow> createState() => _AssetRowState();
+}
+
+class _AssetRowState extends State<_AssetRow> {
+  bool _open = false;
+
+  @override
   Widget build(BuildContext context) {
+    final balance = widget.balance;
+    final figure = widget.figure;
     final label = SeqAssets.labelFor(balance.assetId);
     final amount = formatAtoms(balance.atoms, label.precision);
     // Restricted (OpenAMP enclave) assets are not on-chain UTXOs, so they can't be moved into a
     // Lightning channel; only issued on-chain assets get the split. The same flag opens the
-    // restriction-disclosure detail sheet on tap; ordinary rows stay non-interactive.
+    // restriction-disclosure detail sheet on tap.
     final restricted = OpenAmpService.instance.isRestricted(balance.assetId);
     final movable = !restricted;
+    final parts = figure == null ? const <(String, BigInt)>[] : splitParts(figure);
+    final VoidCallback? onTap = restricted
+        ? () => showRestrictedAssetDetail(context, balance.assetId)
+        : (!widget.dev && parts.isNotEmpty ? () => setState(() => _open = !_open) : null);
     return Column(children: [
       InkWell(
-        onTap: restricted ? () => showRestrictedAssetDetail(context, balance.assetId) : null,
+        key: Key('row-${label.ticker}'),
+        onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: Row(children: [
@@ -531,13 +565,13 @@ class _AssetRow extends StatelessWidget {
                       style: AmbraText.sub),
                 ),
             ]),
-            if (onHide != null)
+            if (widget.onHide != null)
               Padding(
                 padding: const EdgeInsets.only(left: 6),
                 child: Tooltip(
                   message: 'Hide this asset. It still counts toward your total and stays findable by search.',
                   child: InkWell(
-                    onTap: onHide,
+                    onTap: widget.onHide,
                     borderRadius: BorderRadius.circular(12),
                     child: const Padding(
                       padding: EdgeInsets.all(4),
@@ -549,28 +583,55 @@ class _AssetRow extends StatelessWidget {
           ]),
         ),
       ),
-      if (rails != null)
+      if (!widget.dev && _open && parts.isNotEmpty)
+        _SplitLine(ticker: label.ticker, precision: label.precision, parts: parts),
+      if (widget.dev && figure != null)
         _RailLine(
           ticker: label.ticker,
           precision: label.precision,
-          onchain: rails!.onchain,
-          leaves: rails!.leaves,
-          lightning: legLiquidity(channels.cast<Map>(), RailTarget.asset(hex: balance.assetId, ticker: label.ticker)).spendable,
+          onchain: figure.onchain,
+          leaves: widget.leavesJoined || figure.leaves > BigInt.zero ? figure.leaves : null,
+          lightning: figure.lightning,
+          staked: figure.staked,
         ),
-      if (movable)
+      if (widget.dev && movable)
         _LnMeta(
-          channels: channels,
+          channels: widget.channels,
           leg: _Leg(
             chain: 'seq',
             asset: balance.assetId,
             ticker: label.ticker,
             precision: label.precision,
             target: RailTarget.asset(hex: balance.assetId, ticker: label.ticker),
-            onchainAtoms: onchain,
+            onchainAtoms: figure?.onchain ?? BigInt.tryParse(balance.atoms) ?? BigInt.zero,
           ),
-          onChanged: onChanged,
+          onChanged: widget.onChanged,
         ),
     ]);
+  }
+}
+
+/// User mode: a figure's parts in plain words, under the row once it is tapped. Only
+/// the parts held.
+class _SplitLine extends StatelessWidget {
+  const _SplitLine({required this.ticker, required this.precision, required this.parts});
+  final String ticker;
+  final int precision;
+  final List<(String, BigInt)> parts;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          parts.map((p) => '${p.$1} ${formatAtoms(p.$2.toString(), precision)}').join('  ·  '),
+          key: Key('split-$ticker'),
+          style: AmbraText.sub,
+        ),
+      ),
+    );
   }
 }
 
@@ -652,77 +713,96 @@ class _HiddenAssetsSection extends StatelessWidget {
 }
 
 /// The Bitcoin parent-chain balance row — first-class, same layout as [_AssetRow].
-class _BtcRow extends StatelessWidget {
+class _BtcRow extends StatefulWidget {
   const _BtcRow(
       {required this.sats,
       required this.onchainSats,
+      required this.lightningSats,
       this.stale = false,
       this.channels = const [],
       this.onChanged,
-      this.rails = false});
-  // Developer mode: the rail split beneath the row.
-  final bool rails;
+      this.dev = false});
+  // Developer mode: the parts beside the row and the Lightning controls.
+  final bool dev;
   // The row's figure: on-chain and Lightning together.
   final String sats;
   final BigInt onchainSats;
+  final BigInt lightningSats;
   final bool stale; // showing the last-known balance because the latest scan failed
   final List<Map<dynamic, dynamic>> channels;
   final VoidCallback? onChanged;
   @override
+  State<_BtcRow> createState() => _BtcRowState();
+}
+
+class _BtcRowState extends State<_BtcRow> {
+  bool _open = false;
+
+  @override
   Widget build(BuildContext context) {
-    final amount = formatAtoms(sats, 8);
-    final approx = PriceService.instance.approx('BTC', sats, 8);
+    final amount = formatAtoms(widget.sats, 8);
+    final approx = PriceService.instance.approx('BTC', widget.sats, 8);
+    final parts = [('On-chain', widget.onchainSats), ('Lightning', widget.lightningSats)]
+        .where((p) => p.$2 > BigInt.zero)
+        .toList();
     return Column(children: [
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        child: Row(children: [
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('BTC',
-                  style: TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w600, fontSize: 15)),
-              const SizedBox(height: 2),
-              Text(stale ? 'Bitcoin testnet4 · last known (offline)' : 'Bitcoin testnet4',
-                  style: stale ? AmbraText.sub.copyWith(color: AmbraColors.amber2) : AmbraText.sub),
+      InkWell(
+        key: const Key('row-BTC'),
+        onTap: !widget.dev && parts.isNotEmpty ? () => setState(() => _open = !_open) : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('BTC',
+                    style: TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w600, fontSize: 15)),
+                const SizedBox(height: 2),
+                Text(widget.stale ? 'Bitcoin testnet4 · last known (offline)' : 'Bitcoin testnet4',
+                    style: widget.stale ? AmbraText.sub.copyWith(color: AmbraColors.amber2) : AmbraText.sub),
+              ]),
+            ),
+            const SizedBox(width: 12),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+              Text(amount,
+                  style: AmbraText.mono.copyWith(color: AmbraColors.txt, fontSize: 15, fontWeight: FontWeight.w700)),
+              if (approx != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(approx, style: AmbraText.sub),
+                ),
             ]),
-          ),
-          const SizedBox(width: 12),
-          Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-            Text(amount,
-                style: AmbraText.mono.copyWith(color: AmbraColors.txt, fontSize: 15, fontWeight: FontWeight.w700)),
-            if (approx != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Text(approx, style: AmbraText.sub),
-              ),
           ]),
-        ]),
+        ),
       ),
-      if (rails)
+      if (!widget.dev && _open && parts.isNotEmpty) _SplitLine(ticker: 'BTC', precision: 8, parts: parts),
+      if (widget.dev)
         _RailLine(
           ticker: 'BTC',
           precision: 8,
-          onchain: onchainSats,
+          onchain: widget.onchainSats,
           leaves: null,
-          lightning: legLiquidity(channels.cast<Map>(), RailTarget.btc()).spendable,
+          btc: true,
+          lightning: widget.lightningSats,
         ),
-      _LnMeta(
-        channels: channels,
-        leg: _Leg(
-          chain: 'btc',
-          asset: null,
-          ticker: 'BTC',
-          precision: 8,
-          target: RailTarget.btc(),
-          onchainAtoms: onchainSats,
+      if (widget.dev)
+        _LnMeta(
+          channels: widget.channels,
+          leg: _Leg(
+            chain: 'btc',
+            asset: null,
+            ticker: 'BTC',
+            precision: 8,
+            target: RailTarget.btc(),
+            onchainAtoms: widget.onchainSats,
+          ),
+          onChanged: widget.onChanged,
         ),
-        onChanged: onChanged,
-      ),
     ]);
   }
 }
 
-/// Developer mode: a row's balance split by rail, "X on-chain · Y leaves · Z
-/// Lightning". BTC has no leaves: a tree on Sequentia holds no BTC.
+/// Developer mode: a row's figure split by rail, "X on-chain · Y in leaves · Z on
+/// Lightning · W staked". BTC has no leaves: a tree on Sequentia holds no BTC.
 class _RailLine extends StatelessWidget {
   const _RailLine({
     required this.ticker,
@@ -730,23 +810,31 @@ class _RailLine extends StatelessWidget {
     required this.onchain,
     required this.leaves,
     required this.lightning,
+    this.staked,
+    this.btc = false,
   });
   final String ticker;
   final int precision;
   final BigInt onchain;
-  final BigInt? leaves; // null: this asset cannot be a leaf (BTC)
+  final BigInt? leaves; // null: no leaf wallet joined, or BTC
   final BigInt lightning;
+  final BigInt? staked; // shown when above zero
+  final bool btc;
 
   @override
   Widget build(BuildContext context) {
     String f(BigInt v) => formatAtoms(v.toString(), precision);
-    final leafPart = leaves == null ? 'no leaves (a tree on Sequentia holds no BTC)' : '${f(leaves!)} leaves';
+    final parts = <String>[
+      '${f(onchain)} on-chain',
+      if (btc) 'no leaves (a tree on Sequentia holds no BTC)' else if (leaves != null) '${f(leaves!)} in leaves',
+      '${f(lightning)} on Lightning',
+      if (staked != null && staked! > BigInt.zero) '${f(staked!)} staked',
+    ];
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Align(
         alignment: Alignment.centerLeft,
-        child: Text('${f(onchain)} on-chain · $leafPart · ${f(lightning)} Lightning',
-            key: Key('rails-$ticker'), style: AmbraText.sub),
+        child: Text(parts.join(' · '), key: Key('rails-$ticker'), style: AmbraText.sub),
       ),
     );
   }
@@ -790,7 +878,7 @@ class _LnMeta extends StatelessWidget {
     // No metacard on a zero row without a channel (never an empty "Not in Lightning yet" card).
     if (!hasChannel && !movable) return const SizedBox.shrink();
     final split = hasChannel
-        ? '${formatAtoms(liq.spendable.toString(), leg.precision)} ${leg.ticker} in Lightning · '
+        ? '${formatAtoms(liq.balance.toString(), leg.precision)} ${leg.ticker} in Lightning · '
             '${formatAtoms(leg.onchainAtoms.toString(), leg.precision)} on-chain'
         : 'Not in Lightning yet · ${formatAtoms(leg.onchainAtoms.toString(), leg.precision)} ${leg.ticker} on-chain';
     return Container(

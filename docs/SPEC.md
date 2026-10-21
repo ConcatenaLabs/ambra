@@ -75,8 +75,9 @@ oracle would be the only full fix (out of scope, shared with the web).
 
 ## Balance model (no privileged asset)
 
-The Balance headline is the total portfolio value across every held asset and every
-rail it is held on (on-chain, Lightning and leaves), in both modes, valued in a
+The Balance headline is the total portfolio value across every held asset and
+everything held of it (on-chain, leaves, Lightning and staked), in both modes, hidden
+assets included, valued in a
 user-chosen reference currency (USD default; picker in the top bar, price-server
 fed). Every asset counts equally toward the total: BTC (parent chain), tSEQ, issued
 assets, and OpenAMP restricted assets. When prices are unavailable the headline
@@ -85,11 +86,20 @@ row per held asset; zero balances are hidden for every asset alike, tSEQ include
 There is no "native asset" label anywhere: the Sequence token (tSEQ) is one row among
 equals, and its only special role is staking.
 
-Each row's figure is the asset on every rail together: on-chain, Lightning and leaves
-(`app/lib/src/data/portfolio.dart`). More > Mode is one setting, kept for each wallet
-(`ambra.mode.<fingerprint>`), user mode by default; in developer mode the split is shown
-beneath each row: "X on-chain · Y leaves · Z Lightning". BTC's line says it has no
-leaves (a tree on Sequentia holds no BTC). A wallet that joined a leaf operator keeps
+Each row's figure is everything held of the asset (`app/lib/src/data/portfolio.dart`):
+on-chain; leaves; Lightning, the wallet's own channels (`node_key` present, state
+`CHANNELD_*`) at `balance_units` (its share, the reserve included), falling back to
+`spendable_units`; and, for the Sequence token, what is staked at the staking key m/2/0
+(bonded stakes under the time lock and the height lock, unbonding outputs not yet
+returned, the delegation record; `app/lib/src/data/stakes.dart`, read from the explorer
+at most every five minutes and at once on the stake screen). What a payment may use is
+still `spendable_units`. More > Mode is one setting, kept for each wallet
+(`ambra.mode.<fingerprint>`), user mode by default. User mode shows one figure per row
+and no rail and no Lightning control; a tap on a row shows its parts in plain words,
+only those held: "On-chain · Off-chain · Lightning · Staked". Developer mode shows the
+split beneath each row, "X on-chain · Y in leaves · Z on Lightning · W staked", with the
+Move to Lightning / Move to chain card. BTC's line says it has no leaves (a tree on
+Sequentia holds no BTC). A wallet that joined a leaf operator keeps
 its leaf wallet syncing in either mode, and its leaves count in the figures and the
 headline in both. More > Leaves shows the leaf wallet's own view: per asset, each state
 the library names (`live`, `operator-confirmed`, `pending`, …), and the leaf wallet's
