@@ -706,6 +706,19 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     return '0';
   }
 
+  /// User mode: the wallet chooses how value moves, so each leg gets a rail without asking. A leg
+  /// pays over Lightning only when that is the one place the wallet holds the asset (nothing of it on
+  /// chain, some in a channel), and otherwise moves on chain, the route every pair has; it receives
+  /// on chain. A rail already set stands. Developer mode leaves the choice to the user.
+  void _userModeRails() {
+    if (DevMode.instance.on || _payAsset == null || _receiveAsset == null) return;
+    if (_payRailLn == null) {
+      final onChain = (BigInt.tryParse(_bal(_payAsset!)) ?? BigInt.zero) > BigInt.zero;
+      _payRailLn = !onChain && _lnAtoms(_payAsset!) > BigInt.zero;
+    }
+    _recvRailLn ??= false;
+  }
+
   /// Spendable Lightning atoms for an asset (or BTC), from this wallet's OWN
   /// provisioned channels. Zero when Lightning is dormant or there's no channel.
   BigInt _lnAtoms(String hex) {
@@ -2001,6 +2014,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     // The pair is tradeable (book renders, quote works) — but placement also needs both settlement rails
     // chosen (spec §6.5, no default). canQuote gates showing the CTA; railsChosen enables it.
     final canQuote = !_loading && _error == null && _payAsset != null && _receiveAsset != null && r.isValid;
+    _userModeRails();
     final railsChosen = _payRailLn != null && _recvRailLn != null;
     final placeable = railsChosen;
     return Column(children: [
@@ -2008,7 +2022,10 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
         child: ListView(padding: const EdgeInsets.fromLTRB(20, 20, 20, 24), children: [
           const Text('Swap', style: AmbraText.h1),
           const SizedBox(height: 6),
-          const Text('Trade any Sequentia asset, or Bitcoin, from one order book. You choose how you pay and receive; the book matches on price and size.',
+          Text(
+              DevMode.instance.on
+                  ? 'Trade any Sequentia asset, or Bitcoin, from one order book. You choose how you pay and receive; the book matches on price and size.'
+                  : 'Trade any Sequentia asset, or Bitcoin, from one order book. The book matches on price and size.',
               style: AmbraText.sub),
           const SizedBox(height: 16),
           if (_xInFlight != null) ...[
@@ -2168,7 +2185,9 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
       const SizedBox(height: 14),
       _priceField(), // editable limit price / read-only market estimate — IDENTICAL on every pair (§6.4)
       const SizedBox(height: 4),
-      _railPicks(), // both settlement rails, always present (spec §5/§6.5)
+      // Both settlement rails, chosen by the user in developer mode (spec §5/§6.5); in user mode the
+      // wallet chooses them ([_userModeRails]) and says nothing of them.
+      if (DevMode.instance.on) _railPicks(),
       if (_leafChosen) ...[
         LeafRailPanel(
           pay: _payAsset,
