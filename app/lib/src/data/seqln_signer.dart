@@ -143,6 +143,18 @@ class SeqlnSigner {
   /// one, never the node; the device forgets them when it is rebuilt.
   void approveCloseDestination(List<int> script) => _inner.approveCloseDestination(script: script);
 
+  /// The default payment limit, in reference atoms a day, that every asset without a limit of
+  /// its own is held to at its rate ([setAssetRate]). Null: no limit.
+  void setReferencePaymentLimit(BigInt? referenceAtoms) =>
+      _inner.setReferencePaymentLimit(referenceAtoms: referenceAtoms);
+
+  /// The rate the reference limit is converted at for [asset] (an asset id, or `btc`), as the
+  /// node's fee exchange rates give it: reference atoms per 10^8 atoms of the asset.
+  void setAssetRate(String asset, BigInt? rate) => _inner.setAssetRate(asset: asset, rate: rate);
+
+  /// The payment limit for [asset] (an asset id, or `btc`), in its atoms a day; null for none.
+  BigInt? paymentLimit(String asset) => _inner.paymentLimit(asset: asset);
+
   /// Select the validating policy. Returns `this` for chaining.
   SeqlnSigner setPolicy(SeqlnPolicy mode) {
     _inner.setEnforce(enforce: mode == SeqlnPolicy.enforce);

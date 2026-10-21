@@ -104,6 +104,11 @@ module that implements it.
   Bitcoin chain).
 - A Lightning invoice, scanned or pasted into the recipient field, opens the Lightning pay
   screen, for BTC and for Sequentia assets (`lntsqt…` on the testnet).
+- The phone's signer approves Lightning payments up to a daily limit of 1,000 US dollars,
+  held in each asset at the node's rate (Bitcoin at the price feed's), so it is worth the
+  same in every asset (`app/lib/src/data/ln_payment_limit.dart`). A payment over it is
+  refused in plain words and nothing is sent; developer mode sets another figure under
+  More > Lightning payment limit.
 - QR scanning of recipient addresses using the first-party CameraX preview plus a
   **pure-Dart ZXing decoder (`zxing2`)**, so the app needs no Google ML Kit and no Play
   Services (`app/lib/src/screens/scan_screen.dart`).
@@ -155,7 +160,8 @@ module that implements it.
   uses. **User mode** (the default): one figure per asset, and the wallet chooses how
   value moves. **Developer mode**: every rail by name, side by side (on-chain, leaves and
   Lightning), each with its balance and its manual controls, and the developer tools:
-  each balance row splits into on-chain, leaves and Lightning, and More > Leaves appears.
+  each balance row splits into on-chain, leaves and Lightning, and More > Leaves,
+  More > Contracts and More > Lightning payment limit appear.
   BTC has no leaves: a tree on Sequentia holds no BTC (`app/lib/src/data/dev_mode.dart`).
 - A wallet that joined a leaf operator keeps its leaf wallet syncing in either mode, since
   its coins have dates to keep; user mode shows nothing of leaves but their value, in each
@@ -328,9 +334,9 @@ flutter_rust_bridge_codegen generate
 Rust core (from `ambra_core/`):
 
 ```sh
-# Offline tests: architecture smoke test + Lightning signer conformance
-# (a 99-frame corpus byte-compared against libhsmd's replies)
-cargo test --test smoke --test signer_conformance
+# Offline tests: architecture smoke test, Lightning signer conformance
+# (a 99-frame corpus byte-compared against libhsmd's replies) and its payment limit
+cargo test --test smoke --test signer_conformance --test payment_limit
 
 # Network tests (hit the live public testnet; run explicitly)
 cargo test --test sync -- --nocapture

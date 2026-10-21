@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'close_destinations.dart';
 import 'config.dart';
+import 'ln_payment_limit.dart';
 import 'lsp_client.dart';
 import 'seqln_keys.dart' as keys;
 import 'seqln_signer.dart';
@@ -113,6 +114,9 @@ class LightningService extends ChangeNotifier {
           (!isBtc && RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(ov)) ? _hexBytes(ov) : id.transportPrivkey;
       final signer = SeqlnSigner.fromMnemonic(id.signingSeed)
         ..setPolicy(Backend.lnPolicy == 'enforce' ? SeqlnPolicy.enforce : SeqlnPolicy.permissive);
+      // The daily payment limit, in the reference unit, at each asset's rate.
+      await LnPaymentLimit.instance
+          .applyTo(signer, isBtc ? const [LnPaymentLimit.kBtcKey] : SeqAssets.resolvedIds);
       signer.onStatus = (st) {
         if (isBtc) {
           nodeIdBtc = st.nodeId ?? nodeIdBtc;
@@ -345,6 +349,8 @@ class LightningService extends ChangeNotifier {
     // the same identity (cross-client recovery). id was derived above for this asset/BTC node.
     final signer = SeqlnSigner.fromMnemonic(id.signingSeed)
       ..setPolicy(Backend.lnPolicy == 'enforce' ? SeqlnPolicy.enforce : SeqlnPolicy.permissive);
+    // The daily payment limit, in the reference unit, at this node's asset's rate.
+    await LnPaymentLimit.instance.applyTo(signer, [btc ? LnPaymentLimit.kBtcKey : asset!]);
     // The wallet's own close destinations this node may already be closing to: the device keeps
     // none across a start.
     for (final hex in await CloseDestinations.forNode(nodeKey)) {
@@ -418,7 +424,23 @@ class LightningService extends ChangeNotifier {
     if (m == null) throw Exception('Your wallet is locked; unlock it and try again.');
     final nodeKey =
         asset == kLnBtc ? await connectNode(m, chain: 'btc') : await connectNode(m, asset: asset);
-    return LspClient.nodePay(nodeKey: nodeKey, bolt11: bolt11);
+    try {
+      return await LspClient.nodePay(nodeKey: nodeKey, bolt11: bolt11);
+    } catch (e) {
+      // A payment over the device's daily limit is refused in plain words.
+      throw LnPaymentLimit.explain(e);
+    }
+  }
+
+  /// Gives every running signer the payment limit again (after it is changed in developer mode).
+  Future<void> reapplyPaymentLimit() async {
+    final s = _signer, b = _signerBtc;
+    if (s != null) await LnPaymentLimit.instance.applyTo(s, SeqAssets.resolvedIds);
+    if (b != null) await LnPaymentLimit.instance.applyTo(b, const [LnPaymentLimit.kBtcKey]);
+    for (final e in _own.entries) {
+      final sig = e.value.signer;
+      if (sig != null) await LnPaymentLimit.instance.applyTo(sig, [...SeqAssets.resolvedIds, LnPaymentLimit.kBtcKey]);
+    }
   }
 
   /// The wss base for a provisioned node's Noise responder: the active node origin, scheme-swapped
