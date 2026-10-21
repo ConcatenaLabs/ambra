@@ -54,7 +54,7 @@ flutter build apk --release        # or: flutter run
 Tests, from `ambra_core/`:
 
 ```sh
-cargo test --test smoke --test signer_conformance --test payment_limit
+cargo test --test smoke --test signer_conformance --test payment_limit --test seqob_relay_offer
 cargo test --test sync -- --nocapture
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocapture
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test contracts -- --nocapture
