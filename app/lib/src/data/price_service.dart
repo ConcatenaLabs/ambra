@@ -55,6 +55,10 @@ class PriceService extends ChangeNotifier {
     return _prices[t];
   }
 
+  /// The price of [ticker] in US dollars, the reference unit of the node's fee exchange rates on
+  /// the testnet; null when the feed has none.
+  double? usdPrice(String ticker) => _priceUsd(ticker);
+
   double? _refPriceUsd() {
     if (_ref == 'USD') return 1.0;
     if (_ref == 'BTC') return _prices['TBTC'];

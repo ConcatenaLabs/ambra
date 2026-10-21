@@ -18,8 +18,9 @@
 //!
 //! Mirrors `wasm/src/lib.rs` one-for-one:
 //!   * [`SeqlnSigner`]  — `fromMnemonic` / `fromHsmSecret`, `processFrame`,
-//!     `setEnforce`, `nodeId`, `approveCloseDestination` (Signer + Signer.fromMnemonic +
-//!     setEnforce + approveCloseDestination in JS).
+//!     `setEnforce`, `nodeId`, `approveCloseDestination`, `setReferencePaymentLimit`,
+//!     `setAssetRate`, `paymentLimit` (Signer + Signer.fromMnemonic + setEnforce +
+//!     approveCloseDestination + the payment-limit setters in JS).
 //!   * [`NoiseSession`] — the Noise_XK **initiator** the device plays when it
 //!     connects OUT to the hosted proxy's responder.
 //!   * [`device_pubkey`] — the transport pubkey a host pins for a device privkey.
@@ -37,6 +38,7 @@ use seqln_signer::frame;
 use seqln_signer::hsm_secret;
 use seqln_signer::kernel::{Kernel, BIP32_VER_TEST_PRIVATE, BIP32_VER_TEST_PUBLIC};
 use seqln_signer::noise::{self, Initiator, Transport};
+use seqln_signer::payments::{AssetKey, DefaultLimit};
 use seqln_signer::policy::Policy;
 
 fn arr32(b: &[u8], what: &str) -> Result<[u8; 32]> {
@@ -130,6 +132,51 @@ impl SeqlnSigner {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .approve_close_destination(script);
+    }
+
+    /// Set the default payment limit, in reference atoms per period (a day),
+    /// that every asset without a limit of its own is held to at its rate
+    /// ([`SeqlnSigner::set_asset_rate`]). `None`: no limit. The device's own
+    /// default is 1,000 reference units a day.
+    #[frb(sync)]
+    pub fn set_reference_payment_limit(&self, reference_atoms: Option<u64>) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut limits = g.limits().clone();
+        limits.default = match reference_atoms {
+            Some(r) => DefaultLimit::Reference(r),
+            None => DefaultLimit::None,
+        };
+        g.set_limits(limits);
+    }
+
+    /// Give the rate the reference limit is converted at for `asset` (a
+    /// display-order asset id, or `btc`), as the node's fee exchange rates give
+    /// it: reference atoms per 10^8 atoms of the asset. `None` or 0 forgets it,
+    /// and the asset is then held to 10,000,000 of its own atoms.
+    #[frb(sync)]
+    pub fn set_asset_rate(&self, asset: String, rate: Option<u64>) -> Result<()> {
+        let key = AssetKey::parse(&asset).map_err(|e| anyhow!(e))?;
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut limits = g.limits().clone();
+        match rate {
+            Some(r) if r > 0 => {
+                limits.rates.insert(key, r);
+            }
+            _ => {
+                limits.rates.remove(&key);
+            }
+        }
+        g.set_limits(limits);
+        Ok(())
+    }
+
+    /// The payment limit for `asset` (a display-order asset id, or `btc`), in
+    /// its atoms per period; `None` when it has none.
+    #[frb(sync)]
+    pub fn payment_limit(&self, asset: String) -> Result<Option<u64>> {
+        let key = AssetKey::parse(&asset).map_err(|e| anyhow!(e))?;
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(g.limits().limit_atoms(&key))
     }
 
     /// Drive ONE hsmd request -> reply. `frame_bytes` is a single signer-split

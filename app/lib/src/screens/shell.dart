@@ -16,6 +16,7 @@ import '../data/format.dart';
 import '../data/hidden_assets.dart';
 import '../data/leaf_service.dart';
 import '../data/lightning_service.dart';
+import '../data/ln_payment_limit.dart';
 import '../data/ln_rail.dart';
 import '../data/portfolio.dart';
 import '../data/lsp_client.dart';
@@ -1681,6 +1682,48 @@ class MoreTab extends StatelessWidget {
     );
   }
 
+  /// Developer mode: the daily Lightning payment limit the phone's signer applies, in the
+  /// reference unit (US dollars on the testnet), held in each asset at its rate.
+  Future<void> _editLnLimit(BuildContext context) async {
+    final lim = LnPaymentLimit.instance;
+    await lim.load();
+    if (!context.mounted) return;
+    final ctl = TextEditingController(text: '${lim.reference}');
+    final v = await showDialog<int>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: AmbraColors.panel,
+        title: const Text('Lightning payment limit', style: AmbraText.title),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Text(
+            'What your phone lets your Lightning nodes pay in a day, in US dollars, held in each '
+            'asset at the node\'s rate.',
+            style: AmbraText.muted,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('ln-limit-field'),
+            controller: ctl,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: const InputDecoration(suffixText: 'USD a day'),
+          ),
+        ]),
+        actions: [
+          GhostButton(label: 'Cancel', onPressed: () => Navigator.pop(dctx)),
+          TextButton(
+            key: const Key('ln-limit-save'),
+            onPressed: () => Navigator.pop(dctx, int.tryParse(ctl.text.trim())),
+            child: const Text('Save', style: TextStyle(color: AmbraColors.amber, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    if (v == null || v < 1) return;
+    await lim.set(v);
+    await LightningService.instance.reapplyPaymentLimit();
+  }
+
   Future<void> _remove(BuildContext context) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -1810,6 +1853,16 @@ class MoreTab extends StatelessWidget {
                   label: 'Contracts',
                   icon: Icons.description_outlined,
                   onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ContractsScreen())),
+                ),
+                const SizedBox(height: 8),
+                ListenableBuilder(
+                  listenable: LnPaymentLimit.instance,
+                  builder: (context, _) => SecondaryButton(
+                    key: const Key('open-ln-limit'),
+                    label: 'Lightning payment limit: ${LnPaymentLimit.instance.reference} USD a day',
+                    icon: Icons.speed,
+                    onPressed: () => _editLnLimit(context),
+                  ),
                 ),
               ],
             ]),

@@ -117,6 +117,10 @@ abstract class SeqlnSigner implements RustOpaqueInterface {
   /// matches the id the hosted node reports once it boots over the link.
   String nodeId();
 
+  /// The payment limit for `asset` (a display-order asset id, or `btc`), in
+  /// its atoms per period; `None` when it has none.
+  BigInt? paymentLimit({required String asset});
+
   /// Drive ONE hsmd request -> reply. `frame_bytes` is a single signer-split
   /// frame (`signer_frame.h`: little-endian `u32 len | is_main | node_id? |
   /// dbid | capabilities | hsmd_msg`); the return is the single framed reply
@@ -125,10 +129,22 @@ abstract class SeqlnSigner implements RustOpaqueInterface {
   /// only on a libhsmd-fatal condition (which closes the transport natively).
   Uint8List processFrame({required List<int> frameBytes});
 
+  /// Give the rate the reference limit is converted at for `asset` (a
+  /// display-order asset id, or `btc`), as the node's fee exchange rates give
+  /// it: reference atoms per 10^8 atoms of the asset. `None` or 0 forgets it,
+  /// and the asset is then held to 10,000,000 of its own atoms.
+  void setAssetRate({required String asset, BigInt? rate});
+
   /// Turn the validating policy on (`enforce`) or off (`permissive`). The
   /// phone has no env, so this is how the caller selects enforce mode (the
   /// device then refuses to sign a commitment that moves funds off-channel).
   void setEnforce({required bool enforce});
+
+  /// Set the default payment limit, in reference atoms per period (a day),
+  /// that every asset without a limit of its own is held to at its rate
+  /// ([`SeqlnSigner::set_asset_rate`]). `None`: no limit. The device's own
+  /// default is 1,000 reference units a day.
+  void setReferencePaymentLimit({BigInt? referenceAtoms});
 }
 
 /// The two device keys for one hosted SeqLN node, derived from the wallet mnemonic —
