@@ -335,7 +335,8 @@ Rust core (from `ambra_core/`):
 
 ```sh
 # Offline tests: architecture smoke test, Lightning signer conformance
-# (a 99-frame corpus byte-compared against libhsmd's replies) and its payment limit
+# (a 99-frame corpus byte-compared against libhsmd's replies, less the device's two
+# deliberate departures: covenant capabilities, watchtower-friendly penalties) and its payment limit
 cargo test --test smoke --test signer_conformance --test payment_limit
 
 # Network tests (hit the live public testnet; run explicitly)

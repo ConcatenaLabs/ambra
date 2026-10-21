@@ -71,11 +71,64 @@ fn hex(b: &[u8]) -> String {
     s
 }
 
+
+/// The hsmd message type of a request frame: the first big-endian u16 of the
+/// hsmd message, after the frame's length, is_main, node id (when not main),
+/// dbid and capabilities.
+fn request_type(frame: &[u8]) -> u16 {
+    let is_main = frame[4] != 0;
+    let off = 4 + 1 + if is_main { 0 } else { 33 } + 8 + 8;
+    u16::from_be_bytes(frame[off..off + 2].try_into().unwrap())
+}
+
+/// The capabilities and the rest of an INIT reply (type 114).
+fn init_caps(framed: &[u8]) -> (Vec<u32>, Vec<u8>) {
+    let body = &framed[4..];
+    let n = u16::from_be_bytes(body[6..8].try_into().unwrap()) as usize;
+    let caps = (0..n)
+        .map(|i| u32::from_be_bytes(body[8 + 4 * i..12 + 4 * i].try_into().unwrap()))
+        .collect();
+    (caps, body[8 + 4 * n..].to_vec())
+}
+
+/// The device's two deliberate departures from libhsmd, checked exactly:
+///
+/// - INIT (request 11): the device also advertises the taproot-covenant spends
+///   (`SIGN_TCOV_*`, 61 to 64), which libhsmd does not implement; every other
+///   capability, the version and the node id are libhsmd's.
+/// - A penalty to us (request 14): the device signs it `SIGHASH_SINGLE |
+///   ANYONECANPAY` (0x83), so a watchtower can add a fee input, where libhsmd
+///   signs `SIGHASH_ALL`; the reply is otherwise the same message.
+///
+/// Returns true when `got` differs from `want` only in one of these ways.
+fn deliberate_departure(req: &[u8], got: &[u8], want: &[u8]) -> bool {
+    match request_type(req) {
+        11 => {
+            let (mut gc, gr) = init_caps(got);
+            let (mut wc, wr) = init_caps(want);
+            wc.extend([61, 62, 63, 64]);
+            gc.sort();
+            wc.sort();
+            gc == wc && gr == wr && got[4..10] == want[4..10]
+        }
+        14 => {
+            got.len() == want.len()
+                && reply_type(got) == 112
+                && reply_type(want) == 112
+                && *want.last().unwrap() == 0x01
+                && *got.last().unwrap() == 0x83
+        }
+        _ => false,
+    }
+}
+
 const CORPUS: &[u8] = include_bytes!("fixtures/t2m2b-corpus.bin");
 const ORACLE: &[u8] = include_bytes!("fixtures/oracle_replies.bin");
 
 /// The whole point: replay the real corpus through the FFI `process_frame` and
-/// byte-compare every reply to libhsmd's. SUCCESS = 99/99 byte-identical.
+/// byte-compare every reply to libhsmd's: 96 byte-identical, and the three
+/// replies where the device departs from libhsmd on purpose
+/// ([`deliberate_departure`]) differ exactly that way.
 #[test]
 fn corpus_byte_exact_vs_libhsmd() {
     let requests = split_records(CORPUS);
@@ -97,16 +150,21 @@ fn corpus_byte_exact_vs_libhsmd() {
     let mut passed = 0usize;
     let mut sig_ops = 0usize;
     let mut tx_sigs = 0usize;
+    let mut departures = 0usize;
     for (i, (req, want)) in requests.iter().zip(oracle.iter()).enumerate() {
         let got = signer
             .process_frame(req.clone())
             .unwrap_or_else(|e| panic!("entry {i}: process_frame errored: {e}"));
-        assert_eq!(
-            hex(&got),
-            hex(want),
-            "entry {i} (reply type {}) byte mismatch",
-            reply_type(want)
-        );
+        if got != *want {
+            assert!(
+                deliberate_departure(req, &got, want),
+                "entry {i} (reply type {}) byte mismatch\n got {}\nwant {}",
+                reply_type(want),
+                hex(&got),
+                hex(want)
+            );
+            departures += 1;
+        }
         let t = reply_type(want);
         if sig_types.contains(&t) {
             sig_ops += 1;
@@ -118,9 +176,11 @@ fn corpus_byte_exact_vs_libhsmd() {
     }
     assert_eq!(passed, 99, "expected the full 99-frame corpus");
     assert!(tx_sigs > 0, "corpus should exercise tx-signature replies");
+    assert_eq!(departures, 3, "the INIT reply and the two penalties, and nothing else");
     println!(
-        "conformance: {passed}/{passed} byte-exact vs libhsmd \
-         ({sig_ops} signing ops, {tx_sigs} commitment/HTLC/penalty tx signatures)"
+        "conformance: {}/{passed} byte-exact vs libhsmd, {departures} deliberate departures \
+         ({sig_ops} signing ops, {tx_sigs} commitment/HTLC/penalty tx signatures)",
+        passed - departures
     );
 }
 
@@ -137,7 +197,10 @@ fn corpus_byte_exact_in_enforce_mode() {
         let got = signer
             .process_frame(req.clone())
             .unwrap_or_else(|e| panic!("entry {i}: process_frame errored: {e}"));
-        assert_eq!(hex(&got), hex(want), "entry {i} differs in enforce mode");
+        assert!(
+            got == *want || deliberate_departure(req, &got, want),
+            "entry {i} differs in enforce mode"
+        );
     }
 }
 
