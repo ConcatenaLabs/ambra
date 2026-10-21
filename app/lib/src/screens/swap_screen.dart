@@ -4,7 +4,6 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api_client.dart';
@@ -4073,21 +4072,6 @@ class _SparklinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_SparklinePainter old) => old.color != color || old.points != points;
-}
-
-/// Resolve the funded vout for a covenant scriptPubKey on the wallet's esplora.
-Future<int> resolveCovenantVout(String txid, String spkHex) async {
-  final r = await http
-      .get(Uri.parse('${Backend.esplora}/tx/$txid'), headers: {...Backend.authHeaders})
-      .timeout(const Duration(seconds: 30));
-  if (r.statusCode != 200) throw Exception('esplora /tx/$txid returned ${r.statusCode}');
-  final tx = jsonDecode(r.body) as Map<String, dynamic>;
-  final vout = (tx['vout'] as List?) ?? const [];
-  for (var i = 0; i < vout.length; i++) {
-    final o = vout[i] as Map;
-    if ('${o['scriptpubkey'] ?? ''}'.toLowerCase() == spkHex.toLowerCase()) return i;
-  }
-  throw Exception('funded covenant output not found in $txid');
 }
 
 /// The fee amount in its own asset plus a reference-currency approximation when the asset is

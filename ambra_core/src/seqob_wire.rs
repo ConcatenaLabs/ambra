@@ -199,6 +199,19 @@ fn bytes_to_hex(b: &[u8]) -> String {
     s
 }
 
+fn time_in_force_num(v: Option<&Value>) -> u64 {
+    match v {
+        Some(Value::Number(n)) => n.as_u64().unwrap_or(0),
+        Some(Value::String(s)) => match s.as_str() {
+            "TIME_IN_FORCE_UNSPECIFIED" => 0,
+            "TIME_IN_FORCE_IOC" => 1,
+            "TIME_IN_FORCE_FOK" => 2,
+            _ => s.parse::<u64>().unwrap_or(0),
+        },
+        _ => 0,
+    }
+}
+
 fn trade_dir_num(v: Option<&Value>) -> u64 {
     match v {
         Some(Value::Number(n)) => n.as_u64().unwrap_or(0),
@@ -241,11 +254,12 @@ fn encode_cross_chain(c: Option<&Value>) -> Option<Vec<u8>> {
     Some(w.bytes())
 }
 
+/// The resting outpoint (fields 1 and 2) is left out, as the relay leaves it out of
+/// the signed bytes: its watcher moves a covenant to a new outpoint on every partial
+/// fill while the maker is offline, and funding is checked on-chain instead.
 fn encode_covenant_terms(c: Option<&Value>) -> Option<Vec<u8>> {
     let c = c?;
     let mut w = Pw::new();
-    w.str(1, as_str(get(c, &["covenant_txid", "covenantTxid"])));
-    w.uint(2, as_u64(get(c, &["covenant_vout", "covenantVout"])));
     w.str(3, as_str(get(c, &["asset_a", "assetA"])));
     w.str(4, as_str(get(c, &["asset_b", "assetB"])));
     w.uint(5, as_u64(get(c, &["rate_num", "rateNum"])));
@@ -298,6 +312,7 @@ pub fn canonical_offer_bytes(o: &Value) -> Vec<u8> {
     w.msg(20, encode_same_chain(get(o, &["same_chain", "sameChain"])));
     w.msg(21, encode_cross_chain(get(o, &["cross_chain", "crossChain"])));
     w.msg(23, encode_covenant_terms(get(o, &["covenant"])));
+    w.tag_enum(24, time_in_force_num(get(o, &["time_in_force", "timeInForce"])));
     // maker_sig (31) is deliberately omitted.
     w.bytes()
 }
@@ -409,6 +424,42 @@ pub fn maker_key_from_seed(seed: &[u8]) -> Result<[u8; 32], String> {
     // rare out-of-range case rather than silently producing a bad key.
     SecretKey::from_slice(&k).map_err(|e| format!("derived maker key invalid: {e}"))?;
     Ok(k)
+}
+
+#[cfg(test)]
+mod relay_signed_tests {
+    use super::*;
+
+    /// A covenant offer the relay served from the public testnet book, its bytes
+    /// fields as hex (as the app normalises them). The relay checked its signature
+    /// with the outpoint left out of the signed bytes.
+    const RELAY_OFFER: &str = r#"{"offer_id": "ba4c463d8c44e58e38166e495d790d17", "schema_version": 1, "pair": {"base_asset": "2a515539da5e6a60caa7766ecd65bac0c10d15717ddd2088844ba58f4d04b9de", "quote_asset": "e39685e718516156679088d9400d11a1eb82bf7cc27c5b9f5a614b8c91246d13", "confidential": false}, "trade_dir": "TRADE_DIR_SELL", "base_amount": "3800000000", "offer_amount": "3800000000", "offer_asset": "2a515539da5e6a60caa7766ecd65bac0c10d15717ddd2088844ba58f4d04b9de", "want_amount": "3402390000", "want_asset": "e39685e718516156679088d9400d11a1eb82bf7cc27c5b9f5a614b8c91246d13", "allow_partial": true, "min_fill": "0", "created_at_unix": "1792144198", "expires_at_unix": "1792745398", "maker_pubkey": "032c2662dd2b05e030d66175ff5caa523858cd7a0c818ed1c688180c0eb91ae9b8", "fee_asset_hint": "e39685e718516156679088d9400d11a1eb82bf7cc27c5b9f5a614b8c91246d13", "min_anchor_depth": 0, "maker_ln_node_pubkey": "", "ln_connect_hints": [], "time_in_force": "TIME_IN_FORCE_UNSPECIFIED", "confidential": false, "covenant": {"covenant_txid": "22b19d9a0abb96b49a9b9e30c389e2183684da3c47b05ecac6d047a453f4a605", "covenant_vout": 0, "asset_a": "deb9044d8fa54b848820dd7d71150dc1c0ba65cd6e76a7ca606a5eda3955512a", "asset_b": "136d24918c4b615a9f5b7cc27cbf82eba1110d40d988906756615118e78596e3", "rate_num": "340239", "rate_den": "380000", "maker_prog": "061dc08a690bb7ce03dcea70ef1d1fc52144bacbe73abb2c1913c5497a3c41ac", "maker_prog_ver": 1, "min_lot": "3800000", "expiry_locktime": 186184, "maker_x": "061dc08a690bb7ce03dcea70ef1d1fc52144bacbe73abb2c1913c5497a3c41ac", "internal_key": "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0", "merkle_path": ["5f159188689cbf7a68c44f2fbd66eb318247c1eeb8500d6d43bd7d8933c140d0"]}, "maker_sig": "MEUCIQCgQKE4dGPH8ESXX7EwlyrCkG2SDQ8sCKwEhlozvcaAWgIgBpb249nCORh0J2aZ1IGTaeQY9wDS7Eo9aNAdqkZUEL8="}"#;
+
+    #[test]
+    fn a_relay_signed_covenant_offer_verifies() {
+        let o: Value = serde_json::from_str(RELAY_OFFER).unwrap();
+        assert!(verify_offer(&o));
+    }
+
+    #[test]
+    fn the_outpoint_is_not_signed_and_the_terms_are() {
+        let mut o: Value = serde_json::from_str(RELAY_OFFER).unwrap();
+        o["covenant"]["covenant_txid"] = Value::String("00".repeat(32));
+        o["covenant"]["covenant_vout"] = Value::from(7);
+        assert!(verify_offer(&o), "the watcher's re-rest at a new outpoint keeps the signature");
+        o["covenant"]["rate_num"] = Value::String("1".into());
+        assert!(!verify_offer(&o), "a changed rate is not the maker's offer");
+    }
+
+    #[test]
+    fn an_offer_signed_here_verifies_with_its_outpoint_moved() {
+        let mut o: Value = serde_json::from_str(RELAY_OFFER).unwrap();
+        o.as_object_mut().unwrap().remove("maker_sig");
+        sign_offer(&mut o, &[7u8; 32]).unwrap();
+        assert!(verify_offer(&o));
+        o["covenant"]["covenant_vout"] = Value::from(3);
+        assert!(verify_offer(&o));
+    }
 }
 
 #[cfg(test)]

@@ -439,8 +439,10 @@ pub fn covenant_maker_address(mnemonic: String, index: u32) -> Result<CovenantMa
 }
 
 /// The Sequentia transparent-address params (Elements bech32 HRP on testnet).
+/// The Sequentia testnet's address parameters (`tb1…` for an unblinded output),
+/// the ones every address the wallet hands to its own builders is parsed with.
 fn seq_addr_params() -> &'static lwk_wollet::elements::AddressParams {
-    &lwk_wollet::elements::AddressParams::ELEMENTS
+    crate::sequentia_testnet().address_params()
 }
 
 /// Derive `(maker_prog_hex, spk_hex, internal_x_only_hex)` for a maker index.
@@ -513,9 +515,11 @@ pub fn covenant_prepare_offer(
     let (maker_prog, _maker_spk, maker_x) = derive_maker_payout(&mnemonic, maker_index)?;
 
     let payout = covenant_maker_address(mnemonic.clone(), maker_index)?;
+    // The leaf bakes the asset ids in INTERNAL byte order: that is what the covenant's
+    // output-asset introspection compares against. The wallet speaks display hex.
     let order = covd::DeriveOrder {
-        asset_a: sell_asset.clone(),
-        asset_b: buy_asset.clone(),
+        asset_a: rev_hex(&sell_asset),
+        asset_b: rev_hex(&buy_asset),
         rate_num,
         rate_den,
         min_lot,
@@ -538,8 +542,10 @@ pub fn covenant_prepare_offer(
     let merkle_path: Vec<String> = tap.merkle_path.iter().map(|p| tohex(p)).collect();
 
     let prepared = serde_json::json!({
+        // Display ids; `ids_internal` says the leaf was derived from them byte-reversed.
         "sell_asset": sell_asset,
         "buy_asset": buy_asset,
+        "ids_internal": true,
         "sell_atoms": sell_atoms.to_string(),
         "buy_atoms": buy_atoms.to_string(),
         "rate_num": rate_num.to_string(),
@@ -597,11 +603,19 @@ pub fn covenant_finalize_offer(
         if a.is_empty() { sell_asset.clone() } else { a.to_string() }
     };
 
+    // CovenantTerms carry the ids the leaf baked: internal byte order for every record
+    // prepared with `ids_internal`, display for an older record (whose leaf baked display).
+    let ids_internal = p.get("ids_internal").and_then(|v| v.as_bool()).unwrap_or(false);
+    let (terms_a, terms_b) = if ids_internal {
+        (rev_hex(&sell_asset), rev_hex(&buy_asset))
+    } else {
+        (sell_asset.clone(), buy_asset.clone())
+    };
     let covenant = serde_json::json!({
         "covenant_txid": covenant_txid,
         "covenant_vout": covenant_vout,
-        "asset_a": sell_asset,
-        "asset_b": buy_asset,
+        "asset_a": terms_a,
+        "asset_b": terms_b,
         "rate_num": s("rate_num"),
         "rate_den": s("rate_den"),
         "maker_prog": s("maker_prog"),
@@ -764,18 +778,13 @@ pub fn covenant_build_fill_tx(
     let (onchain_spk, locked, onchain_asset) = fetch_utxo(&esplora_url, &cov_txid, cov_vout)?;
     let onchain_spk_bytes = hexbytes(&onchain_spk)?;
     let tap = covd::verify_against_spk(&order, &onchain_spk_bytes, false).map_err(err)?;
-    if onchain_asset != order.asset_a {
-        return Err(err(format!(
-            "funded covenant asset {onchain_asset} != terms asset_a {}",
-            order.asset_a
-        )));
-    }
+    let (a_display, b_display) = covenant_display_ids(&order, &onchain_asset, "terms")?;
 
     let filled = take_atoms.min(locked);
     let plan = covd::plan_fill(&order, locked, filled).map_err(err)?;
 
-    let a_asset = AssetId::from_str(&order.asset_a).map_err(rerr)?;
-    let b_asset = AssetId::from_str(&order.asset_b).map_err(rerr)?;
+    let a_asset = AssetId::from_str(&a_display).map_err(rerr)?;
+    let b_asset = AssetId::from_str(&b_display).map_err(rerr)?;
     let fee_asset_id = AssetId::from_str(&fee_asset).map_err(rerr)?;
     if fee_asset_id == a_asset {
         return Err(err(
@@ -890,9 +899,14 @@ pub fn covenant_build_refund_tx(
 ) -> Result<BuiltRawTx> {
     let pj: serde_json::Value = serde_json::from_str(&prepared_json)
         .map_err(|e| err(format!("bad prepared json: {e}")))?;
-    let order = order_from_terms(&pj)?;
+    let mut order = order_from_terms(&pj)?;
     if order.asset_a.is_empty() {
         return Err(err("prepared json missing the covenant sold asset".into()));
+    }
+    // A record prepared with `ids_internal` derived its leaf from the byte-reversed ids.
+    if pj.get("ids_internal").and_then(|v| v.as_bool()).unwrap_or(false) {
+        order.asset_a = rev_hex(&order.asset_a);
+        order.asset_b = rev_hex(&order.asset_b);
     }
     if covenant_txid.is_empty() {
         return Err(err("covenant txid required".into()));
@@ -905,14 +919,9 @@ pub fn covenant_build_refund_tx(
             .map_err(|e| err(format!("covenant output not found or already spent: {e}")))?;
     let onchain_spk_bytes = hexbytes(&onchain_spk)?;
     let tap = covd::verify_against_spk(&order, &onchain_spk_bytes, false).map_err(err)?;
-    if onchain_asset != order.asset_a {
-        return Err(err(format!(
-            "funded covenant asset {onchain_asset} != prepared asset_a {}",
-            order.asset_a
-        )));
-    }
+    let (a_display, _) = covenant_display_ids(&order, &onchain_asset, "prepared")?;
 
-    let a_asset = AssetId::from_str(&order.asset_a).map_err(rerr)?;
+    let a_asset = AssetId::from_str(&a_display).map_err(rerr)?;
     let fee_asset_id = AssetId::from_str(&fee_asset).map_err(rerr)?;
     let genesis_hash = crate::sequentia_testnet().genesis_hash();
     let maker_secret = derive_maker_secret(&mnemonic, maker_index)?;
@@ -962,6 +971,30 @@ pub fn covenant_build_refund_tx(
             txid: txid.to_string(),
         })
     })
+}
+
+/// A 32-byte id between display and internal byte order (the reversal is its own inverse).
+fn rev_hex(h: &str) -> String {
+    let b = h.as_bytes();
+    b.chunks(2).rev().map(|c| std::str::from_utf8(c).unwrap_or("")).collect()
+}
+
+/// A covenant's asset ids (A, B) in display order, the order the wallet funds and
+/// receives in. The leaf bakes them in internal byte order, so CovenantTerms carry
+/// them so; a covenant derived from display ids (made before the wallet reversed
+/// them) carries display ids. The funded coin's asset tells the two apart, and
+/// anything else is refused.
+fn covenant_display_ids(order: &covd::DeriveOrder, onchain_asset: &str, whose: &str) -> Result<(String, String)> {
+    if onchain_asset == rev_hex(&order.asset_a) {
+        Ok((rev_hex(&order.asset_a), rev_hex(&order.asset_b)))
+    } else if onchain_asset == order.asset_a {
+        Ok((order.asset_a.clone(), order.asset_b.clone()))
+    } else {
+        Err(err(format!(
+            "funded covenant asset {onchain_asset} is not the {whose} asset_a {} in either byte order",
+            order.asset_a
+        )))
+    }
 }
 
 /// Parse a relay `CovenantTerms` object into the pure derive order.
@@ -2663,6 +2696,80 @@ pub fn decode_enclave_spend(
         my_inputs_spent,
         any_confidential,
     })
+}
+
+#[cfg(test)]
+mod covenant_byte_order_tests {
+    use super::*;
+
+    const USDX: &str = "2a515539da5e6a60caa7766ecd65bac0c10d15717ddd2088844ba58f4d04b9de";
+    const EURX: &str = "e39685e718516156679088d9400d11a1eb82bf7cc27c5b9f5a614b8c91246d13";
+
+    fn order(a: &str, b: &str) -> covd::DeriveOrder {
+        covd::DeriveOrder {
+            asset_a: a.into(),
+            asset_b: b.into(),
+            rate_num: 1,
+            rate_den: 1,
+            min_lot: 1,
+            maker_prog: "11".repeat(32),
+            maker_ver: 1,
+            expiry_locktime: 400,
+            maker_x: "22".repeat(32),
+            internal_key: None,
+        }
+    }
+
+    #[test]
+    fn reversal_is_the_relays_internal_order() {
+        // The relay's terms for a USDX covenant name it deb9…512a.
+        assert_eq!(rev_hex(USDX), "deb9044d8fa54b848820dd7d71150dc1c0ba65cd6e76a7ca606a5eda3955512a");
+        assert_eq!(rev_hex(&rev_hex(EURX)), EURX);
+    }
+
+    #[test]
+    fn terms_in_internal_order_give_display_ids() {
+        let o = order(&rev_hex(USDX), &rev_hex(EURX));
+        assert_eq!(covenant_display_ids(&o, USDX, "terms").unwrap(), (USDX.to_string(), EURX.to_string()));
+    }
+
+    #[test]
+    fn a_display_derived_covenant_still_reads() {
+        let o = order(USDX, EURX);
+        assert_eq!(covenant_display_ids(&o, USDX, "prepared").unwrap(), (USDX.to_string(), EURX.to_string()));
+    }
+
+    #[test]
+    fn a_coin_of_another_asset_is_refused() {
+        let o = order(&rev_hex(USDX), &rev_hex(EURX));
+        let e = covenant_display_ids(&o, EURX, "terms").unwrap_err().to_string();
+        assert!(e.contains("is not the terms asset_a"), "{e}");
+    }
+
+    #[test]
+    fn a_prepared_offer_derives_and_posts_internal_ids() {
+        let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let p = covenant_prepare_offer(m.into(), USDX.into(), 1_000, EURX.into(), 900, 100, 0, 0).unwrap();
+        let pj: serde_json::Value = serde_json::from_str(&p.prepared_json).unwrap();
+        assert_eq!(pj["ids_internal"], true);
+        assert_eq!(pj["sell_asset"], USDX);
+        // The covenant address is one the wallet's own send builder accepts.
+        assert!(p.covenant_address.starts_with("tb1p"), "{}", p.covenant_address);
+        validate_address(p.covenant_address.clone()).unwrap();
+        // The address the wallet funds is the taptree of the reversed ids.
+        let mut o = order_from_terms(&pj).unwrap();
+        o.asset_a = rev_hex(&o.asset_a);
+        o.asset_b = rev_hex(&o.asset_b);
+        let tap = covd::derive_taptree(&o).unwrap();
+        assert_eq!(tohex(&tap.script_pubkey), p.covenant_spk_hex);
+        // The posted terms carry the same ids the leaf baked.
+        let offer: serde_json::Value =
+            serde_json::from_str(&covenant_finalize_offer(m.into(), p.prepared_json.clone(), "00".repeat(32), 0).unwrap())
+                .unwrap();
+        assert_eq!(offer["covenant"]["asset_a"], rev_hex(USDX));
+        assert_eq!(offer["covenant"]["asset_b"], rev_hex(EURX));
+        assert_eq!(offer["pair"]["base_asset"], USDX);
+    }
 }
 
 #[cfg(test)]
