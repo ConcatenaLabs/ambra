@@ -97,15 +97,26 @@ class FakeLsp implements BtcLsp {
   Future<Map<String, dynamic>> payQuote(String nodeKey, String bolt11) async => {'route_found': true, 'fee_msat': 1001, 'delay': 52};
 }
 
+final order = <String>[];
+
 ({HostedBtcLightning btc, FakeLsp lsp}) setup({String? otherHash, Object? payErr, Map<String, dynamic>? payStatus, BigInt? receivable}) {
   String? store;
+  order.clear();
   final lsp = FakeLsp(otherHash: otherHash, payErr: payErr, payStatusAnswer: payStatus);
   lsp.peek = () async => store;
   final btc = HostedBtcLightning(
     lsp: lsp,
-    nodeKey: () async => 'btc:02aa',
+    nodeKey: () async {
+      order.add('node');
+      return 'btc:02aa';
+    },
     spendable: () async => BigInt.from(5000000),
-    receivable: receivable == null ? null : () async => receivable,
+    receivable: receivable == null
+        ? null
+        : () async {
+            order.add('receivable');
+            return receivable;
+          },
     read: () async => store,
     write: (v) async => store = v,
     now: () => 1496314658000,
@@ -138,10 +149,11 @@ void main() {
     expect(decodeBtcInvoice('${inv['invoice']}')['payment_hash'], inv['payment_hash']);
   });
 
-  test('refused before anything is drawn or asked: a hold for more than the wallet can receive', () async {
+  test('the node up first, then its room read, and a hold for more refused before anything is drawn or asked', () async {
     final t = setup(receivable: sats - BigInt.one);
     await expectLater(t.btc.invoice(sats: sats), throwsA(predicate((e) => '$e'.contains('the node cannot receive that much now'))));
-    expect(t.lsp.calls, isEmpty, reason: 'no call to the service');
+    expect(order, ['node', 'receivable'], reason: 'the node is brought up first (a first trade provisions it), then its room read');
+    expect(t.lsp.calls, isEmpty, reason: 'no invoice asked of the service');
     expect(await t.lsp.peek(), isNull, reason: 'no preimage drawn and kept');
     final ok = setup(receivable: sats);
     expect((await ok.btc.invoice(sats: sats))['payment_hash'], isNotNull);

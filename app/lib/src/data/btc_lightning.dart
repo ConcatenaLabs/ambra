@@ -200,10 +200,11 @@ class HostedBtcLightning implements BtcLightning {
 
   /// The node's registry key, the node and its signer brought up first (cheap once up).
   final Future<String> Function() nodeKey;
+  /// Sats the wallet's own channels can send now, read fresh at each call.
   final Future<BigInt> Function() spendable;
 
-  /// Sats the wallet's own channels can receive now; when given, a hold for more is refused before
-  /// anything is drawn or asked.
+  /// Sats the wallet's own channels can receive now, read fresh at each call (after the node is
+  /// up); when given, a hold for more is refused before anything is drawn or asked.
   final Future<BigInt> Function()? receivable;
 
   /// The holds' store (one JSON object, hash -> record), kept per wallet.
@@ -238,12 +239,15 @@ class HostedBtcLightning implements BtcLightning {
 
   @override
   Future<Map<String, dynamic>> invoice({required BigInt sats, String description = 'trade'}) async {
+    // The node first: a wallet's first BTC trade provisions it, and only a node that is up can be
+    // given room to receive. What it can receive is read after, and a hold for more is refused
+    // before a preimage is drawn or the service asked.
+    final key = await nodeKey();
     if (receivable != null && await receivable!() < sats) throw Exception('the node cannot receive that much now');
     final pre = List<int>.generate(32, (_) => random.nextInt(256));
     final h = c.sha256.convert(pre).toString();
     // Kept before the node is asked: a hold whose preimage the wallet lost could never be settled.
     await _keep(h, {'preimage': _hex(pre), 'sats': '$sats', 'at': now()});
-    final key = await nodeKey();
     final r = await lsp.invoice({
       'node_key': key,
       'amount': sats.toInt(),

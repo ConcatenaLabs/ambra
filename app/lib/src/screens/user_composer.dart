@@ -52,7 +52,8 @@ BtcLightning? appBtcLightning(String walletTag) {
     }
   }
 
-  // The wallet's own BTC channels, as /status reports them.
+  // The wallet's own BTC channels, as /status reports them now: read again at each call, never
+  // kept, so room a first trade's node was just given shows at once.
   Future<LegLiquidity> btcLeg() async {
     final m = await WalletRepository.instance.readMnemonic();
     if (m == null) return legLiquidity(const [], RailTarget.btc());
