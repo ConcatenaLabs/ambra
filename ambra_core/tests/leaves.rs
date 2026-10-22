@@ -1,7 +1,7 @@
 //! The leaf service against a whole operator: a payment that arrives while the app
 //! is closed, an in-tree swap between two wallets, what `care` does by itself, and a
 //! payment out of planned coins made through a release, and a supervised asset's
-//! landing, freeze, exit and lift. Runs against arca's long-running operator harness
+//! landing, freeze, exit and lift, and a receive that rests on the operator's bond. Runs against arca's long-running operator harness
 //! (`bark-cli/tests/arca_operator_for_browsers.rs` in ConcatenaLabs/arca), named by
 //! its control address:
 //!
@@ -62,7 +62,7 @@ fn a_payment_arrives_while_the_app_is_closed() {
         "server": state["server"], "node_url": state["node_url"],
         "node_user": state["node_user"], "node_password": state["node_password"],
         // The harness's leaves have exit delays from one 512-second unit.
-        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 400,
+        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 338,
     });
     let password = state["node_password"].as_str().map(String::from);
 
@@ -158,7 +158,7 @@ fn two_wallets_swap_in_the_tree_through_the_core() {
     let config = json!({
         "server": state["server"], "node_url": state["node_url"],
         "node_user": state["node_user"], "node_password": state["node_password"],
-        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 400,
+        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 338,
     });
     let live = |w: &mut LeafWallet, asset: &str| -> u64 {
         let b = ok(w.run("balance", &json!({})), "balance")["result"].clone();
@@ -229,7 +229,7 @@ fn care_takes_up_a_claim_and_plans_its_coin() {
     let config = json!({
         "server": state["server"], "node_url": state["node_url"],
         "node_user": state["node_user"], "node_password": state["node_password"],
-        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 400,
+        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 338,
     });
 
     // The holder's key: its main wallet's receive address at index 25 (m/84'/1'/0'/0/25),
@@ -340,7 +340,7 @@ fn harness_config(state: &Value) -> Value {
     json!({
         "server": state["server"], "node_url": state["node_url"],
         "node_user": state["node_user"], "node_password": state["node_password"],
-        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 400,
+        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 338,
     })
 }
 
@@ -575,4 +575,64 @@ fn a_supervised_asset_lands_in_the_landing_key_and_freezes_there() {
     drop(b);
     let _ = std::fs::remove_dir_all(&adir);
     let _ = std::fs::remove_dir_all(&bdir);
+}
+
+/// The operator's bond through the core, as the app reads it at care's pace: a wallet
+/// that has seen the bond bonded requires it from then on; with the bond in notice, or
+/// named no more, its receive is refused in words that name the bond (user mode says
+/// them plainly, `plainRefusal` in the app). `watch_bond` answers what it checked. The
+/// harness is left naming no bond, so wallets that never saw one receive as before.
+#[test]
+fn a_receive_rests_on_the_operator_bond() {
+    let Ok(h) = std::env::var("AMBRA_LEAVES_HARNESS") else {
+        eprintln!("AMBRA_LEAVES_HARNESS is not set: the operator harness is not running, nothing to test against");
+        return;
+    };
+    let state = control(&h, "/state", json!({}));
+    let x = state["x"].as_str().unwrap().to_string();
+    // The bond's notice covers coins of exit delays up to the specification's 338 units
+    // (the app's default, and `harness_config`'s); a wallet that accepts longer ones
+    // reads it too short.
+    let config = harness_config(&state);
+    eprintln!("bond_post: {}", control(&h, "/bond_post", json!({})));
+    control(&h, "/produce", json!({}));
+    control(&h, "/bury", json!({}));
+    let d = dir("bonded");
+    let mut a = LeafWallet::create(&d, &fresh_phrase(), &config).expect("a wallet");
+    let mut bonded = Value::Null;
+    for _ in 0..20 {
+        bonded = ok(a.run("bond", &json!({})), "bond")["result"].clone();
+        if bonded["state"] == "bonded" {
+            break;
+        }
+        control(&h, "/produce", json!({}));
+        control(&h, "/bury", json!({}));
+    }
+    eprintln!("bond: {bonded}");
+    assert_eq!(bonded["state"], "bonded");
+    assert_eq!(bonded["required"], json!(true), "seen bonded: required from now on");
+    assert_eq!(bonded["asset"], json!(x));
+    let watch = ok(a.run("watch_bond", &json!({})), "watch_bond")["result"].clone();
+    eprintln!("watch_bond: state {} evidence {} slashed {}", watch["state"], watch["evidence"], watch["slashed"]);
+    assert!(watch["slashed"].as_array().is_some_and(|s| s.is_empty()));
+    ok(a.run("receive", &json!({"asset": x, "amount": "1000"})), "a receive while the bond stands");
+
+    eprintln!("bond_notice: {}", control(&h, "/bond_notice", json!({})));
+    control(&h, "/produce", json!({}));
+    control(&h, "/bury", json!({}));
+    let noticed = ok(a.run("bond", &json!({})), "bond")["result"].clone();
+    eprintln!("bond in notice: state {} withdrawable_at {} why {}", noticed["state"], noticed["withdrawable_at"], noticed["why"]);
+    let e = a.run("receive", &json!({"asset": x, "amount": "1000"})).expect_err("a receive while the bond is in notice");
+    eprintln!("refused in notice: {e}");
+    assert!(leaves::refusal_message(&e).contains("bond"), "{e}");
+
+    eprintln!("bond_drop: {}", control(&h, "/bond_drop", json!({})));
+    let e = a.run("receive", &json!({"asset": x, "amount": "1000"})).expect_err("a receive while the bond is missing");
+    eprintln!("refused, missing: {e}");
+    assert!(leaves::refusal_message(&e).contains("bond"), "{e}");
+    let fresh = LeafWallet::create(&dir("never-bonded"), &fresh_phrase(), &config).expect("a wallet that never saw a bond").run("bond", &json!({}));
+    eprintln!("a wallet that never saw it: {}", ok(fresh, "bond")["result"]);
+
+    drop(a);
+    let _ = std::fs::remove_dir_all(&d);
 }

@@ -351,6 +351,38 @@ class LeafService extends ChangeNotifier {
     lastCareAt = at;
     await setCareClock(at);
     notifyListeners();
+    await watchBond();
+  }
+
+  /// The operator's bond as this wallet last read it (`bond`: state, asset, value,
+  /// coin, withdrawable_at, required, covers, why) or its refusal, and the last watch
+  /// (`watch_bond`) with when it ran. Developer mode shows them.
+  Map<String, dynamic>? bond;
+  LeafRefusal? bondError;
+  Map<String, dynamic>? lastWatch;
+  DateTime? lastWatchAt;
+  LeafRefusal? watchError;
+
+  /// The operator's bond, at care's pace, in either mode: read (a bond seen bonded is
+  /// required from then on, so a wallet that saw one refuses to receive while it is
+  /// gone or in notice), and watched: the wallet's evidence against the chain and the
+  /// mempool, and a slash sent should the operator key have signed twice under one salt.
+  Future<void> watchBond() async {
+    if (!open) return;
+    try {
+      bond = Map<String, dynamic>.from(await run('bond') as Map);
+      bondError = null;
+    } catch (e) {
+      bondError = LeafRefusal.of(e);
+    }
+    try {
+      lastWatch = Map<String, dynamic>.from(await run('watch_bond', const {}) as Map);
+      watchError = null;
+    } catch (e) {
+      watchError = LeafRefusal.of(e);
+    }
+    lastWatchAt = DateTime.now();
+    notifyListeners();
   }
 
   static const careEvery = Duration(minutes: 10);
@@ -776,9 +808,10 @@ String frozenSentence(String amount, String ticker) =>
 /// User mode's words for a payment of a frozen holding.
 const kFrozenRefusal = 'This asset is frozen by its issuer for this wallet: nothing was sent.';
 
-/// A refusal in user mode's words: a frozen holding said plainly; every other refusal
-/// as the library says it.
+/// A refusal in user mode's words: a refusal of the operator's bond, and a frozen
+/// holding, said plainly; every other refusal as the library says it.
 LeafRefusal plainRefusal(LeafRefusal e) {
+  if (bondRefusal(e)) return LeafRefusal(e.kind, kBondRefusal, code: e.code, status: e.status, plain: true);
   if (e.code == 'frozen' || RegExp(r'\bfrozen\b|\bpaused\b', caseSensitive: false).hasMatch(e.message)) {
     return LeafRefusal(e.kind, kFrozenRefusal, code: e.code, status: e.status, plain: true);
   }
@@ -810,4 +843,17 @@ Map? servedPairs(Map? pairs, List<String> supervised) {
   });
   return {...pairs, 'chains': chains};
 }
+
+// ---------------------------------------------------------------------------
+// The operator's bond
+// ---------------------------------------------------------------------------
+
+/// A refusal of the operator's equivocation bond (missing, in notice, or worth less than
+/// what the wallet would hold out of round on it): the library's gate in `receive` and
+/// the swaps.
+bool bondRefusal(LeafRefusal e) => RegExp(r'\bbond\b', caseSensitive: false).hasMatch(e.message);
+
+/// User mode's words for it.
+const kBondRefusal = 'Not accepted: the security deposit that backs these instant payments is missing or being withdrawn, '
+    'so this wallet takes no payment that rests on it. Nothing was signed.';
 
