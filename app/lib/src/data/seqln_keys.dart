@@ -47,3 +47,21 @@ String ownNodeKeyForBtc(String mnemonic) {
   final k = lnDeriveNode(mnemonic, 'btc');
   return 'btc:${deviceTransportPubkey(k.transportPrivkey)}';
 }
+
+/// The registry keys of this device's own hosted nodes to read Lightning for: the BTC node's
+/// first, then one per asset of [assetIds] (deduplicated). An id no node key derives from (not a
+/// 64-hex asset id) is skipped, so one odd entry never hides the others' channels.
+List<String> ownNodeKeysFor(String mnemonic, Iterable<String> assetIds,
+    {String Function(String mnemonic)? btc, String Function(String mnemonic, String asset)? asset}) {
+  final out = <String>{};
+  try {
+    out.add((btc ?? ownNodeKeyForBtc)(mnemonic));
+  } catch (_) {}
+  for (final id in assetIds) {
+    if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(id)) continue;
+    try {
+      out.add((asset ?? ownNodeKeyForAsset)(mnemonic, id));
+    } catch (_) {}
+  }
+  return out.toList();
+}

@@ -81,6 +81,13 @@ LegLiquidity legLiquidity(List<Map> channels, RailTarget target) {
 }
 
 bool hasChannel(List<Map> channels, RailTarget t) => legLiquidity(channels, t).active;
+
+/// What the wallet holds of an asset, as its one figure counts it: on-chain, leaves and its
+/// share of its own Lightning channels (the reserve included, as the balance row counts it).
+/// BTC is the parent chain's: no leaves. What a payment may spend is bounded elsewhere, by the
+/// channels' spendable and the on-chain coins.
+BigInt heldFigure({required BigInt onchain, required BigInt leaves, required List<Map> channels, required RailTarget target}) =>
+    onchain + (target.isBtc ? BigInt.zero : leaves) + legLiquidity(channels, target).balance;
 bool canPayFrom(List<Map> channels, RailTarget t) {
   final l = legLiquidity(channels, t);
   return l.active && l.spendable > BigInt.zero;

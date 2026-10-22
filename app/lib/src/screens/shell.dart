@@ -259,6 +259,11 @@ class _BalanceTabState extends State<BalanceTab> {
       // Restricted (OpenAMP) balances load in parallel; a failure must not break
       // the on-chain balance, so it resolves to the last-known list on error.
       final ampF = OpenAmpService.instance.refresh(m);
+      // This device's OWN Lightning channels, read apart from the on-chain sync (a sync that fails,
+      // as on an origin whose explorer does not answer, must not hide what the wallet holds in
+      // Lightning). Non-blocking so the balance render never waits on the LSP.
+      final lnBalances = _sync?.balances ?? _cachedBalances ?? const <core.AssetBalance>[];
+      unawaited(_refreshLn(m, lnBalances));
       final s = await core.syncWallet(mnemonic: m, esploraUrl: Backend.esplora);
       final btc = await btcF;
       final amp = await ampF;
@@ -266,9 +271,9 @@ class _BalanceTabState extends State<BalanceTab> {
       if (btc != null) WalletCache.saveBtc(btc.balanceSats); // persist last-known BTC
       // Feed both chains' indices into the shared cross-chain receive cycling.
       BtcState.instance.observe(btc: btc, seqNext: s.nextIndex);
-      // Read back this device's OWN Lightning channels for the per-row split (best-effort; dormant
-      // when LN isn't deployed). Non-blocking so the balance render never waits on the LSP.
-      unawaited(_refreshLn(m, s.balances));
+      // Read again only when the sync found an asset the read above did not name a node for.
+      final named = {for (final b in lnBalances) b.assetId};
+      if (s.balances.any((b) => !named.contains(b.assetId))) unawaited(_refreshLn(m, s.balances));
       // What is staked is the holder's Sequence token and counts in its figure; read
       // from the explorer at most every few minutes (the stake screen reads it at once).
       unawaited(StakeHoldings.instance.refresh(m));
@@ -315,11 +320,7 @@ class _BalanceTabState extends State<BalanceTab> {
       // Every registry-known asset, not just assets with an on-chain balance: an asset held ONLY inside
       // a channel (0 on-chain) still has a node/channel this view must show its Lightning split + close
       // affordance for. Keying off balances alone hid those channels. Set-dedup; union the balance ids.
-      final nodes = <String>{
-        lnkeys.ownNodeKeyForBtc(mnemonic),
-        for (final id in SeqAssets.resolvedIds) lnkeys.ownNodeKeyForAsset(mnemonic, id),
-        for (final b in balances) lnkeys.ownNodeKeyForAsset(mnemonic, b.assetId),
-      }.toList();
+      final nodes = lnkeys.ownNodeKeysFor(mnemonic, [...SeqAssets.resolvedIds, for (final b in balances) b.assetId]);
       final st = await LightningService.instance.getStatus(nodes: nodes);
       final own = ((st.raw['channels'] as List?) ?? const [])
           .whereType<Map>()

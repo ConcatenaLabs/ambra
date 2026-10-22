@@ -539,6 +539,26 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     _SwapCache.receiveAsset = _receiveAsset;
   }
 
+  /// This wallet's OWN Lightning channels (best-effort), so the rail toggles gate on REAL per-asset
+  /// liquidity, not "LSP configured" (mirrors the web's railAvail off a live /status), and each
+  /// asset's figure counts what it holds in them. OWN-only: the device's reconstructed node keys
+  /// go as ?nodes= and only node_key-tagged channels count. Read apart from the on-chain sync.
+  Future<(List<Map>, Frontable?)> _readLn(String m, List<core.AssetBalance> balances) async {
+    if (!LightningService.instance.configured) return (const <Map>[], null);
+    try {
+      // Derive a node key for EVERY registry-known asset, not just assets with an on-chain balance:
+      // an asset held only INSIDE a channel (a sub-asset JIT-inbound buy, or all of it Moved to
+      // Lightning) has zero on-chain balance yet still has a node + channel. Set-dedup; union the
+      // balance assets in case any sit outside registry.
+      final nodes = lnkeys.ownNodeKeysFor(m, [...SeqAssets.resolvedIds, for (final b in balances) b.assetId]);
+      final st = await LightningService.instance.getStatus(nodes: nodes);
+      // The LSP's JIT-fronting inventory: lets a channel-less wallet trade over Lightning (spec §5).
+      return (((st.raw['channels'] as List?) ?? const []).whereType<Map>().toList(), Frontable.fromStatus(st.raw));
+    } catch (_) {
+      return (const <Map>[], null); // best-effort; toggles still work, the notes just say "no channel yet"
+    }
+  }
+
   Future<void> _load() async {
     try {
       final m = await WalletRepository.instance.readMnemonic();
@@ -628,30 +648,19 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
       } catch (_) {
         xmarkets = const [];
       }
+      final lnF = _readLn(m, _balances);
+      unawaited(lnF.then((r) {
+        if (mounted) {
+          setState(() {
+            _lnChannels = r.$1;
+            _frontable = r.$2;
+          });
+        }
+      }));
       final s = await core.syncWallet(mnemonic: m, esploraUrl: Backend.esplora);
-      // This wallet's OWN Lightning channels (best-effort), so the rail toggles gate on REAL per-asset
-      // liquidity, not "LSP configured" (mirrors the web's railAvail off a live /status). OWN-only:
-      // pass the device's reconstructed node keys as ?nodes= and keep only node_key-tagged channels.
-      var lnCh = const <Map>[];
-      Frontable? frontable;
-      if (LightningService.instance.configured) {
-        try {
-          // Derive a node key for EVERY registry-known asset, not just assets with an on-chain balance:
-          // an asset held only INSIDE a channel (a sub-asset JIT-inbound buy, or all of it Moved to
-          // Lightning) has zero on-chain balance yet still has a node + channel. Keying off balances
-          // alone hid that channel, so the LN rail was falsely gated off with a "Move to Lightning" hint
-          // for funds already there. Set-dedup; union the balance assets in case any sit outside registry.
-          final nodes = <String>{
-            lnkeys.ownNodeKeyForBtc(m),
-            for (final id in SeqAssets.resolvedIds) lnkeys.ownNodeKeyForAsset(m, id),
-            for (final b in s.balances) lnkeys.ownNodeKeyForAsset(m, b.assetId),
-          }.toList();
-          final st = await LightningService.instance.getStatus(nodes: nodes);
-          lnCh = ((st.raw['channels'] as List?) ?? const []).whereType<Map>().toList();
-          // The LSP's JIT-fronting inventory: lets a channel-less wallet trade over Lightning (spec §5).
-          frontable = Frontable.fromStatus(st.raw);
-        } catch (_) {/* best-effort; toggles still work, the notes just say "no channel yet" */}
-      }
+      // This wallet's OWN Lightning channels, read apart from the on-chain sync above (begun before
+      // it): a sync that fails must not hide what the wallet holds in Lightning.
+      final (lnCh, frontable) = await lnF;
       if (!mounted) return;
       setState(() {
         _markets = markets;
@@ -1999,7 +2008,13 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
       key: ValueKey('userComposer-$tag'),
       engine: _userEngine!,
       assets: () => <String>{kBtcSentinel, ..._payableAssets(), ...leaves().keys}.toList(),
-      held: (h) => (BigInt.tryParse(_bal(h)) ?? BigInt.zero) + _lnAtoms(h) + (h == kBtcSentinel ? BigInt.zero : (leaves()[h] ?? BigInt.zero)),
+      // Each asset's one figure, as the balance row counts it: on-chain, leaves and Lightning
+      // (BTC in the wallet's own Bitcoin node's channels included).
+      held: (h) => heldFigure(
+          onchain: BigInt.tryParse(_bal(h)) ?? BigInt.zero,
+          leaves: leaves()[h] ?? BigInt.zero,
+          channels: _lnChannels,
+          target: h == kBtcSentinel ? RailTarget.btc() : RailTarget.asset(hex: h, ticker: SeqAssets.labelFor(h).ticker)),
       onMoved: () => LeafService.instance.refresh(),
       ticker: (h) => h == kBtcSentinel ? 'BTC' : SeqAssets.labelFor(h).ticker,
       precision: (h) => h == kBtcSentinel ? 8 : SeqAssets.labelFor(h).precision,
