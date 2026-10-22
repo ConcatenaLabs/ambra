@@ -439,20 +439,8 @@ class LeafService extends ChangeNotifier {
   /// under the asset's figure).
   BigInt frozenAtoms(String asset) => frozenAtomsOf(coins, balance)[asset] ?? BigInt.zero;
 
-  /// Leaf atoms per asset: every coin the library counts as held off the chain,
-  /// whatever its state.
-  Map<String, BigInt> leafAtoms() {
-    final out = <String, BigInt>{};
-    final arca = balance?['arca'];
-    if (arca is! Map) return out;
-    arca.forEach((asset, states) {
-      if (states is! Map) return;
-      var sum = BigInt.zero;
-      states.forEach((_, v) => sum += BigInt.tryParse('$v') ?? BigInt.zero);
-      if (sum > BigInt.zero) out['$asset'] = sum;
-    });
-    return out;
-  }
+  /// Leaf atoms per asset, as the asset's figure counts them ([leafAtomsOf]).
+  Map<String, BigInt> leafAtoms() => leafAtomsOf(balance);
 
   // -------------------------------------------------------------------------
   // The schedule while the app runs
@@ -806,6 +794,8 @@ Map<String, BigInt> frozenAtomsOf(List<dynamic> coins, Map? balance) {
   for (final c in coins.whereType<Map>()) {
     final f = c['frozen'];
     if (!held.contains(c['state']) || f is! Map) continue;
+    // A leaf whose exit's claim is out is the on-chain coin the claim made, counted below.
+    if (c['state'] == 'exiting' && '${c['note'] ?? ''}'.startsWith('claimed by')) continue;
     if (f['frozen'] == true || f['paused'] == true) add(c['asset'], c['value']);
   }
   final on = balance?['sequentia_onchain_frozen'];
@@ -868,4 +858,32 @@ bool bondRefusal(LeafRefusal e) => RegExp(r'\bbond\b', caseSensitive: false).has
 /// User mode's words for it.
 const kBondRefusal = 'Not accepted: the security deposit that backs these instant payments is missing or being withdrawn, '
     'so this wallet takes no payment that rests on it. Nothing was signed.';
+
+/// Leaf atoms per asset, as the asset's figure counts them: the library's `held` (its
+/// leaves and its own on-chain coins together, a leaf whose exit's claim is out counted
+/// once, as the claim's output) less its `sequentia_onchain`, whose coins sit at the
+/// phrase's own keys, where the main wallet's on-chain scan counts them. A library answer
+/// with no `held` is read by its states (`arca`).
+Map<String, BigInt> leafAtomsOf(Map? balance) {
+  final out = <String, BigInt>{};
+  BigInt big(Object? v) => BigInt.tryParse('${v ?? 0}') ?? BigInt.zero;
+  final held = balance?['held'];
+  if (held is Map) {
+    final on = balance?['sequentia_onchain'];
+    held.forEach((asset, v) {
+      final l = big(v) - (on is Map ? big(on[asset]) : BigInt.zero);
+      if (l > BigInt.zero) out['$asset'] = l;
+    });
+    return out;
+  }
+  final arca = balance?['arca'];
+  if (arca is! Map) return out;
+  arca.forEach((asset, states) {
+    if (states is! Map) return;
+    var sum = BigInt.zero;
+    states.forEach((_, v) => sum += big(v));
+    if (sum > BigInt.zero) out['$asset'] = sum;
+  });
+  return out;
+}
 

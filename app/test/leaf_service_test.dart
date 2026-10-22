@@ -358,5 +358,24 @@ void main() {
     expect(batchProfileLine('open'), 'Batch: open: its sweep pays the operator');
     expect(batchProfileLine(null), isNull);
   });
+
+  test('a leaf whose exit landed counts once: the figure takes held less on-chain', () {
+    // A supervised leaf exited into its landing key: still `exiting` in the per-state
+    // balance, while its claim's output is on the chain at a key of the phrase.
+    final balance = {
+      'arca': {'zz': {'exiting': '2300000', 'live': '1000'}, 'xx': {'live': '500'}},
+      'held': {'zz': '2300976', 'xx': '700'},
+      'sequentia_onchain': {'zz': '2299976', 'xx': '200'},
+      'sequentia_onchain_frozen': {'zz': '2299976'},
+    };
+    expect(leafAtomsOf(balance), {'zz': BigInt.from(1000), 'xx': BigInt.from(500)});
+    expect(leafAtomsOf({'arca': {'xx': {'live': '5', 'pending': '2'}}}), {'xx': BigInt.from(7)}, reason: 'a library with no held');
+    expect(leafAtomsOf(null), isEmpty);
+    final coins = [
+      {'asset': 'zz', 'value': '2300000', 'state': 'exiting', 'note': 'claimed by d7e9…, which is in_mempool', 'frozen': {'frozen': true}},
+      {'asset': 'zz', 'value': '7', 'state': 'exiting', 'note': 'unrolling', 'frozen': {'frozen': true}},
+    ];
+    expect(frozenAtomsOf(coins, balance), {'zz': BigInt.from(2299983)}, reason: 'the landed coin once, on the chain');
+  });
 }
 
