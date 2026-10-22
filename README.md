@@ -147,9 +147,15 @@ module that implements it.
   fewest parties left to act. It offers only the pairs the web wallet's reliability drill has
   passed on the chain (the web wallet's `user-mode/pairs.json`, read from the node's origin),
   and says "Not offered right now" in plain words for one nobody fills in one step; no screen
-  of it names a rail, a round, a leaf, the operator, a covenant, an expiry or an atom. It
-  offers no BTC trade: the engine trades BTC only through a Bitcoin Lightning wallet it can
-  drive, and the app gives it none. The screens below are developer mode's.
+  of it names a rail, a round, a leaf, the operator, a covenant, an expiry or an atom. BTC
+  trades against an asset the same way, in one hash-lock: the asset moves in the operator's
+  tree and the BTC over the wallet's own hosted Bitcoin Lightning node, under the hash of
+  whoever receives the BTC (`app/lib/src/data/user_trade_btc.dart`). When the wallet sells
+  for BTC its invoice is a hold under a hash it makes itself, its preimage kept on the phone
+  and handed to the node only to settle a payment held there for the whole amount; when it
+  buys with BTC it pays the maker's invoice only once the asset it receives is held for good,
+  its routing fee and lock capped at the route the ticket showed
+  (`app/lib/src/data/btc_lightning.dart`). The screens below are developer mode's.
 - **Same-chain atomic swap**: pay one Sequentia asset, receive another, settled in a
   single atomic transaction against the SeqDEX daemon's order book
   (`app/lib/src/screens/swap_screen.dart`). The review sheet states finality honestly:

@@ -133,6 +133,17 @@ class LspClient {
   static Future<http.Response> _get(String path, {Duration timeout = const Duration(seconds: 20)}) =>
       client.get(Uri.parse('${Backend.lsp}$path'), headers: _headers()).timeout(timeout);
 
+  /// One call whose refusal keeps its HTTP status ([LspHttpException]): a caller that must tell a
+  /// payment refused before anything was sent (400, 403) from one whose outcome is unknown needs it.
+  static Future<Map<String, dynamic>> call(String path, {Map<String, dynamic>? post, Duration timeout = const Duration(seconds: 30)}) async {
+    final r = post == null ? await _get(path, timeout: timeout) : await _postJson(path, post, timeout: timeout);
+    try {
+      return _decode(r);
+    } catch (e) {
+      throw LspHttpException(r.statusCode, '$e'.replaceFirst('Exception: ', ''));
+    }
+  }
+
   /// Provision (or re-attach) a hosted SeqLN node for [asset], keyed to THIS device by its
   /// per-node Noise transport pubkey [deviceTransportPubkey] (seqln_keys.dart). SeqLN nodes are
   /// single-asset, so moving a new asset into Lightning first needs its own node. A per-user BTC
@@ -517,6 +528,15 @@ class LspClient {
 }
 
 /// One hosted channel's per-asset balances, as reported by `GET /status`.
+/// A refusal of the service, with its HTTP status.
+class LspHttpException implements Exception {
+  LspHttpException(this.status, this.message);
+  final int status;
+  final String message;
+  @override
+  String toString() => message;
+}
+
 class LspChannel {
   LspChannel({required this.asset, required this.spendable, required this.receivable});
   final String asset; // asset id (hex) or ticker, as the LSP reports it
