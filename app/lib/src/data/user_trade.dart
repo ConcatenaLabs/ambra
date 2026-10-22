@@ -567,6 +567,17 @@ class UserTradeEngine {
       try {
         q = (await _run('order_fill_resting_quote', {'order': e.id, 'amount': '$r'})) as Map;
       } catch (err) {
+        // A fill spends only the wallet's coins no older than the order's: when those hold less
+        // than the fill takes, the library says how much they hold, and the fill is sized to it.
+        final m = RegExp(r'the outputs take (\d+) of asset \S+, more than the (\d+) the inputs hold').firstMatch('$err');
+        if (m != null && BigInt.parse(m.group(1)!) > BigInt.zero) {
+          final r2 = (r * BigInt.parse(m.group(2)!)) ~/ BigInt.parse(m.group(1)!) - BigInt.one;
+          final s2 = r2 > BigInt.zero ? sizeEntry(e, (r2 * e.rateNum) ~/ e.rateDen) : null;
+          if (s2 != null && s2.receive < r) {
+            r = s2.receive;
+            continue;
+          }
+        }
         d.log('[user trade] order_fill_resting_quote: $err');
         return null;
       }
@@ -780,8 +791,17 @@ class UserTradeEngine {
       for (final e in es)
         if (sizeEntry(e, limit) != null) (e: e, r: sizeEntry(e, limit)!.receive),
     ]..sort((a, b) => b.r.compareTo(a.r));
+    // A maker quoting several levels of one pair is asked once, at the level that gives the most
+    // for this size: each firm offer holds its coins.
+    final seen = <String>{};
+    ind.removeWhere((x) => x.e.maker != null && !seen.add('${x.e.maker}|${x.e.source}'));
+    // Firm terms of the best three that give them: an entry that cannot be firmed (a resting order
+    // the wallet's coins are too old for, a maker that ran short) makes way for the next.
     final cands = <Candidate>[];
-    for (final x in ind.take(3)) {
+    var tried = 0;
+    for (final x in ind) {
+      if (cands.length >= 3 || tried >= 8) break;
+      tried++;
       final c = await _firm(x.e, pay, receive, amount, have);
       if (c != null) cands.add(c);
     }

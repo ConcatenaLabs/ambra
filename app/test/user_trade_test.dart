@@ -18,6 +18,8 @@ class StandIn {
   final swaps = <Map<String, dynamic>>[];
   final parts = <Map<String, dynamic>>[];
   final posts = <String>[];
+  final firmGives = <String>[];
+  List<Map<String, dynamic>>? quotes;
   List<String>? last;
   bool away = false;
   String? stored;
@@ -71,7 +73,7 @@ class StandIn {
   Future<Map<String, dynamic>> fetchJson(String url, {Map<String, dynamic>? post}) async {
     if (url.endsWith('/v1/quotes')) {
       return {
-        'quotes': [
+        'quotes': quotes ?? [
           {'give_asset': y, 'want_asset': x, 'rate_num': '4', 'rate_den': '3', 'max_give': '1000000', 'min_give': '10000'}
         ]
       };
@@ -85,9 +87,10 @@ class StandIn {
       return {};
     }
     if (url.endsWith('/v1/firm')) {
+      firmGives.add('${post!['give']}');
       if (held) throw Exception('the maker does not hold that much now');
       held = true;
-      final give = BigInt.parse('${post!['give']}');
+      final give = BigInt.parse('${post['give']}');
       final want = (give * BigInt.from(4) + BigInt.two) ~/ BigInt.from(3);
       return {'swap': 's1', 'offer': 'swap-offer:$give:$want', 'give': '$give', 'want': '$want'};
     }
@@ -231,5 +234,17 @@ void main() {
     expect((await s.engine(makers: const [], now: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'not-offered');
     s.coins.first['state'] = 'spent';
     expect((await s.engine(now: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'no-funds');
+  });
+
+  test('engine: a maker quoting levels of one pair is asked for one firm offer, at the level that gives the most', () async {
+    final s = StandIn()
+      ..quotes = [
+        {'give_asset': y, 'want_asset': x, 'rate_num': '4', 'rate_den': '3', 'max_give': '100000', 'min_give': '10000'},
+        {'give_asset': y, 'want_asset': x, 'rate_num': '5', 'rate_den': '3', 'max_give': '1000000', 'min_give': '10000'},
+        {'give_asset': y, 'want_asset': x, 'rate_num': '6', 'rate_den': '3', 'max_give': '2000000', 'min_give': '10000'},
+      ];
+    await s.engine(now: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000));
+    // 400,000 at 5/3 gives 240,000, more than the first level's 100,000 cap or 200,000 at 6/3.
+    expect(s.firmGives, ['240000'], reason: 'one firm offer, at the deeper level');
   });
 }
