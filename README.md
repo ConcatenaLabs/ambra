@@ -249,19 +249,31 @@ module that implements it.
   named for an address the wallet handed out (it scans 20 past the wallet's next receive
   index, since the leaf wallet counts its keys apart from the main wallet); a claim taken
   up then counts in the asset's figure like any coin. It cancels each offline-refresh plan
-  whose coin moved, and signs a plan for each coin whose first step could run within ten
-  days, two expiries ahead, so a wallet closed across an expiry keeps the coin. Each
-  step's fee is at most 0.2% of the coin and is taken from the coin in its own asset,
-  never another; a coin the operator will not plan in its asset stays unplanned, and the
-  sync refreshes it while the app is open. A coin of no round (a board, or a coin
-  received or taken up out of round) is refreshed into a round first and planned at a
-  later sync. Younger coins stay unplanned so they remain free to pay with, which leaves a
-  gap: a wallet closed within a coin's first two weeks or so and kept closed through that
-  coin's step window can lose the coin to the operator's sweep, as any holder who stays
-  away past an expiry can. Developer mode's Leaves screen shows the last run in a "Kept
-  by itself" card (claims taken up, plans cancelled and made, coins refreshed into a
-  round) with the distributions, the claims and the plans; each open plan has Cancel and
-  Release (cancel, then refresh the coin in the next round at the fee shown). User mode
+  whose coin moved, and signs a plan for every leaf of a round at the first `care` after
+  the leaf is made (`plan_within` set to plan every round leaf), two expiries ahead, so a
+  wallet closed across an expiry keeps the coin, whenever it closes. Each step's fee is at
+  most 0.2% of the coin and is taken from the coin in its own asset, never another; a coin
+  the operator will not plan in its asset stays unplanned, and the sync refreshes it while
+  the app is open. A coin of no round (a board, or a coin received or taken up out of
+  round) is free to pay with, and is refreshed into a round once that refresh could run
+  within ten days (it costs a fee, so it waits), then planned at a later sync.
+- A planned coin carries refund halves the wallet signed, so no wallet pays it out of
+  round. A payment, a trade or an order that the unplanned coins cannot cover is made
+  through the next round, by itself: the library refuses it naming the planned coins whose
+  release covers it (kind `planned`), the app gives those up in the next round for leaves
+  of its own that no plan names (`plan_release`), syncs every 15 seconds until that round
+  is final and the new leaves are held, and asks again (at most three releases, and three
+  hours of waiting, after which it says that nothing was paid and the payment can be asked
+  again). The person waits one round and sees nothing else. Every leaf command a screen
+  starts goes through this one path (`LeafService.pay`, `payThroughRelease` in
+  `app/lib/src/data/leaf_service.dart`), the user-mode Swap tab's included. A release
+  costs the refresh fee the asset's schedule asks then (none in the coin's free window).
+  Developer mode's Leaves screen shows the last `care` in a "Kept by itself" card (claims
+  taken up, plans cancelled and made, coins refreshed into a round) with the
+  distributions, the claims and the plans; each open plan has Cancel and Release
+  (`plan_release` of the plan's current leaf, which ends the plan once that round is
+  final), each planned leaf is marked under "Coins and their dates", and a "Paying through
+  the next round" card stands while a payment waits for its round. User mode
   shows none of it.
 
 **Assets, staking, faucet, node**

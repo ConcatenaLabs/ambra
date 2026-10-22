@@ -236,7 +236,7 @@ Generated bindings live in `app/lib/src/rust/`; the Rust source of truth is
 Single wallet (mirrors the web wallet); opt-in device biometric/passcode lock;
 foreground + on-resume + pull-to-refresh sync (no push), and for leaves a sync on the
 library's schedule while the app runs, once when it opens or comes back, plus a scheduled job while it is closed,
-and the library's `care` (claims taken up, offline-refresh plans kept) at the first sync and then at most every ten
+and the library's `care` (claims taken up, every leaf of a round planned) at the first sync and then at most every ten
 minutes; testnet/faucet cues kept;
 reference currency defaults to USD. Backend defaults to the public testnet node
 `https://sequentiatestnet.com` and is user-configurable (More > Node, optional HTTP auth);

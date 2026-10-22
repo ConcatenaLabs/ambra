@@ -71,7 +71,7 @@ class _LeafRailPanelState extends State<LeafRailPanel> {
   final _acceptIn = TextEditingController();
 
   Future<dynamic> _run(String cmd, [Map<String, dynamic> args = const {}]) =>
-      widget.run != null ? widget.run!(cmd, args) : LeafService.instance.run(cmd, args);
+      widget.run != null ? widget.run!(cmd, args) : LeafService.instance.pay(cmd, args);
 
   Future<List<Map<String, dynamic>>> _offers(String a, String b) async {
     if (widget.fetchOffers != null) return widget.fetchOffers!(a, b);

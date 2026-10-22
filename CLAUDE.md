@@ -85,6 +85,18 @@ crate first or set that variable.
 
 There is no CI in this repository. Nothing checks a build or a test for you.
 
+## Leaf commands a person starts go through one path
+
+Every leaf command a screen starts on someone's tap goes through `LeafService.pay`
+(`app/lib/src/data/leaf_service.dart`), never `LeafService.run`: the Leaves screen's actions,
+the faucet's leaf request, the developer-mode leaf panel and the user-mode Swap tab's engine
+(wired in `appTradeEngine`, `app/lib/src/screens/user_composer.dart`). On a refusal of kind
+`planned` it gives up the planned coins the library names in the next round
+(`plan_release`), syncs until that round is final, and asks again (`payThroughRelease`).
+`care` runs with `plan_within` set to plan every leaf of a round (`careArgs`), so without this
+path a payment out of planned coins is refused. Reads (`coins`, quotes shown before signing,
+`refusals`) may use `run`. Keep that one path.
+
 ## Three things that get forgotten
 
 1. **Touching `ambra_core` means rebuilding the Android `.so`.**

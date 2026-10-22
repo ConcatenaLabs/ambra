@@ -58,7 +58,7 @@ class _FaucetScreenState extends State<FaucetScreen> {
     try {
       if (_asLeaf && _leafOffered) {
         // A receive request from the leaf wallet, paid by the faucet off the chain.
-        final made = await LeafService.instance.run('receive', {'asset': _hexOf(asset)});
+        final made = await LeafService.instance.pay('receive', {'asset': _hexOf(asset)});
         final request = (made is Map ? made['request'] : null)?.toString();
         if (request == null || request.isEmpty) throw Exception('the leaf wallet made no request');
         final r = await ApiClient.faucetLeaf(request, asset: asset);
