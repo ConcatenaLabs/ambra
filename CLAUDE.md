@@ -83,6 +83,19 @@ crate first or set that variable.
 
 `flutter analyze` is the standing gate; commit bodies record it.
 
+A node of your own (More > Change node) has no Lightning: `Backend.applyLnForOrigin` turns it off
+there. A build for a local stack, an emulator against the regtest harness, names that stack's
+hosted-node service at build time and keeps Lightning on for a custom origin:
+
+```sh
+flutter build apk --debug --target-platform android-x64 \
+  --dart-define=AMBRA_STACK_LN_WS=ws://127.0.0.1:9/none \
+  --dart-define=AMBRA_STACK_LN_HOST_PUBKEY=<33-byte hex> --dart-define=AMBRA_STACK_LN_TOKEN=<token>
+```
+
+The service is then the origin's `/lsp`, and the wallet's own nodes are reached through its
+websocket router (`/lsp-ws-node/…`). A release build names none of these.
+
 There is no CI in this repository. Nothing checks a build or a test for you.
 
 ## Leaf commands a person starts go through one path
