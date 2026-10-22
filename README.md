@@ -150,7 +150,8 @@ module that implements it.
   of it names a rail, a round, a leaf, the operator, a covenant, an expiry or an atom. BTC
   trades against an asset the same way, in one hash-lock: the asset moves in the operator's
   tree and the BTC over the wallet's own hosted Bitcoin Lightning node, under the hash of
-  whoever receives the BTC (`app/lib/src/data/user_trade_btc.dart`). When the wallet sells
+  whoever receives the BTC (`app/lib/src/data/user_trade_btc.dart`), with the leaf maker that
+  quotes BTC at the node's origin (`/leafmaker-btc`, beside the in-tree maker at `/leafmaker`). When the wallet sells
   for BTC its invoice is a hold under a hash it makes itself, its preimage kept on the phone
   and handed to the node only to settle a payment held there for the whole amount; when it
   buys with BTC it pays the maker's invoice only once the asset it receives is held for good,

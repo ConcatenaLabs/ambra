@@ -52,17 +52,21 @@ BtcLightning? appBtcLightning(String walletTag) {
     }
   }
 
+  // The wallet's own BTC channels, as /status reports them.
+  Future<LegLiquidity> btcLeg() async {
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m == null) return legLiquidity(const [], RailTarget.btc());
+    final st = await LightningService.instance.getStatus(nodes: [lnkeys.ownNodeKeyForBtc(m)]);
+    return legLiquidity(((st.raw['channels'] as List?) ?? const []).whereType<Map>().toList(), RailTarget.btc());
+  }
+
   final key = 'ambra.btcln.holds.$walletTag';
   _btcLnTag = walletTag;
   return _btcLn = HostedBtcLightning(
     lsp: const LspBtcCalls(),
     nodeKey: nodeKey,
-    spendable: () async {
-      final m = await WalletRepository.instance.readMnemonic();
-      if (m == null) return BigInt.zero;
-      final st = await LightningService.instance.getStatus(nodes: [lnkeys.ownNodeKeyForBtc(m)]);
-      return legLiquidity(((st.raw['channels'] as List?) ?? const []).whereType<Map>().toList(), RailTarget.btc()).spendable;
-    },
+    spendable: () async => (await btcLeg()).spendable,
+    receivable: () async => (await btcLeg()).receivable,
     read: () async => (await SharedPreferences.getInstance()).getString(key),
     write: (v) async => (await SharedPreferences.getInstance()).setString(key, v),
     log: (m) => debugPrint(m),
@@ -123,7 +127,7 @@ UserTradeEngine appTradeEngine({required String walletTag}) {
     // refusal user mode has plain words for is said in them.
     run: (cmd, args) => LeafService.instance.pay(cmd, args, true),
     fetchJson: fetchJson,
-    makers: () => [Backend.leafMaker],
+    makers: () => [Backend.leafMaker, Backend.leafMakerBtc],
     relayBook: (pay, receive) async => [...await one(receive, pay), ...await one(pay, receive)],
     relayFills: (pay, receive) async {
       Future<List<Map<String, dynamic>>> fills(String base, String quote) async {

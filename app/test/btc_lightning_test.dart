@@ -97,7 +97,7 @@ class FakeLsp implements BtcLsp {
   Future<Map<String, dynamic>> payQuote(String nodeKey, String bolt11) async => {'route_found': true, 'fee_msat': 1001, 'delay': 52};
 }
 
-({HostedBtcLightning btc, FakeLsp lsp}) setup({String? otherHash, Object? payErr, Map<String, dynamic>? payStatus}) {
+({HostedBtcLightning btc, FakeLsp lsp}) setup({String? otherHash, Object? payErr, Map<String, dynamic>? payStatus, BigInt? receivable}) {
   String? store;
   final lsp = FakeLsp(otherHash: otherHash, payErr: payErr, payStatusAnswer: payStatus);
   lsp.peek = () async => store;
@@ -105,6 +105,7 @@ class FakeLsp implements BtcLsp {
     lsp: lsp,
     nodeKey: () async => 'btc:02aa',
     spendable: () async => BigInt.from(5000000),
+    receivable: receivable == null ? null : () async => receivable,
     read: () async => store,
     write: (v) async => store = v,
     now: () => 1496314658000,
@@ -135,6 +136,15 @@ void main() {
     final kept = (jsonDecode(t.lsp.storedAtInvoice!) as Map)[inv['payment_hash']] as Map;
     expect(sha('${kept['preimage']}'), inv['payment_hash'], reason: 'kept before the call');
     expect(decodeBtcInvoice('${inv['invoice']}')['payment_hash'], inv['payment_hash']);
+  });
+
+  test('refused before anything is drawn or asked: a hold for more than the wallet can receive', () async {
+    final t = setup(receivable: sats - BigInt.one);
+    await expectLater(t.btc.invoice(sats: sats), throwsA(predicate((e) => '$e'.contains('the node cannot receive that much now'))));
+    expect(t.lsp.calls, isEmpty, reason: 'no call to the service');
+    expect(await t.lsp.peek(), isNull, reason: 'no preimage drawn and kept');
+    final ok = setup(receivable: sats);
+    expect((await ok.btc.invoice(sats: sats))['payment_hash'], isNotNull);
   });
 
   test('refused: a node invoice under another hash', () async {
