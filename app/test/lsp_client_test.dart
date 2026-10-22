@@ -90,6 +90,23 @@ void main() {
     expect(r.settledMs, 420);
   });
 
+  test('nodePay sends the swap hash, amount and lock caps under the names /node/pay reads', () async {
+    late Map<String, dynamic> sent;
+    LspClient.client = MockClient((req) async {
+      expect(req.url.toString(), 'http://lsp.test/lsp/node/pay');
+      sent = jsonDecode(req.body) as Map<String, dynamic>;
+      return http.Response(jsonEncode({'ok': true, 'paid': true, 'preimage': '11' * 32}), 200);
+    });
+    final r = await LspClient.nodePay(
+        nodeKey: 'btc:02aa', bolt11: 'lnbcrt1x', wantHash: 'ab' * 32, amountMsat: BigInt.from(5000), maxCltv: 58, minFinalCltv: 18);
+    expect(r.paid, isTrue);
+    expect(sent['wantHash'], 'ab' * 32);
+    expect(sent.containsKey('want_hash'), isFalse);
+    expect(sent['amount_msat'], 5000);
+    expect(sent['max_cltv'], 58);
+    expect(sent['min_final_cltv'], 18);
+  });
+
   test('an LSP bearer token is sent when configured', () async {
     Backend.lnToken = 'sekret';
     LspClient.client = MockClient((req) async {
