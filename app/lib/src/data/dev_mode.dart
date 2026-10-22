@@ -31,6 +31,9 @@ class DevMode extends ChangeNotifier {
   static const _prefix = 'ambra.mode.';
   static const _legacyKey = 'ambra.developer_mode';
   String? _tag;
+
+  /// The open wallet's tag (its fingerprint), or null before a wallet is open.
+  String? get tag => _tag;
   bool _on = false;
   bool get on => _on;
   String get mode => _on ? 'developer' : 'user';

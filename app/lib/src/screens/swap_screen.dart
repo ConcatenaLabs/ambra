@@ -34,6 +34,7 @@ import '../data/subasset_sell_service.dart' show SubSellRecord, SubSellStep, Sub
 import '../data/swap_route.dart';
 import '../data/trade_receipts.dart';
 import '../data/trade_slots.dart';
+import '../data/user_trade.dart' show UserTradeEngine;
 import '../data/wallet_repository.dart';
 import '../data/xchain_client.dart';
 import '../data/xchain_swap_service.dart';
@@ -52,6 +53,7 @@ import 'subasset_sell_screen.dart';
 import '../data/subswap_service.dart';
 import 'submarine_swap_screen.dart';
 import 'xchain_swap_screen.dart';
+import 'user_composer.dart';
 
 /// Estimated vByte size of a same-chain settlement tx, used to turn the optional
 /// per-vB fee rate into a fee amount. Errs generous; the fee is shown for review.
@@ -1982,8 +1984,32 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(ambraSnack(m));
 
+  // User mode's Swap tab: the user composer (user_composer.dart), three inputs and one button.
+  UserTradeEngine? _userEngine;
+  String? _userTag;
+  Widget _userComposer() {
+    final tag = DevMode.instance.tag ?? 'default';
+    if (_userEngine == null || _userTag != tag) {
+      _userEngine = appTradeEngine(walletTag: tag);
+      _userTag = tag;
+    }
+    // Leaf balances are read when the pickers draw, so a trade's coins show at once.
+    Map<String, BigInt> leaves() => LeafService.instance.leafAtoms();
+    return UserComposer(
+      key: ValueKey('userComposer-$tag'),
+      engine: _userEngine!,
+      assets: () => <String>{kBtcSentinel, ..._payableAssets(), ...leaves().keys}.toList(),
+      held: (h) => (BigInt.tryParse(_bal(h)) ?? BigInt.zero) + _lnAtoms(h) + (h == kBtcSentinel ? BigInt.zero : (leaves()[h] ?? BigInt.zero)),
+      onMoved: () => LeafService.instance.refresh(),
+      ticker: (h) => h == kBtcSentinel ? 'BTC' : SeqAssets.labelFor(h).ticker,
+      precision: (h) => h == kBtcSentinel ? 8 : SeqAssets.labelFor(h).precision,
+      admittedReceives: (pay) => _userEngine!.admittedReceivesFor(pay),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (!DevMode.instance.on) return _userComposer();
     final pays = _payableAssets();
     final book = _orderBook;
     final isCross = _isCrossPair;
