@@ -16,11 +16,16 @@ import 'wallet_repository.dart';
 
 /// A refusal by the leaf wallet, in the library's own words.
 class LeafRefusal implements Exception {
-  LeafRefusal(this.kind, this.message, {this.code, this.status});
+  LeafRefusal(this.kind, this.message, {this.code, this.status, this.asset, this.release = const []});
   final String kind;
   final String message;
   final String? code;
   final int? status;
+
+  /// A payment that planned coins could cover (kind `planned`): their asset, and the
+  /// coins whose release covers it.
+  final String? asset;
+  final List<String> release;
 
   /// Reads the library's `{"error": {"kind", "message", "code"?, "status"?}}`
   /// out of whatever the core threw.
@@ -32,7 +37,10 @@ class LeafRefusal implements Exception {
       if (j is Map && j['error'] is Map) {
         final err = j['error'] as Map;
         return LeafRefusal('${err['kind'] ?? 'error'}', '${err['message'] ?? text}',
-            code: err['code']?.toString(), status: (err['status'] as num?)?.toInt());
+            code: err['code']?.toString(),
+            status: (err['status'] as num?)?.toInt(),
+            asset: err['asset']?.toString(),
+            release: [for (final r in (err['release'] as List?) ?? const []) '$r']);
       }
     } catch (_) {}
     return LeafRefusal('error', text ?? '$e');
@@ -93,6 +101,8 @@ class LeafService extends ChangeNotifier {
   List<dynamic> coins = const [];
   List<dynamic> participations = const [];
   Map<String, dynamic>? schedule;
+  /// The library's `plans` answer: developer mode marks each planned leaf ([plannedCoins]).
+  Object? plans;
   DateTime? lastSync;
   LeafRefusal? lastError;
   Timer? _timer;
@@ -232,6 +242,43 @@ class LeafService extends ChangeNotifier {
     }
   }
 
+  /// While a payment waits for the round that frees the planned coins it needs: which
+  /// coins, their asset, the command, and since when. Developer mode shows it as "Paying
+  /// through the next round"; user mode shows nothing more than the payment's own wait.
+  ReleaseWait? releasing;
+
+  /// Runs a leaf command a person started (a payment, a trade, an order, a fill, and every
+  /// other command the screens send on someone's tap): the library's answer, or its
+  /// refusal. A payment the unplanned coins cannot cover and planned ones can is made
+  /// through the next round by itself ([payThroughRelease]): the planned coins the
+  /// refusal names are given up in that round for leaves no plan names, and the command
+  /// is asked again once that round is final. Every screen that starts a leaf command
+  /// goes through here; keep it the one path.
+  Future<dynamic> pay(String command, [Map<String, dynamic> args = const {}]) async {
+    try {
+      return await payThroughRelease(
+        command,
+        args,
+        run: run,
+        synced: (v) async {
+          lastSync = DateTime.now();
+          for (final a in arrivals(v is Map ? v['mailbox'] : null)) {
+            await notifyArrived(a, channel: _channel);
+          }
+        },
+        onWait: (w) {
+          releasing = w;
+          notifyListeners();
+        },
+      );
+    } finally {
+      if (releasing != null) {
+        releasing = null;
+        notifyListeners();
+      }
+    }
+  }
+
   /// Reads balance, coins, participations and schedule again, and plans the
   /// scheduled job from the schedule.
   Future<void> refresh() async {
@@ -245,6 +292,9 @@ class LeafService extends ChangeNotifier {
     } catch (e) {
       lastError = LeafRefusal.of(e);
     }
+    try {
+      plans = await run('plans');
+    } catch (_) {}
     notifyListeners();
   }
 
@@ -266,9 +316,9 @@ class LeafService extends ChangeNotifier {
   /// starts, then at most every [careEvery] (the scheduled job keeps the same
   /// clock). It takes up every claim named by an address the wallet handed out (the
   /// scan reaches 20 past the wallet's next receive index), cancels each plan whose
-  /// coin moved, plans each coin within ten days of its step window, and refreshes
-  /// into a round a coin no plan can start from. No prompt: it is what the wallet
-  /// does by itself.
+  /// coin moved, plans every leaf of a round, and refreshes into a round a coin no
+  /// plan can start from once that refresh could run within ten days. No prompt: it
+  /// is what the wallet does by itself.
   Future<void> careIfDue({bool force = false}) async {
     if (!open) return;
     final last = _caredThisRun ? (lastCareAt ?? await careClock()) : null;
@@ -411,10 +461,114 @@ class LeafService extends ChangeNotifier {
 /// Whether `care` runs now: never yet ([last] null), or [LeafService.careEvery] since.
 bool careDue(DateTime? last, DateTime now) => last == null || now.difference(last) >= LeafService.careEvery;
 
+/// `care`'s planning reach: every leaf of a round is planned at the first care after it is
+/// made (the library's PLAN_EVERY_ROUND_LEAF). A coin of no round is still refreshed into
+/// a round only once its refresh could run within ten days, since that refresh costs a fee.
+const kPlanEveryRoundLeaf = 4294967295;
+
+/// A payment through a release: how often the wallet syncs while it waits for the round
+/// that frees the planned coins, how long it waits at most, and how many releases one
+/// payment may need (a release can fall short by the new leaf's own margins).
+const kReleasePoll = Duration(seconds: 15);
+const kReleaseWait = Duration(hours: 3);
+const kReleaseTries = 3;
+
+/// The refusal when the round that frees the coins does not come in time.
+const kReleaseTimeout =
+    'the next round did not free the coins this payment needs in time; nothing was paid, and the payment can be asked again';
+
 /// `care`'s arguments: the scan reaches 20 past the kit wallet's next receive index, so a
 /// claim named by any address the wallet handed out is found (the leaf wallet's own
-/// index counter is separate from the kit's).
-Map<String, dynamic> careArgs(int kitNextIndex) => {'scan': kitNextIndex + 20};
+/// index counter is separate from the kit's); and every leaf of a round is planned.
+Map<String, dynamic> careArgs(int kitNextIndex) => {'scan': kitNextIndex + 20, 'plan_within': kPlanEveryRoundLeaf};
+
+/// A payment waiting for the round that frees the planned coins it needs.
+class ReleaseWait {
+  ReleaseWait({required this.command, required this.coins, this.asset, required this.since});
+  final String command;
+  final List<String> coins;
+  final String? asset;
+  final DateTime since;
+}
+
+/// Whether the coins a release gave up are done with: none of them is still the wallet's
+/// to spend or in the round that gives them up (their round final, the forfeits handed
+/// over at sync), so the new leaves are held and the payment can be asked again.
+bool releaseDone(List<dynamic> coins, List<String> released) {
+  const releasing = {'live', 'pending', 'given', 'offered', 'sending', 'forfeited'};
+  final by = {for (final c in coins.whereType<Map>()) '${c['leaf_id']}': c};
+  return released.every((id) {
+    final c = by[id];
+    return c == null || !releasing.contains(c['state']);
+  });
+}
+
+/// The current coin of each open or stopped plan (the leaf its next step gives up), with
+/// its plan: `plans`' answer, a list or `{"plans": [...]}`.
+Map<String, Map> plannedCoins(Object? plans) {
+  final list = plans is Map ? plans['plans'] : plans;
+  final out = <String, Map>{};
+  if (list is! List) return out;
+  for (final p in list.whereType<Map>()) {
+    if (p['state'] != 'open' && p['state'] != 'stopped') continue;
+    String? current;
+    for (final st in (p['steps'] as List?) ?? const []) {
+      if (st is Map && st['leaf_id'] != null) current = '${st['leaf_id']}';
+    }
+    out[current ?? '${p['coin']}'] = p;
+  }
+  return out;
+}
+
+/// Runs [command] through [run]; when the library refuses it with kind `planned` (the
+/// unplanned coins fall short, the planned coins it names would cover it), gives those
+/// coins up in the next round (`plan_release`), syncs every [poll] until none of them is
+/// held or in that round any more, at most [wait], and asks again; at most [tries]
+/// releases. Every other answer and refusal is the library's, untouched. [onWait] hears
+/// the wait start (a [ReleaseWait]) and end (null); [synced] each sync's answer.
+Future<dynamic> payThroughRelease(
+  String command,
+  Map<String, dynamic> args, {
+  required Future<dynamic> Function(String command, Map<String, dynamic> args) run,
+  Future<void> Function(Duration)? sleep,
+  DateTime Function()? now,
+  void Function(ReleaseWait? wait)? onWait,
+  Future<void> Function(Object? sync)? synced,
+  Duration poll = kReleasePoll,
+  Duration wait = kReleaseWait,
+  int tries = kReleaseTries,
+}) async {
+  final clock = now ?? DateTime.now;
+  final pause = sleep ?? (d) => Future<void>.delayed(d);
+  for (var i = 0;; i++) {
+    try {
+      return await run(command, args);
+    } catch (e) {
+      final r = LeafRefusal.of(e);
+      if (r.kind != 'planned' || r.release.isEmpty || i >= tries) throw r;
+      onWait?.call(ReleaseWait(command: command, coins: r.release, asset: r.asset, since: clock()));
+      try {
+        await run('plan_release', {'leaves': r.release});
+        final until = clock().add(wait);
+        for (;;) {
+          try {
+            final v = await run('sync', const {});
+            await synced?.call(v);
+          } catch (_) {}
+          List<dynamic>? coins;
+          try {
+            coins = (await run('coins', const {}) as List?) ?? const [];
+          } catch (_) {}
+          if (coins != null && releaseDone(coins, r.release)) break;
+          if (!clock().isBefore(until)) throw LeafRefusal('refused', kReleaseTimeout);
+          await pause(poll);
+        }
+      } finally {
+        onWait?.call(null);
+      }
+    }
+  }
+}
 
 /// What a `care` answer did, counted for developer mode: claims taken up, plans
 /// cancelled, coins planned, coins refreshed into a round, coins not yet within reach,

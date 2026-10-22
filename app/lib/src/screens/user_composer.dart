@@ -72,7 +72,8 @@ UserTradeEngine appTradeEngine({required String walletTag}) {
   String? readFrom;
   final key = 'ambra.usertrade.$walletTag';
   return UserTradeEngine(UserTradeDeps(
-    run: (cmd, args) => LeafService.instance.run(cmd, args),
+    // A trade that needs a planned coin is made through the next round, by itself.
+    run: (cmd, args) => LeafService.instance.pay(cmd, args),
     fetchJson: fetchJson,
     makers: () => [Backend.leafMaker],
     relayBook: (pay, receive) async => [...await one(receive, pay), ...await one(pay, receive)],

@@ -56,6 +56,7 @@ class _LeavesScreenState extends State<LeavesScreen> {
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
           children: [
             if (!svc.joined) const _JoinCard() else ...[
+              if (svc.releasing != null) ...[_ReleasingCard(wait: svc.releasing!), const SizedBox(height: 14)],
               _StatusCard(svc: svc),
               const SizedBox(height: 14),
               _BalanceCard(svc: svc),
@@ -205,6 +206,31 @@ class _JoinCardState extends State<_JoinCard> {
 }
 
 // ---------------------------------------------------------------------------
+// A payment waiting for the next round
+// ---------------------------------------------------------------------------
+
+/// A payment the unplanned leaves could not cover, made through the next round: the
+/// planned leaves it needs are given up in that round for leaves no plan names, and the
+/// payment is asked again once that round is final.
+class _ReleasingCard extends StatelessWidget {
+  const _ReleasingCard({required this.wait});
+  final ReleaseWait wait;
+  @override
+  Widget build(BuildContext context) => AmbraCard(
+        key: const Key('leaf-releasing'),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const SectionLabel('Paying through the next round'),
+          const SizedBox(height: 8),
+          Text(
+              '${wait.command}: the unplanned leaves fall short, so ${wait.coins.length} planned leaf(s) '
+              '(${wait.coins.map((c) => _short(c, 6)).join(', ')}) are given up in the next round for leaves no plan '
+              'names; the payment is asked again once that round is final.',
+              style: AmbraText.sub),
+        ]),
+      );
+}
+
+// ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
 
@@ -321,7 +347,7 @@ class _ReceiveCardState extends State<_ReceiveCard> {
       _request = null;
     });
     try {
-      final r = await LeafService.instance.run('receive', {
+      final r = await LeafService.instance.pay('receive', {
         if (_asset.text.trim().isNotEmpty) 'asset': _asset.text.trim(),
         if (_amount.text.trim().isNotEmpty) 'amount': _amount.text.trim(),
       });
@@ -406,7 +432,7 @@ class _SendCardState extends State<_SendCard> {
       _done = null;
     });
     try {
-      final r = await LeafService.instance.run('send', {
+      final r = await LeafService.instance.pay('send', {
         'request': _request.text.trim(),
         if (_amount.text.trim().isNotEmpty) 'amount': _amount.text.trim(),
         if (_asset.text.trim().isNotEmpty) 'asset': _asset.text.trim(),
@@ -478,7 +504,7 @@ class _SettleCardState extends State<_SettleCard> {
       _err = null;
     });
     try {
-      final r = await LeafService.instance.run('participate', {'shown': _quote});
+      final r = await LeafService.instance.pay('participate', {'shown': _quote});
       _done = const JsonEncoder.withIndent(' ').convert(r);
       _quote = null;
       await LeafService.instance.refresh();
@@ -580,7 +606,7 @@ class _CoinsCardState extends State<_CoinsCard> {
       _exitErr.remove(leaf);
     });
     try {
-      final r = await LeafService.instance.run('exit', {
+      final r = await LeafService.instance.pay('exit', {
         'leaf_id': leaf,
         'shown': q['unroll'] ?? const {},
         if (q['fee_asset'] != null) 'fee_asset': q['fee_asset'],
@@ -597,6 +623,7 @@ class _CoinsCardState extends State<_CoinsCard> {
   Widget build(BuildContext context) {
     final coins = widget.svc.coins;
     final now = widget.svc.schedule?['now'];
+    final planned = plannedCoins(widget.svc.plans);
     return AmbraCard(
       key: const Key('leaf-coins'),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -610,6 +637,9 @@ class _CoinsCardState extends State<_CoinsCard> {
           if (c['refresh_from'] != null) Text('Refresh from ${_when(c['refresh_from'], now)}', style: AmbraText.sub),
           if (c['home_from'] != null) Text('Home from ${_when(c['home_from'], now)}', style: AmbraText.sub),
           if (c['exit_by'] != null) Text('Exit by ${_when(c['exit_by'], now)}', style: AmbraText.sub),
+          if (planned['${c['leaf_id']}'] case final p?)
+            Text('Planned: plan ${_short('${p['plan_id']}', 6)}, ${p['state']}: paid out of round only once released into the next round',
+                key: Key('leaf-planned-${c['leaf_id']}'), style: AmbraText.sub),
           if ('${c['note'] ?? ''}'.isNotEmpty) Text('${c['note']}', style: AmbraText.sub),
           if (!{'spent', 'exited', 'lost'}.contains(c['state'])) ...[
             const SizedBox(height: 6),
@@ -691,7 +721,7 @@ class _BoardCardState extends State<_BoardCard> {
         if (mounted) setState(() => _busy = false);
         return;
       }
-      final r = await LeafService.instance.run('board', {...args, 'shown': quote['fee']});
+      final r = await LeafService.instance.pay('board', {...args, 'shown': quote['fee']});
       _done = const JsonEncoder.withIndent(' ').convert(r);
       await LeafService.instance.refresh();
     } catch (e) {
@@ -770,8 +800,8 @@ class _RefusalsCardState extends State<_RefusalsCard> {
 /// start, then at most every ten minutes, in the app and in the scheduled job): what
 /// it did last, and the lists behind it. Distributions (`distributions`), the claims
 /// named for this wallet's keys (`claims {scan}`), and the plans (`plans`), each open
-/// one with Cancel (`plan_cancel`) and Release: cancel, then refresh the coin in the
-/// next round at the fee shown (`quote`, `participate`).
+/// one with Cancel (`plan_cancel`) and Release (`plan_release` of the plan's current
+/// leaf: given up in the next round for a leaf no plan names, which ends the plan).
 class _CareCard extends StatefulWidget {
   const _CareCard({required this.svc});
   final LeafService svc;
@@ -784,9 +814,7 @@ class _CareCardState extends State<_CareCard> {
   dynamic _rows;
   LeafRefusal? _err;
   bool _busy = false;
-  // Release: the coin, and the refresh fee shown for it.
-  String? _releasing;
-  List<dynamic>? _quote;
+  String? _released;
 
   Future<void> _show(String what) async {
     setState(() {
@@ -825,35 +853,19 @@ class _CareCardState extends State<_CareCard> {
     if (mounted) setState(() => _busy = false);
   }
 
-  /// Release a planned coin: cancel its plan, then ask its refresh in the next round.
-  /// The fee is shown before anything is signed; the refresh goes ahead only on it.
-  Future<void> _release(String plan, String coin) async {
+  /// Release a planned coin: its plan's current leaf given up in the next round for a
+  /// leaf of the wallet's own that no plan names (`plan_release`); the plan ends once
+  /// that round is final. The refresh fee is the asset's schedule's then (none in the
+  /// leaf's free window), within the library's bound.
+  Future<void> _release(String coin) async {
     setState(() {
       _busy = true;
       _err = null;
+      _released = null;
     });
     try {
-      await widget.svc.run('plan_cancel', {'plan': plan});
-      final q = await widget.svc.run('quote', {'leaves': [coin]});
-      _quote = (q is Map ? q['coins'] as List? : null) ?? const [];
-      _releasing = coin;
-    } catch (e) {
-      _err = LeafRefusal.of(e);
-    }
-    if (mounted) setState(() => _busy = false);
-  }
-
-  Future<void> _refresh() async {
-    final coin = _releasing;
-    if (coin == null) return;
-    setState(() {
-      _busy = true;
-      _err = null;
-    });
-    try {
-      await widget.svc.run('participate', {'leaves': [coin], 'shown': _quote});
-      _releasing = null;
-      _quote = null;
+      final r = await widget.svc.run('plan_release', {'leaves': [coin]});
+      _released = const JsonEncoder.withIndent(' ').convert(r);
       await widget.svc.refresh();
       await _show('plans');
     } catch (e) {
@@ -864,6 +876,7 @@ class _CareCardState extends State<_CareCard> {
 
   Widget _planRow(Map p) {
     final open = p['state'] == 'open';
+    final current = plannedCoins([p]).keys.firstOrNull ?? '${p['coin']}';
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -875,7 +888,7 @@ class _CareCardState extends State<_CareCard> {
           Row(children: [
             Expanded(child: SecondaryButton(key: Key('plan-cancel-${p['plan_id']}'), label: 'Cancel', icon: Icons.close, onPressed: _busy ? null : () => _cancel('${p['plan_id']}'))),
             const SizedBox(width: 8),
-            Expanded(child: SecondaryButton(key: Key('plan-release-${p['plan_id']}'), label: 'Release', icon: Icons.lock_open, onPressed: _busy ? null : () => _release('${p['plan_id']}', '${p['coin']}'))),
+            Expanded(child: SecondaryButton(key: Key('plan-release-${p['plan_id']}'), label: 'Release', icon: Icons.lock_open, onPressed: _busy ? null : () => _release(current))),
           ]),
       ]),
     );
@@ -895,12 +908,13 @@ class _CareCardState extends State<_CareCard> {
         const Text(
             'At a sync (the first after the app starts, then at most every ten minutes, here and in the scheduled '
             'job) the wallet takes up every claim named for an address it handed out, cancels each plan whose coin '
-            'moved, and plans each coin whose first step could run within ten days, two expiries ahead, each step\'s '
-            'fee at most 0.2% of the coin and taken from it in its own asset. A coin of no round (a board, a coin '
-            'received or taken up out of round) is refreshed into a round first and planned at a later sync. A coin '
-            'the operator will not plan stays unplanned and is refreshed by the sync while the app is open. A wallet '
-            'closed within a coin\'s first two weeks or so and kept closed through its step window can lose that coin '
-            'to the operator\'s sweep, as any holder who stays away past an expiry can.',
+            'moved, and plans every leaf of a round, two expiries ahead, each step\'s fee at most 0.2% of the coin and '
+            'taken from it in its own asset, so a closed wallet keeps it across its expiry. A coin of no round (a '
+            'board, a coin received or taken up out of round) is free to pay, and is refreshed into a round once its '
+            'refresh could run within ten days, then planned at a later sync. A coin the operator will not plan stays '
+            'unplanned and is refreshed by the sync while the app is open. A planned leaf is paid out of round by no '
+            'wallet: a payment the unplanned leaves cannot cover gives the planned leaves it needs up in the next '
+            'round and is made once that round is final, by itself. Release does that for one plan now.',
             style: AmbraText.sub),
         const SizedBox(height: 10),
         Text(
@@ -908,7 +922,7 @@ class _CareCardState extends State<_CareCard> {
                 ? 'Not run yet in this session.'
                 : 'Last run ${svc.lastCareAt!.toLocal().toString().substring(0, 19)}: claims taken up ${sum.claimed} · '
                     'plans cancelled ${sum.cancelled} · coins planned ${sum.planned} · refreshed into a round '
-                    '${sum.refreshing} · not yet within ten days ${sum.later}',
+                    '${sum.refreshing} · not yet within reach ${sum.later}',
             key: const Key('care-summary'),
             style: AmbraText.body),
         for (final r in sum.refusals) Text(r, style: const TextStyle(color: AmbraColors.red, fontSize: 12)),
@@ -929,14 +943,11 @@ class _CareCardState extends State<_CareCard> {
             child: SelectableText(const JsonEncoder.withIndent(' ').convert(rows),
                 key: Key('care-$_list'), style: AmbraText.mono.copyWith(fontSize: 11)),
           ),
-        if (_releasing != null && _quote != null) ...[
-          const SizedBox(height: 10),
-          Text('Refresh ${_short(_releasing!, 6)} in the next round: fee ${_quote!.isEmpty ? 'none quoted' : _quote!.map((c) => c is Map ? _amount('${c['asset']}', c['fee']) : '$c').join(', ')}',
-              style: AmbraText.sub),
-          for (final c in _quote!) SelectableText(jsonEncode(c), style: AmbraText.mono.copyWith(fontSize: 11)),
-          if (_quote!.isNotEmpty)
-            PrimaryButton(key: const Key('release-go'), label: 'Refresh at this fee', icon: Icons.check, busy: _busy, onPressed: _busy ? null : _refresh),
-        ],
+        if (_released != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: SelectableText(_released!, key: const Key('release-done'), style: AmbraText.mono.copyWith(fontSize: 11)),
+          ),
         if (_err != null) RefusalText(_err!),
       ]),
     );

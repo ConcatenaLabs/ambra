@@ -1,5 +1,6 @@
 //! The leaf service against a whole operator: a payment that arrives while the app
-//! is closed, and an in-tree swap between two wallets. Runs against arca's long-running operator harness
+//! is closed, an in-tree swap between two wallets, what `care` does by itself, and a
+//! payment out of planned coins made through a release. Runs against arca's long-running operator harness
 //! (`bark-cli/tests/arca_operator_for_browsers.rs` in ConcatenaLabs/arca), named by
 //! its control address:
 //!
@@ -325,4 +326,116 @@ fn care_takes_up_a_claim_and_plans_its_coin() {
     drop(d);
     let _ = std::fs::remove_dir_all(&ddir);
     let _ = std::fs::remove_dir_all(&hdir);
+}
+
+/// A fresh recovery phrase, so a run against a harness that served earlier runs starts
+/// from no leaves.
+fn fresh_phrase() -> String {
+    lwk_signer::SwSigner::random(false).expect("a random phrase").1.to_string()
+}
+
+/// The harness's operator and node as a leaf wallet's configuration.
+fn harness_config(state: &Value) -> Value {
+    json!({
+        "server": state["server"], "node_url": state["node_url"],
+        "node_user": state["node_user"], "node_password": state["node_password"],
+        "exit_delay_units": 3, "min_exit_delay_units": 1, "max_exit_delay_units": 400,
+    })
+}
+
+/// A new wallet that boards `amount` of `asset` (funding its on-chain address with that
+/// and 500,000 X for the fee), its board final.
+fn boarded(h: &str, name: &str, config: &Value, x: &str, asset: &str, amount: u64) -> (LeafWallet, PathBuf) {
+    let d = dir(name);
+    let mut w = LeafWallet::create(&d, &fresh_phrase(), config).expect("a wallet");
+    let addr = ok(w.run("address", &json!({})), "address")["result"].clone();
+    control(h, "/fund", json!({"script": addr["script_pubkey"], "asset": asset, "amount": amount + 1_000_000}));
+    if asset != x {
+        control(h, "/fund", json!({"script": addr["script_pubkey"], "asset": x, "amount": 500_000}));
+    }
+    control(h, "/produce", json!({}));
+    let b = ok(w.run("board", &json!({"asset": asset, "amount": amount.to_string(), "fee_asset": x})), "board");
+    eprintln!("{name} board: {}", b["result"]);
+    control(h, "/produce", json!({}));
+    control(h, "/bury", json!({}));
+    ok(w.run("sync", &json!({})), "sync after the board");
+    (w, d)
+}
+
+/// The wallet's coins in a state.
+fn coins_in(w: &mut LeafWallet, state: &str) -> Vec<Value> {
+    ok(w.run("coins", &json!({})), "coins")["result"].as_array().unwrap().iter().filter(|c| c["state"] == state).cloned().collect()
+}
+
+/// A payment out of planned coins (the app's `payThroughRelease`, its steps run here
+/// one by one): `care` with `plan_within` at PLAN_EVERY_ROUND_LEAF plans a leaf of a
+/// round at its first run; a payment the unplanned coins cannot cover is refused with
+/// kind `planned`, naming the asset and the coins whose release covers it;
+/// `plan_release` gives them up in the next round; once that round is final and the
+/// released coins are gone, the same payment goes through.
+#[test]
+fn a_payment_out_of_planned_coins_goes_through_a_release() {
+    let Ok(h) = std::env::var("AMBRA_LEAVES_HARNESS") else {
+        eprintln!("AMBRA_LEAVES_HARNESS is not set: the operator harness is not running, nothing to test against");
+        return;
+    };
+    let state = control(&h, "/state", json!({}));
+    let x = state["x"].as_str().unwrap().to_string();
+    let config = harness_config(&state);
+    let (mut a, adir) = boarded(&h, "planned-payer", &config, &x, &x, 1_000_000);
+
+    // The board is a coin of no round: refreshed into a round, it becomes a leaf of one.
+    let q = ok(a.run("quote", &json!({})), "quote")["result"].clone();
+    ok(a.run("participate", &json!({"shown": q["coins"]})), "participate");
+    eprintln!("round: {}", control(&h, "/round", json!({})));
+    ok(a.run("sync", &json!({})), "sync after the round");
+    let live = coins_in(&mut a, "live");
+    assert_eq!(live.len(), 1, "one leaf of the round: {live:?}");
+    let leaf = live[0]["leaf_id"].as_str().unwrap().to_string();
+
+    // care, as the app runs it: the leaf of the round is planned at once.
+    let care = ok(a.run("care", &json!({"plan_within": 4294967295u64})), "care")["result"].clone();
+    eprintln!("care: planned {} plan_within {}", care["planned"], care["plan_within"]);
+    assert!(care["planned"].as_array().unwrap().iter().any(|p| p.get("error").is_none()), "the round's leaf is planned at once: {care}");
+
+    // B asks 500,000 X; A's only coin is planned.
+    let bdir = dir("planned-payee");
+    let mut b = LeafWallet::create(&bdir, &fresh_phrase(), &config).expect("the payee");
+    let req = ok(b.run("receive", &json!({"asset": x, "amount": "500000"})), "receive")["result"]["request"].as_str().unwrap().to_string();
+    let e = a.run("send", &json!({"request": req})).expect_err("a payment out of a planned coin");
+    eprintln!("refused: {e}");
+    assert_eq!(e["error"]["kind"], "planned");
+    assert_eq!(e["error"]["asset"], json!(x));
+    assert_eq!(e["error"]["release"], json!([leaf]));
+
+    // The release, its round, and the same payment again.
+    let r = ok(a.run("plan_release", &json!({"leaves": [leaf]})), "plan_release")["result"].clone();
+    eprintln!("plan_release: {r}");
+    eprintln!("round: {}", control(&h, "/round", json!({})));
+    let mut done = false;
+    for _ in 0..30 {
+        ok(a.run("sync", &json!({})), "sync");
+        let all = ok(a.run("coins", &json!({})), "coins")["result"].clone();
+        let held = all.as_array().unwrap().iter().find(|c| c["leaf_id"] == json!(leaf)).map(|c| c["state"].as_str().unwrap().to_string());
+        if !matches!(held.as_deref(), Some("live" | "pending" | "given" | "offered" | "sending" | "forfeited")) {
+            eprintln!("released coin now {:?}", held);
+            done = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    assert!(done, "the released coin left the wallet's hands once its round was final");
+    let sent = ok(a.run("send", &json!({"request": req})), "the same payment again")["result"].clone();
+    eprintln!("sent: {sent}");
+    ok(b.run("mailbox", &json!({})), "the payee's mailbox");
+    let got = ok(b.run("balance", &json!({})), "balance")["result"]["arca"][&x].clone();
+    eprintln!("payee holds: {got}");
+    let total: u64 = got.as_object().unwrap().values().filter_map(|v| v.as_str()?.parse::<u64>().ok()).sum();
+    assert_eq!(total, 500_000);
+    let plans = ok(a.run("plans", &json!({})), "plans")["result"].clone();
+    eprintln!("plans: {plans}");
+    drop(a);
+    drop(b);
+    let _ = std::fs::remove_dir_all(&adir);
+    let _ = std::fs::remove_dir_all(&bdir);
 }
