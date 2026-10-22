@@ -66,6 +66,8 @@ class StandIn {
     throw StateError('no command $cmd');
   }
 
+  bool held = false;
+
   Future<Map<String, dynamic>> fetchJson(String url, {Map<String, dynamic>? post}) async {
     if (url.endsWith('/v1/quotes')) {
       return {
@@ -75,7 +77,16 @@ class StandIn {
       };
     }
     posts.add(url.split('/v1/').last);
+    // The maker holds its coin for an offer until the offer is released, a moment after it is
+    // asked to, and refuses a second offer meanwhile, as the live maker does.
+    if (url.endsWith('/v1/release')) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      held = false;
+      return {};
+    }
     if (url.endsWith('/v1/firm')) {
+      if (held) throw Exception('the maker does not hold that much now');
+      held = true;
       final give = BigInt.parse('${post!['give']}');
       final want = (give * BigInt.from(4) + BigInt.two) ~/ BigInt.from(3);
       return {'swap': 's1', 'offer': 'swap-offer:$give:$want', 'give': '$give', 'want': '$want'};

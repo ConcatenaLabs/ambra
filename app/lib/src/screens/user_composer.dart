@@ -76,6 +76,19 @@ UserTradeEngine appTradeEngine({required String walletTag}) {
     fetchJson: fetchJson,
     makers: () => [Backend.leafMaker],
     relayBook: (pay, receive) async => [...await one(receive, pay), ...await one(pay, receive)],
+    relayFills: (pay, receive) async {
+      Future<List<Map<String, dynamic>>> fills(String base, String quote) async {
+        try {
+          final r = await http.get(Uri.parse('${Backend.seqob}/v1/market/$base/$quote/fills?limit=500')).timeout(const Duration(seconds: 30));
+          if (r.statusCode != 200) return const [];
+          return [for (final f in ((jsonDecode(r.body) as Map)['fills'] as List?) ?? const []) Map<String, dynamic>.from(f as Map)];
+        } catch (_) {
+          return const [];
+        }
+      }
+
+      return [...await fills(receive, pay), ...await fills(pay, receive)];
+    },
     admitted: () async {
       if (readFrom != Backend.origin) {
         pairsCache = null;

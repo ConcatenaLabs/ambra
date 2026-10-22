@@ -141,8 +141,9 @@ module that implements it.
   the asset it is paid in, before anything is signed; **Trade** confirms it, and the trade then
   reads **Sent**, **Settled** once final, or **Returned: nothing traded.**, with nothing to do
   either way. It trades only what settles in one step from the wallet's coins in a leaf
-  operator's tree: an in-tree swap with a live leaf maker, or a transparent covenant order
-  taken in the operator's round, choosing the one that gives the most, then the one with the
+  operator's tree: an in-tree swap with a live leaf maker, a transparent covenant order
+  taken in the operator's round, or an order resting in the operator's tree filled in one
+  transfer the operator co-signs, choosing the one that gives the most, then the one with the
   fewest parties left to act. It offers only the pairs the web wallet's reliability drill has
   passed on the chain (the web wallet's `user-mode/pairs.json`, read from the node's origin),
   and says "Not offered right now" in plain words for one nobody fills in one step; no screen
