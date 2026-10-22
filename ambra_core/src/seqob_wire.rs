@@ -292,6 +292,27 @@ fn encode_covenant_terms(c: Option<&Value>) -> Option<Vec<u8>> {
     Some(w.bytes())
 }
 
+/// `seqob.v1.RestingLeafTerms` (offer field 26): an order resting as a leaf in an operator's tree.
+/// Its locator (where it rests and what that coin holds) is outside the signed bytes, so a maker's
+/// signature holds while the relay follows the order from coin to coin; its byte fields are hex as
+/// a wallet writes them or base64 as the relay serves them.
+fn encode_resting_leaf_terms(c: Option<&Value>) -> Option<Vec<u8>> {
+    let c = c?;
+    let mut w = Pw::new();
+    w.str(1, as_str(get(c, &["operator_url", "operatorUrl"])));
+    w.str(2, as_str(get(c, &["operator_key", "operatorKey"])));
+    w.str(3, as_str(get(c, &["order_id", "orderId"])));
+    w.str(4, as_str(get(c, &["asset_a", "assetA"])));
+    w.str(5, as_str(get(c, &["asset_b", "assetB"])));
+    w.uint(6, as_u64(get(c, &["rate_num", "rateNum"])));
+    w.uint(7, as_u64(get(c, &["rate_den", "rateDen"])));
+    w.uint(8, as_u64(get(c, &["min_lot", "minLot"])));
+    w.lenbytes(9, &covenant_bytes(as_str(get(c, &["landed_maker", "landedMaker"]))));
+    w.uint(10, as_u64(get(c, &["landed_expiry", "landedExpiry"])));
+    w.lenbytes(11, &covenant_bytes(as_str(get(c, &["refund_key", "refundKey"]))));
+    Some(w.bytes())
+}
+
 /// Deterministic proto encoding of `seqob.v1.Offer` with `maker_sig` cleared,
 /// fields in ascending number order — the exact bytes the Go relay signs/verifies.
 pub fn canonical_offer_bytes(o: &Value) -> Vec<u8> {
@@ -325,6 +346,7 @@ pub fn canonical_offer_bytes(o: &Value) -> Vec<u8> {
     w.msg(21, encode_cross_chain(get(o, &["cross_chain", "crossChain"])));
     w.msg(23, encode_covenant_terms(get(o, &["covenant"])));
     w.tag_enum(24, time_in_force_num(get(o, &["time_in_force", "timeInForce"])));
+    w.msg(26, encode_resting_leaf_terms(get(o, &["resting_leaf", "restingLeaf"])));
     // maker_sig (31) is deliberately omitted.
     w.bytes()
 }

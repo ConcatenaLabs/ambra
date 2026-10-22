@@ -28,16 +28,45 @@ const int kMaxFeePpm = 10000;
 
 /// Words a default screen must never show. Lower case; matched as whole words.
 const List<String> kUserModeForbiddenWords = [
-  'rail', 'rails', 'round', 'rounds', 'leaf', 'leaves', 'operator', 'covenant', 'covenants', 'expiry', 'atom', 'atoms',
-  'forfeit', 'forfeits', 'channel', 'channels', 'relay', 'maker', 'makers', 'hash', 'preimage', 'htlc', 'submarine', 'lsp',
-  'tree', 'anchor', 'unroll', 'exit', 'checkpoint', 'reassignment', 'on-chain', 'lightning', 'bridge', 'gateway',
+  'rail',
+  'rails',
+  'round',
+  'rounds',
+  'leaf',
+  'leaves',
+  'operator',
+  'covenant',
+  'covenants',
+  'expiry',
+  'atom',
+  'atoms',
+  'forfeit',
+  'forfeits',
+  'channel',
+  'channels',
+  'relay',
+  'maker',
+  'makers',
+  'hash',
+  'preimage',
+  'htlc',
+  'submarine',
+  'lsp',
+  'tree',
+  'anchor',
+  'unroll',
+  'exit',
+  'checkpoint',
+  'reassignment',
+  'on-chain',
+  'lightning',
+  'bridge',
+  'gateway',
 ];
 
 List<String> forbiddenIn(String text) {
   final t = text.toLowerCase();
-  return kUserModeForbiddenWords
-      .where((w) => RegExp('(^|[^a-z-])${RegExp.escape(w)}([^a-z-]|\$)').hasMatch(t))
-      .toList();
+  return kUserModeForbiddenWords.where((w) => RegExp('(^|[^a-z-])${RegExp.escape(w)}([^a-z-]|\$)').hasMatch(t)).toList();
 }
 
 /// Every string the user composer shows.
@@ -68,9 +97,33 @@ class UserWords {
   static const failed = 'This trade could not be made. Nothing moved.';
   static const recent = 'Your trades';
 
-  static List<String> all() => [title, pay, get, amount, review, confirm, cancel, fees, included, noFees, upTo('X'),
-        notOffered('YT', 'XT'), notListed('YT', 'XT'), enter, tooSmall, noFunds('XT'), pricing, priceMoved, sent, settled,
-        returned, returnedFees('1 XT'), working, failed, recent];
+  static List<String> all() => [
+    title,
+    pay,
+    get,
+    amount,
+    review,
+    confirm,
+    cancel,
+    fees,
+    included,
+    noFees,
+    upTo('X'),
+    notOffered('YT', 'XT'),
+    notListed('YT', 'XT'),
+    enter,
+    tooSmall,
+    noFunds('XT'),
+    pricing,
+    priceMoved,
+    sent,
+    settled,
+    returned,
+    returnedFees('1 XT'),
+    working,
+    failed,
+    recent,
+  ];
 }
 
 BigInt _big(Object? v) => BigInt.tryParse('${v ?? 0}') ?? BigInt.zero;
@@ -117,9 +170,18 @@ Map<String, BigInt> spendableFrom(List coins, Map? plans) {
 
 /// One entry of the single-step book.
 class BookEntry {
-  BookEntry({required this.source, required this.id, this.maker, required this.rateNum, required this.rateDen,
-      required this.maxReceive, required this.minReceive, required this.lot, required this.raw});
-  final String source; // 'leaf-maker' | 'covenant-round'
+  BookEntry({
+    required this.source,
+    required this.id,
+    this.maker,
+    required this.rateNum,
+    required this.rateDen,
+    required this.maxReceive,
+    required this.minReceive,
+    required this.lot,
+    required this.raw,
+  });
+  final String source; // 'leaf-maker' | 'covenant-round' | 'leaf-resting'
   final String id;
   final String? maker;
   final BigInt rateNum, rateDen, lot;
@@ -127,7 +189,7 @@ class BookEntry {
   final Map<String, dynamic> raw;
 }
 
-const Map<String, int> kSourceParties = {'onchain-fill': 0, 'covenant-round': 1, 'leaf-maker': 2, 'btc-gateway': 2};
+const Map<String, int> kSourceParties = {'onchain-fill': 0, 'covenant-round': 1, 'leaf-resting': 1, 'leaf-maker': 2, 'btc-gateway': 2};
 
 List<BookEntry> makerEntries(String maker, List quotes, {required String pay, required String receive}) {
   final out = <BookEntry>[];
@@ -135,8 +197,19 @@ List<BookEntry> makerEntries(String maker, List quotes, {required String pay, re
     if (q is! Map || q['give_asset'] != receive || q['want_asset'] != pay) continue;
     final n = _big(q['rate_num']), d = _big(q['rate_den']), max = _big(q['max_give']), min = _big(q['min_give']);
     if (n <= BigInt.zero || d <= BigInt.zero || max <= BigInt.zero || max < min) continue;
-    out.add(BookEntry(source: 'leaf-maker', id: '$maker#${q['give_asset']}:${q['want_asset']}', maker: maker, rateNum: n, rateDen: d,
-        maxReceive: max, minReceive: min > BigInt.zero ? min : BigInt.one, lot: BigInt.zero, raw: Map<String, dynamic>.from(q)));
+    out.add(
+      BookEntry(
+        source: 'leaf-maker',
+        id: '$maker#${q['give_asset']}:${q['want_asset']}',
+        maker: maker,
+        rateNum: n,
+        rateDen: d,
+        maxReceive: max,
+        minReceive: min > BigInt.zero ? min : BigInt.one,
+        lot: BigInt.zero,
+        raw: Map<String, dynamic>.from(q),
+      ),
+    );
   }
   return out;
 }
@@ -155,8 +228,57 @@ List<BookEntry> covenantRoundEntries(List<Map<String, dynamic>> offers, {require
     final st = o['_status'];
     if (st is Map && st['active_amount'] != null) locked = _big(st['active_amount']);
     if (n <= BigInt.zero || d <= BigInt.zero || locked <= BigInt.zero) continue;
-    out.add(BookEntry(source: 'covenant-round', id: '${c['covenant_txid']}:${c['covenant_vout']}', rateNum: n, rateDen: d,
-        maxReceive: locked, minReceive: lot > BigInt.zero ? lot : BigInt.one, lot: lot, raw: o));
+    out.add(
+      BookEntry(
+        source: 'covenant-round',
+        id: '${c['covenant_txid']}:${c['covenant_vout']}',
+        rateNum: n,
+        rateDen: d,
+        maxReceive: locked,
+        minReceive: lot > BigInt.zero ? lot : BigInt.one,
+        lot: lot,
+        raw: o,
+      ),
+    );
+  }
+  return out;
+}
+
+/// The relay's orders resting in the tree of the wallet's operator (`operator`, its key) that sell
+/// `receive` for `pay`: sized at the relay's live size, a fill taking at least a lot and leaving
+/// nothing or at least a lot. An order of another operator cannot be filled from these leaves.
+List<BookEntry> restingEntries(
+  List<Map<String, dynamic>> offers, {
+  required String pay,
+  required String receive,
+  required String? operator,
+}) {
+  final out = <BookEntry>[];
+  if (operator == null) return out;
+  for (final o in offers) {
+    if (o['_verified'] == false) continue;
+    final t = o['resting_leaf'] ?? o['restingLeaf'];
+    if (t is! Map) continue;
+    if ('${t['operator_key'] ?? t['operatorKey'] ?? ''}'.toLowerCase() != operator.toLowerCase()) continue;
+    if ('${t['asset_a'] ?? t['assetA']}' != receive || '${t['asset_b'] ?? t['assetB']}' != pay) continue;
+    final id = '${t['order_id'] ?? t['orderId'] ?? ''}'.toLowerCase();
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(id)) continue;
+    final n = _big(t['rate_num'] ?? t['rateNum']), dd = _big(t['rate_den'] ?? t['rateDen']), lot = _big(t['min_lot'] ?? t['minLot']);
+    final st = o['_status'];
+    final live = st is Map && st['active_amount'] != null ? _big(st['active_amount']) : _big(t['value']);
+    if (n <= BigInt.zero || dd <= BigInt.zero || live <= BigInt.zero) continue;
+    out.add(
+      BookEntry(
+        source: 'leaf-resting',
+        id: id,
+        rateNum: n,
+        rateDen: dd,
+        maxReceive: live,
+        minReceive: lot > BigInt.zero ? lot : BigInt.one,
+        lot: lot,
+        raw: o,
+      ),
+    );
   }
   return out;
 }
@@ -198,13 +320,23 @@ List<String> admittedReceives(Map? pairs, String? genesis, String pay) {
   if (chain is! Map) return const [];
   return {
     for (final p in (chain['pairs'] as List?) ?? const [])
-      if (p is Map && p['pay'] == pay && ((p['sources'] as List?) ?? const []).isNotEmpty) '${p['receive']}'
+      if (p is Map && p['pay'] == pay && ((p['sources'] as List?) ?? const []).isNotEmpty) '${p['receive']}',
   }.toList();
 }
 
 class Candidate {
-  Candidate({required this.source, required this.id, required this.entry, required this.receive, required this.give, required this.fees,
-      this.quote, this.offer, this.terms, this.settle});
+  Candidate({
+    required this.source,
+    required this.id,
+    required this.entry,
+    required this.receive,
+    required this.give,
+    required this.fees,
+    this.quote,
+    this.offer,
+    this.terms,
+    this.settle,
+  });
   final String source, id;
   final BookEntry entry;
   final BigInt receive, give;
@@ -213,17 +345,37 @@ class Candidate {
 }
 
 class Ticket {
-  Ticket({required this.payAsset, required this.receiveAsset, required this.amountIn, required this.amountOut, required this.fees,
-      required this.source, this.upTo});
+  Ticket({
+    required this.payAsset,
+    required this.receiveAsset,
+    required this.amountIn,
+    required this.amountOut,
+    required this.fees,
+    required this.source,
+    this.upTo,
+  });
   final String payAsset, receiveAsset, source;
   final BigInt amountIn, amountOut;
   final List<Map<String, dynamic>> fees;
   final BigInt? upTo;
-  Map<String, dynamic> toJson() => {'payAsset': payAsset, 'receiveAsset': receiveAsset, 'amountIn': '$amountIn', 'amountOut': '$amountOut',
-        'fees': fees.map((f) => {'asset': f['asset'], 'atoms': '${f['atoms']}'}).toList(), 'source': source, if (upTo != null) 'upTo': '$upTo'};
-  static Ticket fromJson(Map j) => Ticket(payAsset: '${j['payAsset']}', receiveAsset: '${j['receiveAsset']}', amountIn: _big(j['amountIn']),
-      amountOut: _big(j['amountOut']), fees: [for (final f in (j['fees'] as List?) ?? const []) Map<String, dynamic>.from(f as Map)],
-      source: '${j['source']}', upTo: j['upTo'] == null ? null : _big(j['upTo']));
+  Map<String, dynamic> toJson() => {
+    'payAsset': payAsset,
+    'receiveAsset': receiveAsset,
+    'amountIn': '$amountIn',
+    'amountOut': '$amountOut',
+    'fees': fees.map((f) => {'asset': f['asset'], 'atoms': '${f['atoms']}'}).toList(),
+    'source': source,
+    if (upTo != null) 'upTo': '$upTo',
+  };
+  static Ticket fromJson(Map j) => Ticket(
+    payAsset: '${j['payAsset']}',
+    receiveAsset: '${j['receiveAsset']}',
+    amountIn: _big(j['amountIn']),
+    amountOut: _big(j['amountOut']),
+    fees: [for (final f in (j['fees'] as List?) ?? const []) Map<String, dynamic>.from(f as Map)],
+    source: '${j['source']}',
+    upTo: j['upTo'] == null ? null : _big(j['upTo']),
+  );
 }
 
 class QuoteResult {
@@ -242,15 +394,29 @@ class LapsedError implements Exception {
 
 /// What the engine needs from the app.
 class UserTradeDeps {
-  UserTradeDeps({required this.run, required this.fetchJson, required this.makers, required this.relayBook, required this.admitted,
-      required this.read, required this.write, int Function()? now, void Function(String)? log, Future<void> Function(int ms)? sleep})
-      : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
-        log = log ?? ((_) {}),
-        sleep = sleep ?? ((ms) => Future.delayed(Duration(milliseconds: ms)));
+  UserTradeDeps({
+    required this.run,
+    required this.fetchJson,
+    required this.makers,
+    required this.relayBook,
+    required this.admitted,
+    required this.read,
+    required this.write,
+    this.relayFills,
+    int Function()? now,
+    void Function(String)? log,
+    Future<void> Function(int ms)? sleep,
+  }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
+       log = log ?? ((_) {}),
+       sleep = sleep ?? ((ms) => Future.delayed(Duration(milliseconds: ms)));
   final Future<dynamic> Function(String command, Map<String, dynamic> args) run;
   final Future<Map<String, dynamic>> Function(String url, {Map<String, dynamic>? post}) fetchJson;
   final List<String> Function() makers;
   final Future<List<Map<String, dynamic>>> Function(String pay, String receive) relayBook;
+
+  /// The relay's fill records of the pair: a fill of an order resting in the tree is Settled once
+  /// its record (keyed by the operator's transfer id) is final.
+  final Future<List<Map<String, dynamic>>> Function(String pay, String receive)? relayFills;
   final Future<({Map? pairs, String? genesis})> Function() admitted;
   final Future<String?> Function() read;
   final Future<void> Function(String value) write;
@@ -264,7 +430,7 @@ class UserTradeEngine {
   final UserTradeDeps d;
 
   Future<dynamic> _run(String cmd, [Map<String, dynamic> args = const {}]) async {
-    for (var i = 0;; i++) {
+    for (var i = 0; ; i++) {
       final t0 = d.now();
       try {
         final v = await d.run(cmd, args);
@@ -329,9 +495,17 @@ class UserTradeEngine {
         }
       }
     }
-    if (sources.contains('covenant-round')) {
+    if (sources.contains('covenant-round') || sources.contains('leaf-resting')) {
       try {
-        out.addAll(covenantRoundEntries(await d.relayBook(pay, receive), pay: pay, receive: receive));
+        final book = await d.relayBook(pay, receive);
+        if (sources.contains('covenant-round')) out.addAll(covenantRoundEntries(book, pay: pay, receive: receive));
+        if (sources.contains('leaf-resting')) {
+          String? operator;
+          try {
+            operator = '${((await _run('info')) as Map)['operator']}';
+          } catch (_) {}
+          out.addAll(restingEntries(book, pay: pay, receive: receive, operator: operator));
+        }
       } catch (e) {
         d.log('[user trade] the book did not answer: $e');
       }
@@ -342,6 +516,76 @@ class UserTradeEngine {
   void release(String? maker, String? swap) {
     if (maker == null || swap == null) return;
     d.fetchJson('$maker/v1/release', post: {'swap': swap}).catchError((_) => <String, dynamic>{});
+  }
+
+  /// A firm offer let go of before the maker is asked again for a smaller one: the maker holds
+  /// its coins for an offer until it is released, and refuses a second offer they would have paid.
+  Future<void> _releaseNow(String? maker, String? swap) async {
+    if (maker == null || swap == null) return;
+    try {
+      await d.fetchJson('$maker/v1/release', post: {'swap': swap});
+    } catch (_) {}
+  }
+
+  /// Firm terms of a fill of an order resting in the tree, from the library's quote: what leaves the
+  /// wallet is the coins it gives less the change; the coins the fill brings are settled in the
+  /// next round at the fee a coin of their expiry pays.
+  Future<Candidate?> _firmResting(BookEntry e, String pay, String receive, BigInt limit, BigInt first) async {
+    var r = first;
+    for (var i = 0; i < 4; i++) {
+      Map q;
+      try {
+        q = (await _run('order_fill_resting_quote', {'order': e.id, 'amount': '$r'})) as Map;
+      } catch (err) {
+        d.log('[user trade] order_fill_resting_quote: $err');
+        return null;
+      }
+      final gets = q['gets'] as Map?, fee = q['fee'] as Map?;
+      if (gets == null || gets['asset'] != receive || _big(gets['amount']) != r || fee == null || fee['asset'] != pay) return null;
+      final gives = [for (final g in (q['gives'] as List?) ?? const []) '$g'];
+      final given = [
+        for (final c in ((await _run('coins')) as List? ?? const []))
+          if (gives.contains('${(c as Map)['leaf_id']}')) c,
+      ];
+      if (given.length != gives.length) return null;
+      final spends = given.fold<BigInt>(BigInt.zero, (n, c) => n + _big(c['value'])) - _big(q['change']);
+      var expiry = (q['served'] as Map?)?['expiry'] is num ? ((q['served'] as Map)['expiry'] as num).toInt() : 1 << 62;
+      for (final c in given) {
+        final x = c['expiry'];
+        if (x is num && x > 0 && x.toInt() < expiry) expiry = x.toInt();
+      }
+      Map s;
+      Map? sc;
+      try {
+        s = (await _run('settle_quote', {'asset': receive, 'value': '$r', 'expiry': expiry})) as Map;
+        if (_big(q['change']) > BigInt.zero) {
+          sc = (await _run('settle_quote', {'asset': pay, 'value': '${q['change']}', 'expiry': expiry})) as Map;
+        }
+      } catch (err) {
+        d.log('[user trade] settle_quote: $err');
+        return null;
+      }
+      final total = spends + (sc != null ? _big(sc['fee']) : BigInt.zero);
+      if (total <= limit) {
+        return Candidate(
+          source: e.source,
+          id: e.id,
+          entry: e,
+          receive: _big(s['after']),
+          give: total,
+          quote: Map<String, dynamic>.from(q),
+          settle: {'received': s, 'change': ?sc},
+          fees: [
+            {'asset': pay, 'atoms': spends - _big(q['paid']) + (sc != null ? _big(sc['fee']) : BigInt.zero)},
+            {'asset': receive, 'atoms': _big(s['fee'])},
+          ],
+        );
+      }
+      final s2 = sizeEntry(e, (r * e.rateNum) ~/ e.rateDen - (total - limit) - BigInt.one);
+      if (s2 == null || s2.receive >= r) return null;
+      r = s2.receive;
+    }
+    return null;
   }
 
   Future<Candidate?> _firm(BookEntry e, String pay, String receive, BigInt amount, BigInt have) async {
@@ -374,9 +618,22 @@ class UserTradeEngine {
           gives += _big(sc['fee']);
         }
         if (gives <= limit) {
-          return Candidate(source: e.source, id: e.id, entry: e, receive: _big(q['filled']), give: gives,
-              fees: [{'asset': pay, 'atoms': _big(q['fee']) + (_big(q['spends'] ?? q['gives']) - _big(q['gives'])) + (sc != null ? _big(sc['fee']) : BigInt.zero)}],
-              quote: Map<String, dynamic>.from(q), settle: sc != null ? {'change': sc} : null);
+          return Candidate(
+            source: e.source,
+            id: e.id,
+            entry: e,
+            receive: _big(q['filled']),
+            give: gives,
+            fees: [
+              {
+                'asset': pay,
+                'atoms':
+                    _big(q['fee']) + (_big(q['spends'] ?? q['gives']) - _big(q['gives'])) + (sc != null ? _big(sc['fee']) : BigInt.zero),
+              },
+            ],
+            quote: Map<String, dynamic>.from(q),
+            settle: sc != null ? {'change': sc} : null,
+          );
         }
         final s2 = sizeEntry(e, (r * e.rateNum) ~/ e.rateDen - (gives - limit) - BigInt.one);
         if (s2 == null || s2.receive >= r) return null;
@@ -384,6 +641,7 @@ class UserTradeEngine {
       }
       return null;
     }
+    if (e.source == 'leaf-resting') return _firmResting(e, pay, receive, limit, size.receive);
     if (e.source == 'leaf-maker') {
       var give = size.receive;
       for (var i = 0; i < 4; i++) {
@@ -408,7 +666,7 @@ class UserTradeEngine {
         }
         final spend = _big((t['gives'] as Map)['value']) + _big((t['pays'] as Map)['margins']);
         if (spend > limit) {
-          release(e.maker, '${o['swap']}');
+          await _releaseNow(e.maker, '${o['swap']}');
           give = give - _ceilDiv((spend - limit) * e.rateDen, e.rateNum) - BigInt.one;
           if (give < e.minReceive) return null;
           continue;
@@ -427,18 +685,26 @@ class UserTradeEngine {
         }
         final total = spend + (sc != null ? _big(sc['fee']) : BigInt.zero);
         if (total > limit) {
-          release(e.maker, '${o['swap']}');
+          await _releaseNow(e.maker, '${o['swap']}');
           give = give - _ceilDiv((total - limit) * e.rateDen, e.rateNum) - BigInt.one;
           if (give < e.minReceive) return null;
           continue;
         }
-        return Candidate(source: e.source, id: e.id, entry: e, receive: _big(s['after']), give: total, offer: o,
-            terms: Map<String, dynamic>.from(t), settle: {'received': s, 'change': sc},
-            fees: [
-              {'asset': pay, 'atoms': _big((t['pays'] as Map)['margins'])},
-              {'asset': receive, 'atoms': _big(s['fee'])},
-              if (sc != null) {'asset': pay, 'atoms': _big(sc['fee'])},
-            ]);
+        return Candidate(
+          source: e.source,
+          id: e.id,
+          entry: e,
+          receive: _big(s['after']),
+          give: total,
+          offer: o,
+          terms: Map<String, dynamic>.from(t),
+          settle: {'received': s, 'change': sc},
+          fees: [
+            {'asset': pay, 'atoms': _big((t['pays'] as Map)['margins'])},
+            {'asset': receive, 'atoms': _big(s['fee'])},
+            if (sc != null) {'asset': pay, 'atoms': _big(sc['fee'])},
+          ],
+        );
       }
       return null;
     }
@@ -456,7 +722,7 @@ class UserTradeEngine {
     final limit = amount < have ? amount : have;
     final ind = [
       for (final e in es)
-        if (sizeEntry(e, limit) != null) (e: e, r: sizeEntry(e, limit)!.receive)
+        if (sizeEntry(e, limit) != null) (e: e, r: sizeEntry(e, limit)!.receive),
     ]..sort((a, b) => b.r.compareTo(a.r));
     final cands = <Candidate>[];
     for (final x in ind.take(3)) {
@@ -469,9 +735,17 @@ class UserTradeEngine {
     }
     if (best == null) return QuoteResult.no(es.isEmpty ? 'not-offered' : 'too-small');
     return QuoteResult.ok(
-        Ticket(payAsset: pay, receiveAsset: receive, amountIn: best.give, amountOut: best.receive, fees: best.fees, source: best.source,
-            upTo: have < amount && best.give <= have ? have : null),
-        best);
+      Ticket(
+        payAsset: pay,
+        receiveAsset: receive,
+        amountIn: best.give,
+        amountOut: best.receive,
+        fees: best.fees,
+        source: best.source,
+        upTo: have < amount && best.give <= have ? have : null,
+      ),
+      best,
+    );
   }
 
   Future<Map<String, dynamic>> confirm(Candidate c, Ticket t) async {
@@ -486,10 +760,14 @@ class UserTradeEngine {
         // come back at that coin's next refresh): a return then says so.
         rec['selfPayCost'] = '${_big(c.quote!['spends'] ?? c.quote!['gives']) - _big(c.quote!['gives'])}';
         final sc = c.settle?['change'] as Map?;
-        rec['settleTargets'] = [if (sc != null) {'asset': sc['asset'], 'value': sc['value'], 'fee': sc['fee']}];
+        rec['settleTargets'] = [
+          if (sc != null) {'asset': sc['asset'], 'value': sc['value'], 'fee': sc['fee']},
+        ];
         rec['before'] = [for (final x in ((await _run('coins')) as List? ?? const [])) '${(x as Map)['leaf_id']}'];
         await _put(rec);
-        final r = (await _run('take', {'order': rec['orderJson'], 'amount': c.quote!['filled'], 'max_fee_ppm': kMaxFeePpm, 'shown': c.quote})) as Map;
+        final r =
+            (await _run('take', {'order': rec['orderJson'], 'amount': c.quote!['filled'], 'max_fee_ppm': kMaxFeePpm, 'shown': c.quote}))
+                as Map;
         rec['take'] = r['take'];
         rec['state'] = 'sent';
         rec['sentAt'] = d.now();
@@ -527,6 +805,43 @@ class UserTradeEngine {
         }
         return _put(rec);
       }
+      if (c.source == 'leaf-resting') {
+        final q = c.quote!;
+        rec['order'] = c.entry.id;
+        rec['receiveAsset'] = (q['gets'] as Map)['asset'];
+        final rcv = c.settle!['received'] as Map, chg = c.settle!['change'] as Map?;
+        rec['settleTargets'] = [
+          {'asset': rcv['asset'], 'value': rcv['value'], 'fee': rcv['fee']},
+          if (chg != null) {'asset': chg['asset'], 'value': chg['value'], 'fee': chg['fee']},
+        ];
+        rec['before'] = [for (final x in ((await _run('coins')) as List? ?? const [])) '${(x as Map)['leaf_id']}'];
+        await _put(rec);
+        final args = {'order': rec['order'], 'amount': q['filled']};
+        Map r;
+        try {
+          r = (await _run('order_fill_resting', {...args, 'shown': q})) as Map;
+        } catch (e) {
+          if (!'$e'.contains('order_moved')) rethrow;
+          // Another taker filled first and the order rests at a new coin: filled there only for
+          // the same amount at the same price and no higher fee, as shown.
+          final again = (await _run('order_fill_resting_quote', args)) as Map;
+          final af = again['fee'] as Map?, qf = q['fee'] as Map;
+          final same =
+              again['filled'] == q['filled'] &&
+              again['paid'] == q['paid'] &&
+              af != null &&
+              af['asset'] == qf['asset'] &&
+              _big(af['amount']) <= _big(qf['amount']) &&
+              _big(again['change']) == _big(q['change']);
+          if (!same) throw LapsedError();
+          rec['movedFrom'] = q['coin'];
+          r = (await _run('order_fill_resting', {...args, 'shown': again})) as Map;
+        }
+        rec['transfer'] = (r['answer'] as Map?)?['transfer_id'];
+        rec['state'] = 'sent';
+        rec['sentAt'] = d.now();
+        return _put(rec);
+      }
       throw StateError('no such source');
     } catch (e) {
       if (rec['state'] == 'confirming') {
@@ -560,12 +875,37 @@ class UserTradeEngine {
           rec['state'] = 'failed';
           rec['error'] = 'not accepted';
         }
+      } else if (rec['source'] == 'leaf-resting') {
+        // A fill the app closed on is sent again by the library's next sync; the coin it brings is
+        // then the wallet's.
+        try {
+          await _run('sync');
+        } catch (_) {}
+        final before = ((rec['before'] as List?) ?? const []).map((e) => '$e').toSet();
+        final got = ((await _run('coins')) as List? ?? const []).cast<Map>().any(
+          (c) => !before.contains('${c['leaf_id']}') && c['asset'] == rec['receiveAsset'] && c['state'] == 'live',
+        );
+        if (got) {
+          rec['state'] = 'sent';
+          rec['sentAt'] = d.now();
+        } else {
+          rec['state'] = 'failed';
+          rec['error'] = 'not filled';
+        }
       } else if (rec['source'] == 'covenant-round') {
-        final known = {...((rec['beforeParts'] as List?) ?? const []).map((e) => '$e'), for (final r in await records()) if (r['take'] != null) '${r['take']}'};
+        final known = {
+          ...((rec['beforeParts'] as List?) ?? const []).map((e) => '$e'),
+          for (final r in await records())
+            if (r['take'] != null) '${r['take']}',
+        };
         final recv = (rec['ticket'] as Map)['receiveAsset'];
         Map? found;
         for (final p in ((await _run('participations')) as List? ?? const [])) {
-          if (p is Map && !known.contains('${p['participation']}') && ((p['new_leaves'] as List?) ?? const []).any((n) => (n as Map)['asset'] == recv)) found = p;
+          if (p is Map &&
+              !known.contains('${p['participation']}') &&
+              ((p['new_leaves'] as List?) ?? const []).any((n) => (n as Map)['asset'] == recv)) {
+            found = p;
+          }
         }
         if (found != null) {
           rec['take'] = found['participation'];
@@ -584,6 +924,26 @@ class UserTradeEngine {
     } catch (e) {
       d.log('[user trade] sync: $e');
     }
+    if (rec['source'] == 'leaf-resting') {
+      // Settled once the relay records the fill final and the coins it brought are settled in a
+      // round that is final.
+      if (d.relayFills != null && rec['transfer'] != null && rec['fillFinal'] != true) {
+        try {
+          final t = rec['ticket'] as Map;
+          for (final f in await d.relayFills!('${t['payAsset']}', '${t['receiveAsset']}')) {
+            if (f['txid'] == rec['transfer']) {
+              rec['fillState'] = f['state'];
+              if (f['state'] == 'final') rec['fillFinal'] = true;
+            }
+          }
+        } catch (_) {}
+      }
+      if (await _settleStep(rec) && (rec['fillFinal'] == true || d.relayFills == null)) {
+        rec['state'] = 'settled';
+        rec['settledAt'] = d.now();
+      }
+      return _put(rec);
+    }
     if (rec['source'] == 'covenant-round') {
       final p = await _participation('${rec['take']}');
       if (p == null) return rec;
@@ -599,7 +959,7 @@ class UserTradeEngine {
           rec['returnedAt'] = d.now();
           if (_big(rec['selfPayCost']) > BigInt.zero) {
             rec['feesPaid'] = [
-              {'asset': (rec['ticket'] as Map)['payAsset'], 'atoms': rec['selfPayCost']}
+              {'asset': (rec['ticket'] as Map)['payAsset'], 'atoms': rec['selfPayCost']},
             ];
           }
         }
@@ -633,10 +993,15 @@ class UserTradeEngine {
               final was = held.where((x) => respent.contains('${x['leaf_id']}')).fold<BigInt>(BigInt.zero, (n, x) => n + _big(x['value']));
               final before = {...((rec['before'] as List?) ?? const []).map((e) => '$e')};
               final pay = (rec['ticket'] as Map)['payAsset'];
-              final got = ((await _run('coins')) as List? ?? const []).cast<Map>()
+              final got = ((await _run('coins')) as List? ?? const [])
+                  .cast<Map>()
                   .where((x) => x['state'] == 'live' && !before.contains('${x['leaf_id']}') && x['asset'] == pay)
                   .fold<BigInt>(BigInt.zero, (n, x) => n + _big(x['value']));
-              if (was > got) rec['feesPaid'] = [{'asset': pay, 'atoms': '${was - got}'}];
+              if (was > got) {
+                rec['feesPaid'] = [
+                  {'asset': pay, 'atoms': '${was - got}'},
+                ];
+              }
             }
           }
         } catch (e) {
@@ -660,7 +1025,10 @@ class UserTradeEngine {
     if (targets.isEmpty) return true;
     if (rec['settle'] == null) {
       final before = {...((rec['before'] as List?) ?? const []).map((e) => '$e')};
-      final fresh = ((await _run('coins')) as List? ?? const []).cast<Map>().where((c) => !before.contains('${c['leaf_id']}') && c['state'] == 'live').toList();
+      final fresh = ((await _run('coins')) as List? ?? const [])
+          .cast<Map>()
+          .where((c) => !before.contains('${c['leaf_id']}') && c['state'] == 'live')
+          .toList();
       final coins = <Map>[];
       for (final t in targets) {
         final c = fresh.where((x) => !coins.contains(x) && x['asset'] == t['asset'] && '${x['value']}' == '${t['value']}').firstOrNull;
@@ -689,9 +1057,15 @@ class UserTradeEngine {
         d.log('[user trade] participate: $e');
         return false;
       }
-      final parts = ((r['participations'] as List?) ?? const []).cast<Map>().where((p) => p['error'] == null && p['participation'] != null).toList();
+      final parts = ((r['participations'] as List?) ?? const [])
+          .cast<Map>()
+          .where((p) => p['error'] == null && p['participation'] != null)
+          .toList();
       if (parts.isEmpty) return false;
-      rec['settle'] = {'coins': ids, 'participations': [for (final p in parts) p['participation']]};
+      rec['settle'] = {
+        'coins': ids,
+        'participations': [for (final p in parts) p['participation']],
+      };
       await _put(rec);
       return false;
     }
