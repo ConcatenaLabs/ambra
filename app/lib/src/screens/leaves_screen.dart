@@ -69,6 +69,8 @@ class _LeavesScreenState extends State<LeavesScreen> {
               const SizedBox(height: 14),
               _CareCard(svc: svc),
               const SizedBox(height: 14),
+              _BondCard(svc: svc),
+              const SizedBox(height: 14),
               _CoinsCard(svc: svc),
               const SizedBox(height: 14),
               const _BoardCard(),
@@ -968,3 +970,74 @@ class _CareCardState extends State<_CareCard> {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// The operator's bond
+// ---------------------------------------------------------------------------
+
+/// The operator's equivocation bond as this wallet reads it at care's pace (`bond`), and
+/// the last watch of its evidence (`watch_bond`), with Watch now.
+class _BondCard extends StatefulWidget {
+  const _BondCard({required this.svc});
+  final LeafService svc;
+  @override
+  State<_BondCard> createState() => _BondCardState();
+}
+
+class _BondCardState extends State<_BondCard> {
+  bool _busy = false;
+
+  Future<void> _watch() async {
+    setState(() => _busy = true);
+    await widget.svc.watchBond();
+    if (mounted) setState(() => _busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final svc = widget.svc;
+    final b = svc.bond;
+    final w = svc.lastWatch;
+    final ev = w?['evidence'] is Map ? w!['evidence'] as Map : const {};
+    final slashed = (w?['slashed'] as List?) ?? const [];
+    final covers = b?['covers'];
+    return AmbraCard(
+      key: const Key('bond-card'),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SectionLabel('The operator\'s bond'),
+        const SizedBox(height: 8),
+        const Text(
+            'The operator\'s equivocation bond: two messages its key signed under one coin\'s salt burn it whole. The '
+            'wallet reads it at care\'s pace and, once it has seen it bonded, takes no payment out of round while it is '
+            'missing or in notice, nor more than it is worth. It also watches its evidence against the chain and sends '
+            'the slash itself should the operator key sign twice.',
+            style: AmbraText.sub),
+        const SizedBox(height: 10),
+        if (b == null && svc.bondError == null) const Text('Not read yet in this session.', style: AmbraText.muted),
+        if (b != null) ...[
+          Text('State: ${b['state']}', key: const Key('bond-state'), style: AmbraText.body),
+          if (b['asset'] != null) Text('Bond: ${_amount('${b['asset']}', b['value'])}', key: const Key('bond-value'), style: AmbraText.mono),
+          if (b['coin'] != null) Text('Coin: ${b['coin']}', style: AmbraText.mono.copyWith(fontSize: 11)),
+          if (b['withdrawable_at'] != null) Text('Withdrawable ${_when(b['withdrawable_at'], svc.schedule?['now'])}', style: AmbraText.sub),
+          Text('Required by this wallet: ${b['required'] == true ? 'yes: seen bonded' : 'no: never seen bonded'}', style: AmbraText.sub),
+          Text('Covers what this wallet holds out of round: ${covers == true ? 'yes' : covers == false ? 'no' : '$covers'}', style: AmbraText.sub),
+          if (b['why'] != null) Text('${b['why']}', style: AmbraText.sub),
+        ],
+        if (svc.bondError != null) RefusalText(svc.bondError!),
+        if (svc.lastWatchAt != null) ...[
+          const SizedBox(height: 8),
+          Text(
+              'Last watch ${svc.lastWatchAt!.toLocal().toString().substring(0, 19)}: ${ev['lines'] ?? 0} evidence line(s), '
+              '${ev['salts'] ?? 0} salt(s), ${slashed.length} slash(es) sent',
+              key: const Key('bond-watch'),
+              style: AmbraText.body),
+          if (svc.watchError != null) RefusalText(svc.watchError!),
+          if (w != null) SelectableText(const JsonEncoder.withIndent(' ').convert(w), style: AmbraText.mono.copyWith(fontSize: 10)),
+        ],
+        const SizedBox(height: 10),
+        SecondaryButton(key: const Key('bond-watch-now'), label: _busy ? 'Watching…' : 'Watch now', icon: Icons.visibility, onPressed: _busy ? null : _watch),
+      ]),
+    );
+  }
+}
+

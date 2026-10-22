@@ -326,5 +326,20 @@ void main() {
       expect(admittedReceives(s, 'g', 'zz'), isEmpty, reason: 'nothing is offered for the supervised asset but the in-tree swap');
     });
   });
+
+  group('the operator\'s bond', () {
+    test('a refusal of the bond is said plainly in user mode, the same words in the three wallets', () {
+      for (final m in ['refused: the operator\'s bond is missing', 'the bond is noticed: it can be withdrawn', 'more than the bond\'s 5000000 covers']) {
+        final r = plainRefusal(LeafRefusal('refused', m));
+        expect(r.message, kBondRefusal, reason: m);
+        expect(r.plain, isTrue);
+      }
+      expect(kBondRefusal,
+          'Not accepted: the security deposit that backs these instant payments is missing or being withdrawn, so this wallet takes no payment that rests on it. Nothing was signed.');
+      expect(forbiddenIn(kBondRefusal), isEmpty);
+      expect(bondRefusal(LeafRefusal('refused', 'a bondage of words')), isFalse);
+      expect(plainRefusal(LeafRefusal('refused', 'the request was paid already')).plain, isFalse);
+    });
+  });
 }
 

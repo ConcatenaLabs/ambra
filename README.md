@@ -293,6 +293,19 @@ module that implements it.
   resting order and no Lightning payment in a supervised asset, so user mode's Swap tab
   offers such an asset only through an in-tree swap with a live maker (`servedPairs`, in
   `app/lib/src/data/leaf_service.dart`).
+- The operator's bond: the operator posts an equivocation bond, which two different
+  messages its key signs under one coin's salt burn whole. At `care`'s pace, in either
+  mode, while the app runs, the leaf wallet reads the bond (`bond`; once it has seen it
+  bonded, it requires it from then on) and runs `watch_bond`, which checks the wallet's
+  own evidence against the chain and the mempool and sends the slash itself should the
+  operator key have signed twice. The library's gate does the rest: a receive or a swap is
+  refused while the bond is missing or in notice, or when what the wallet would hold out
+  of round is worth more than it. Nothing is said while the bond stands; a refusal reads,
+  in user mode, "Not accepted: the security deposit that backs these instant payments is
+  missing or being withdrawn, so this wallet takes no payment that rests on it. Nothing
+  was signed." Developer mode's Leaves screen shows the bond (its state, asset and value,
+  coin, when it can be withdrawn, whether this wallet requires it, whether it covers what
+  the wallet holds out of round) and the last watch, with Watch now.
 
 **Assets, staking, faucet, node**
 - Issue a new asset, reissue (mint more of) an asset you hold the reissuance token for,
