@@ -103,8 +103,23 @@ class Backend {
   /// Point Lightning at the default LSP only when the wallet talks to the default
   /// public node; a custom node has no hosted LSP, so LN goes dark there. Both hub
   /// nodes (asset + BTC) follow the origin together.
+  // A build for a local stack (an emulator against a regtest harness) names that stack's
+  // hosted-node service with --dart-define, and Lightning then follows a custom origin to it.
+  // A release build names none, so a custom origin has no Lightning there.
+  static const _stackLnWs = String.fromEnvironment('AMBRA_STACK_LN_WS');
+  static const _stackLnHostPubkey = String.fromEnvironment('AMBRA_STACK_LN_HOST_PUBKEY');
+  static const _stackLnToken = String.fromEnvironment('AMBRA_STACK_LN_TOKEN');
+
   static void applyLnForOrigin() {
     final on = isDefault;
+    if (!on && _stackLnWs.isNotEmpty) {
+      lnWsUrl = _stackLnWs;
+      lnHostPubkey = _stackLnHostPubkey;
+      lnWsUrlBtc = '';
+      lnHostPubkeyBtc = '';
+      lnToken = _stackLnToken;
+      return;
+    }
     lnWsUrl = on ? _defaultLnWsUrl : '';
     lnHostPubkey = on ? _defaultLnHostPubkey : '';
     lnWsUrlBtc = on ? _defaultLnWsUrlBtc : '';
