@@ -306,6 +306,15 @@ module that implements it.
   was signed." Developer mode's Leaves screen shows the bond (its state, asset and value,
   coin, when it can be withdrawn, whether this wallet requires it, whether it covers what
   the wallet holds out of round) and the last watch, with Watch now.
+- Issuer-operated assets: the operator may serve an asset issuer-operated, where the
+  issuer mints each round's float through the asset's mint limiter and every batch's sweep
+  can only burn. The library checks each new leaf against that profile by itself.
+  Developer mode's Leaves screen shows each leaf's batch profile under "Coins and their
+  dates" (issuer-operated, or open) and, for each asset the operator serves
+  issuer-operated, Supply: the operator's report of what it minted, burned and holds under
+  burn-only sweeps, each mint and burn read again from the wallet's own node. It checks
+  the transactions the report lists; it does not prove the list complete. User mode shows
+  none of it.
 
 **Assets, staking, faucet, node**
 - Issue a new asset, reissue (mint more of) an asset you hold the reissuance token for,

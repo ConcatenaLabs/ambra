@@ -780,6 +780,18 @@ List<Map> _operatorAssets(Map? info) {
 List<String> supervisedAssetsOf(Map? info) =>
     [for (final a in _operatorAssets(info)) if (a['supervised'] != null && a['asset'] is String) a['asset'] as String];
 
+/// The assets the operator serves issuer-operated (`info`'s `issuer` entry): the issuer
+/// mints each round's float through the asset's mint limiter, and every batch's sweep can
+/// only burn.
+List<String> issuerAssetsOf(Map? info) =>
+    [for (final a in _operatorAssets(info)) if (a['issuer'] != null && a['asset'] is String) a['asset'] as String];
+
+/// A leaf's batch profile in developer mode's words (`coins`' `batch_profile`), or null.
+String? batchProfileLine(Object? profile) {
+  if (profile == null) return null;
+  return profile == 'issuer-operated' ? 'Batch: issuer-operated: its sweep can only burn' : 'Batch: $profile: its sweep pays the operator';
+}
+
 /// What of each asset its issuer has frozen for this wallet: every held leaf whose
 /// landing the node shows frozen (or the asset paused), and every on-chain coin the leaf
 /// wallet counts frozen (a leaf taken home by its landing stays frozen there).
