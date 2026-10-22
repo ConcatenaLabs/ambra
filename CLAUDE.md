@@ -144,6 +144,11 @@ release build on a device before a release.
   change and its reasoning are recorded, not because anyone is waiting to review it. There is
   no review process. If you are ever told to leave one specific PR open, that applies to that
   PR only and never becomes the default.
+- **The Swap tab in user mode is a port.** `app/lib/src/data/user_trade.dart` is the web
+  wallet's `user-trade.js` in Dart (its single-step book, ticket, word list and trade records),
+  and `user_composer.dart` its screen. Change the two together with the web wallet's, keep every
+  string it shows in `UserWords` and none in `kUserModeForbiddenWords` (its test checks both), and
+  let a pair reach user mode only through the web wallet's `user-mode/pairs.json`.
 - The remote default branch is `main` and all development lands there. `terminal-rebuild`
   is fully merged into `main` and is no longer a base for anything.
 

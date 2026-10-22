@@ -134,6 +134,21 @@ module that implements it.
     (with a suggested child fee rate from the core).
 
 **Swap (SeqDEX)**
+- **In user mode** (the default) the Swap tab is three inputs and one button: **You pay**
+  (an asset and an amount), **You get**, and **Review** (`app/lib/src/screens/user_composer.dart`,
+  its engine `app/lib/src/data/user_trade.dart`, the web wallet's `user-trade.js` in Dart). BTC
+  heads both pickers. Review shows what you pay, what you get and one line of fees, each in
+  the asset it is paid in, before anything is signed; **Trade** confirms it, and the trade then
+  reads **Sent**, **Settled** once final, or **Returned: nothing traded.**, with nothing to do
+  either way. It trades only what settles in one step from the wallet's coins in a leaf
+  operator's tree: an in-tree swap with a live leaf maker, or a transparent covenant order
+  taken in the operator's round, choosing the one that gives the most, then the one with the
+  fewest parties left to act. It offers only the pairs the web wallet's reliability drill has
+  passed on the chain (the web wallet's `user-mode/pairs.json`, read from the node's origin),
+  and says "Not offered right now" in plain words for one nobody fills in one step; no screen
+  of it names a rail, a round, a leaf, the operator, a covenant, an expiry or an atom. It
+  offers no BTC trade: the engine trades BTC only through a Bitcoin Lightning wallet it can
+  drive, and the app gives it none. The screens below are developer mode's.
 - **Same-chain atomic swap**: pay one Sequentia asset, receive another, settled in a
   single atomic transaction against the SeqDEX daemon's order book
   (`app/lib/src/screens/swap_screen.dart`). The review sheet states finality honestly:
