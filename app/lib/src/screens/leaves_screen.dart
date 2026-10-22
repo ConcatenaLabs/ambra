@@ -56,7 +56,9 @@ class _LeavesScreenState extends State<LeavesScreen> {
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
           children: [
             if (!svc.joined) const _JoinCard() else ...[
-              if (svc.releasing != null) ...[_ReleasingCard(wait: svc.releasing!), const SizedBox(height: 14)],
+              // One slot whether or not a payment waits: a card that comes and goes ahead of
+              // the others would move them, and the Send card would lose the answer it waits for.
+              _ReleasingSlot(wait: svc.releasing),
               _StatusCard(svc: svc),
               const SizedBox(height: 14),
               _BalanceCard(svc: svc),
@@ -71,7 +73,10 @@ class _LeavesScreenState extends State<LeavesScreen> {
               const SizedBox(height: 14),
               _BondCard(svc: svc),
               const SizedBox(height: 14),
-              if (issuerAssetsOf(svc.info).isNotEmpty) ...[_SupplyCard(svc: svc), const SizedBox(height: 14)],
+              // Always one slot, for the same reason as the releasing card's.
+              issuerAssetsOf(svc.info).isEmpty
+                  ? const SizedBox.shrink()
+                  : Padding(padding: const EdgeInsets.only(bottom: 14), child: _SupplyCard(svc: svc)),
               _CoinsCard(svc: svc),
               const SizedBox(height: 14),
               const _BoardCard(),
@@ -211,6 +216,16 @@ class _JoinCardState extends State<_JoinCard> {
 // ---------------------------------------------------------------------------
 // A payment waiting for the next round
 // ---------------------------------------------------------------------------
+
+/// The place of [_ReleasingCard]: empty unless a payment waits for its round.
+class _ReleasingSlot extends StatelessWidget {
+  const _ReleasingSlot({required this.wait});
+  final ReleaseWait? wait;
+  @override
+  Widget build(BuildContext context) => wait == null
+      ? const SizedBox.shrink()
+      : Padding(padding: const EdgeInsets.only(bottom: 14), child: _ReleasingCard(wait: wait!));
+}
 
 /// A payment the unplanned leaves could not cover, made through the next round: the
 /// planned leaves it needs are given up in that round for leaves no plan names, and the
