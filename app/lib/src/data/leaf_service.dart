@@ -16,7 +16,7 @@ import 'wallet_repository.dart';
 
 /// A refusal by the leaf wallet, in the library's own words.
 class LeafRefusal implements Exception {
-  LeafRefusal(this.kind, this.message, {this.code, this.status, this.asset, this.release = const []});
+  LeafRefusal(this.kind, this.message, {this.code, this.status, this.asset, this.release = const [], this.plain = false});
   final String kind;
   final String message;
   final String? code;
@@ -26,6 +26,10 @@ class LeafRefusal implements Exception {
   /// coins whose release covers it.
   final String? asset;
   final List<String> release;
+
+  /// A refusal said in user mode's plain words ([plainRefusal]): a screen in user mode
+  /// shows [message] as it is.
+  final bool plain;
 
   /// Reads the library's `{"error": {"kind", "message", "code"?, "status"?}}`
   /// out of whatever the core threw.
@@ -191,6 +195,7 @@ class LeafService extends ChangeNotifier {
     _timer = null;
     if (open) leaves.leavesClose();
     open = false;
+    info = null;
     await _foreground(false);
     notifyListeners();
   }
@@ -254,7 +259,10 @@ class LeafService extends ChangeNotifier {
   /// refusal names are given up in that round for leaves no plan names, and the command
   /// is asked again once that round is final. Every screen that starts a leaf command
   /// goes through here; keep it the one path.
-  Future<dynamic> pay(String command, [Map<String, dynamic> args = const {}]) async {
+  ///
+  /// With [plain] (user mode), a refusal user mode has plain words for is said in them
+  /// ([plainRefusal]); every other refusal is the library's.
+  Future<dynamic> pay(String command, [Map<String, dynamic> args = const {}, bool plain = false]) async {
     try {
       return await payThroughRelease(
         command,
@@ -271,6 +279,8 @@ class LeafService extends ChangeNotifier {
           notifyListeners();
         },
       );
+    } on LeafRefusal catch (e) {
+      throw plain ? plainRefusal(e) : e;
     } finally {
       if (releasing != null) {
         releasing = null;
@@ -295,6 +305,13 @@ class LeafService extends ChangeNotifier {
     try {
       plans = await run('plans');
     } catch (_) {}
+    // The operator's assets (which it serves supervised or issuer-operated) and the
+    // landing key, read once per open.
+    if (info == null) {
+      try {
+        info = Map<String, dynamic>.from(await run('info') as Map);
+      } catch (_) {}
+    }
     notifyListeners();
   }
 
@@ -382,6 +399,13 @@ class LeafService extends ChangeNotifier {
       await p.remove(_kScanNext);
     } catch (_) {}
   }
+
+  /// The assets the operator serves supervised.
+  List<String> supervisedAssets() => supervisedAssetsOf(info);
+
+  /// What of [asset] its issuer has frozen for this wallet, in atoms (both modes show it
+  /// under the asset's figure).
+  BigInt frozenAtoms(String asset) => frozenAtomsOf(coins, balance)[asset] ?? BigInt.zero;
 
   /// Leaf atoms per asset: every coin the library counts as held off the chain,
   /// whatever its state.
@@ -707,3 +731,83 @@ Future<Map<String, dynamic>> leafBackgroundPass(MethodChannel host) async {
         '${care == null ? '' : '; care ${careSummary(out['care'] is Map ? Map<String, dynamic>.from(out['care'] as Map) : null)}'}',
   };
 }
+
+// ---------------------------------------------------------------------------
+// Supervised assets
+// ---------------------------------------------------------------------------
+
+List<Map> _operatorAssets(Map? info) {
+  final si = info?['server_info'];
+  final a = si is Map ? si['assets'] : null;
+  return a is List ? a.whereType<Map>().toList() : const [];
+}
+
+/// The assets the operator serves under the supervised profile (`info`'s `supervised`
+/// entry): a coin of one is held only as a landing-1 leaf, landing in the wallet's own
+/// key (`info.landing_address`).
+List<String> supervisedAssetsOf(Map? info) =>
+    [for (final a in _operatorAssets(info)) if (a['supervised'] != null && a['asset'] is String) a['asset'] as String];
+
+/// What of each asset its issuer has frozen for this wallet: every held leaf whose
+/// landing the node shows frozen (or the asset paused), and every on-chain coin the leaf
+/// wallet counts frozen (a leaf taken home by its landing stays frozen there).
+Map<String, BigInt> frozenAtomsOf(List<dynamic> coins, Map? balance) {
+  const held = {'pending', 'live', 'offered', 'sending', 'given', 'forfeited', 'exiting'};
+  final out = <String, BigInt>{};
+  void add(Object? a, Object? v) {
+    if (a == null) return;
+    out['$a'] = (out['$a'] ?? BigInt.zero) + (BigInt.tryParse('${v ?? 0}') ?? BigInt.zero);
+  }
+
+  for (final c in coins.whereType<Map>()) {
+    final f = c['frozen'];
+    if (!held.contains(c['state']) || f is! Map) continue;
+    if (f['frozen'] == true || f['paused'] == true) add(c['asset'], c['value']);
+  }
+  final on = balance?['sequentia_onchain_frozen'];
+  if (on is Map) on.forEach(add);
+  return out;
+}
+
+/// The one plain sentence a frozen holding gets, in either mode, under its asset's figure.
+String frozenSentence(String amount, String ticker) =>
+    "$amount $ticker is frozen by its issuer: it can't be sent until the issuer lifts the freeze.";
+
+/// User mode's words for a payment of a frozen holding.
+const kFrozenRefusal = 'This asset is frozen by its issuer for this wallet: nothing was sent.';
+
+/// A refusal in user mode's words: a frozen holding said plainly; every other refusal
+/// as the library says it.
+LeafRefusal plainRefusal(LeafRefusal e) {
+  if (e.code == 'frozen' || RegExp(r'\bfrozen\b|\bpaused\b', caseSensitive: false).hasMatch(e.message)) {
+    return LeafRefusal(e.kind, kFrozenRefusal, code: e.code, status: e.status, plain: true);
+  }
+  return e;
+}
+
+/// The user composer's pairs as the operator serves them: a pair with a supervised asset
+/// keeps only the in-tree swap with a live maker (`leaf-maker`), since the operator
+/// serves no take, no resting order and no Lightning payment in such an asset.
+Map? servedPairs(Map? pairs, List<String> supervised) {
+  if (pairs == null || supervised.isEmpty || pairs['chains'] is! Map) return pairs;
+  final sup = supervised.toSet();
+  final chains = <String, dynamic>{};
+  (pairs['chains'] as Map).forEach((g, c) {
+    if (c is! Map) {
+      chains['$g'] = c;
+      return;
+    }
+    chains['$g'] = {
+      ...c,
+      'pairs': [
+        for (final p in (c['pairs'] as List?) ?? const [])
+          if (p is Map && (sup.contains(p['pay']) || sup.contains(p['receive'])))
+            {...p, 'sources': [for (final x in (p['sources'] as List?) ?? const []) if (x == 'leaf-maker') x]}
+          else
+            p,
+      ],
+    };
+  });
+  return {...pairs, 'chains': chains};
+}
+

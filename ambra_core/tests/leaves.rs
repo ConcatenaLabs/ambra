@@ -1,6 +1,7 @@
 //! The leaf service against a whole operator: a payment that arrives while the app
 //! is closed, an in-tree swap between two wallets, what `care` does by itself, and a
-//! payment out of planned coins made through a release. Runs against arca's long-running operator harness
+//! payment out of planned coins made through a release, and a supervised asset's
+//! landing, freeze, exit and lift. Runs against arca's long-running operator harness
 //! (`bark-cli/tests/arca_operator_for_browsers.rs` in ConcatenaLabs/arca), named by
 //! its control address:
 //!
@@ -434,6 +435,142 @@ fn a_payment_out_of_planned_coins_goes_through_a_release() {
     assert_eq!(total, 500_000);
     let plans = ok(a.run("plans", &json!({})), "plans")["result"].clone();
     eprintln!("plans: {plans}");
+    drop(a);
+    drop(b);
+    let _ = std::fs::remove_dir_all(&adir);
+    let _ = std::fs::remove_dir_all(&bdir);
+}
+
+/// The node's scriptPubKey (hex) of an address.
+fn script_of(h: &str, address: &str) -> String {
+    let v = control(h, "/rpc", json!({"method": "validateaddress", "params": [address]}));
+    v["scriptPubKey"].as_str().unwrap_or_else(|| panic!("validateaddress {address}: {v}")).to_string()
+}
+
+/// Syncs until `ready` holds of the wallet's coins, at most a minute.
+fn sync_until(w: &mut LeafWallet, what: &str, ready: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+    for _ in 0..30 {
+        let _ = w.run("sync", &json!({}));
+        let all = ok(w.run("coins", &json!({})), "coins")["result"].as_array().unwrap().clone();
+        if ready(&all) {
+            return all;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    panic!("never {what}");
+}
+
+/// A supervised asset through the core, as the app holds it: a board of Z and its
+/// round leaf land at the wallet's landing key (`info.landing_address`); a payment out
+/// of round lands the payee's coin at its own; a freeze of the landing shows the coin
+/// frozen, and a payment of it is refused `frozen` (user mode's plain words for it come
+/// from `plainRefusal` in the app); the exit lands the coin in the landing key, where
+/// the node holds it frozen and the balance counts it in `sequentia_onchain_frozen`;
+/// once the freeze is lifted the landed coin is spent again and the wallet pays again.
+#[test]
+fn a_supervised_asset_lands_in_the_landing_key_and_freezes_there() {
+    let Ok(h) = std::env::var("AMBRA_LEAVES_HARNESS") else {
+        eprintln!("AMBRA_LEAVES_HARNESS is not set: the operator harness is not running, nothing to test against");
+        return;
+    };
+    let state = control(&h, "/state", json!({}));
+    let x = state["x"].as_str().unwrap().to_string();
+    let Some(z) = state["supervised"].as_str().map(String::from) else {
+        eprintln!("the harness serves no supervised asset (ARCA_OPERATOR_SUPERVISED): nothing to test");
+        return;
+    };
+    let config = harness_config(&state);
+    let (mut a, adir) = boarded(&h, "supervised-holder", &config, &x, &z, 2_000_000);
+    let info = ok(a.run("info", &json!({})), "info")["result"].clone();
+    let landing = info["landing_address"].as_str().unwrap().to_string();
+    let spk = script_of(&h, &landing);
+    let served = info["server_info"]["assets"].as_array().unwrap().iter().find(|s| s["asset"] == json!(z)).cloned().unwrap();
+    eprintln!("A lands every coin of Z at {landing} ({spk}); served: {served}");
+    assert!(served["supervised"].is_object(), "{served}");
+
+    let q = ok(a.run("quote", &json!({})), "quote")["result"].clone();
+    ok(a.run("participate", &json!({"shown": q["coins"]})), "participate");
+    eprintln!("round: {}", control(&h, "/round", json!({})));
+    let coins = sync_until(&mut a, "A's leaf of Z's round", |c| c.iter().any(|c| c["state"] == "live" && c["asset"] == json!(z)));
+    let leaf = coins.iter().find(|c| c["state"] == "live" && c["asset"] == json!(z)).unwrap().clone();
+    eprintln!("A's leaf: landing {} frozen {}", leaf["landing"], leaf["frozen"]);
+    assert_eq!(leaf["landing"], json!(landing));
+    assert_eq!(leaf["frozen"]["frozen"], json!(false));
+
+    // Paid out of round: B's coin lands at B's key.
+    let bdir = dir("supervised-payee");
+    let mut b = LeafWallet::create(&bdir, &fresh_phrase(), &config).expect("the payee");
+    let b_landing = ok(b.run("info", &json!({})), "info")["result"]["landing_address"].as_str().unwrap().to_string();
+    let req = ok(b.run("receive", &json!({"asset": z, "amount": "300000"})), "receive")["result"]["request"].as_str().unwrap().to_string();
+    ok(a.run("send", &json!({"request": req})), "A pays B 300,000 Z");
+    let bc = sync_until(&mut b, "B's coin of Z", |c| c.iter().any(|c| c["state"] == "live" && c["asset"] == json!(z)));
+    let bcoin = bc.iter().find(|c| c["state"] == "live" && c["asset"] == json!(z)).unwrap();
+    eprintln!("B's coin: {} lands at {}", bcoin["value"], bcoin["landing"]);
+    assert_eq!(bcoin["landing"], json!(b_landing));
+
+    // The issuer freezes A's landing.
+    eprintln!("freeze: {}", control(&h, "/freeze", json!({"script": spk})));
+    control(&h, "/produce", json!({}));
+    control(&h, "/bury", json!({}));
+    let st = control(&h, "/rpc", json!({"method": "isassetfrozen", "params": [z, spk]}));
+    eprintln!("isassetfrozen after the freeze: {st}");
+    let ac = sync_until(&mut a, "A's coin frozen", |c| c.iter().any(|c| c["state"] == "live" && c["asset"] == json!(z) && c["frozen"]["frozen"] == json!(true)));
+    let a_coin = ac.iter().find(|c| c["state"] == "live" && c["asset"] == json!(z)).unwrap().clone();
+    eprintln!("A's coin shows: {}", a_coin["frozen"]);
+    let req2 = ok(b.run("receive", &json!({"asset": z, "amount": "100000"})), "receive")["result"]["request"].as_str().unwrap().to_string();
+    let e = a.run("send", &json!({"request": req2})).expect_err("a payment of a frozen coin");
+    eprintln!("refused: {e}");
+    assert!(e["error"]["code"] == "frozen" || leaves::refusal_message(&e).contains("frozen"), "{e}");
+
+    // The exit lands the coin at A's landing key, frozen there.
+    let id = a_coin["leaf_id"].as_str().unwrap().to_string();
+    let mut last = ok(a.run("exit", &json!({"leaf_id": id})), "exit")["result"].clone();
+    eprintln!("exit: {}", last["state"]);
+    for _ in 0..10 {
+        if last["state"] == "claimed" {
+            break;
+        }
+        control(&h, "/produce", json!({}));
+        if last["state"] == "waiting" {
+            control(&h, "/advance", json!({"seconds": 3 * 512 + 60}));
+            control(&h, "/produce", json!({}));
+        }
+        last = ok(a.run("exit", &json!({"leaf_id": id})), "exit")["result"].clone();
+        eprintln!("exit: {}", last["state"]);
+    }
+    assert_eq!(last["state"], "claimed", "{last}");
+    let claim = last["claim"]["txid"].as_str().unwrap().to_string();
+    control(&h, "/produce", json!({}));
+    control(&h, "/bury", json!({}));
+    let tx = control(&h, "/rpc", json!({"method": "getrawtransaction", "params": [claim, true]}));
+    let outs: Vec<&Value> = tx["vout"].as_array().unwrap().iter().filter(|o| o["scriptPubKey"]["hex"].as_str().is_some_and(|s| !s.is_empty())).collect();
+    eprintln!("claim {claim}: outputs other than the fee {}", serde_json::to_string(&outs).unwrap());
+    assert!(outs.iter().all(|o| o["scriptPubKey"]["hex"] == json!(spk)), "the claim pays the landing alone");
+    let st = control(&h, "/rpc", json!({"method": "isassetfrozen", "params": [z, spk]}));
+    eprintln!("isassetfrozen of the landing: {st}");
+    assert_eq!(st["frozen"], json!(true));
+    let _ = a.run("sync", &json!({}));
+    let bal = ok(a.run("balance", &json!({})), "balance")["result"].clone();
+    eprintln!("A's balance: frozen on-chain {}", bal["sequentia_onchain_frozen"]);
+    assert!(bal["sequentia_onchain_frozen"][&z].as_str().is_some(), "{bal}");
+
+    // Lifted: the landed coin is spent again by a board, and A pays again.
+    eprintln!("lift: {}", control(&h, "/lift", json!({"script": spk})));
+    control(&h, "/produce", json!({}));
+    control(&h, "/bury", json!({}));
+    let st = control(&h, "/rpc", json!({"method": "isassetfrozen", "params": [z, spk]}));
+    assert_eq!(st["frozen"], json!(false), "{st}");
+    let bal = ok(a.run("balance", &json!({})), "balance")["result"].clone();
+    let landed: u64 = bal["sequentia_onchain"][&z].as_str().unwrap_or("0").parse().unwrap();
+    eprintln!("A's balance after the lift: on-chain {} frozen {}", bal["sequentia_onchain"], bal["sequentia_onchain_frozen"]);
+    let again = ok(a.run("board", &json!({"asset": z, "amount": (landed - 10_000).to_string(), "fee_asset": x})), "board the landed coin")["result"].clone();
+    eprintln!("board again: {}", again["txid"]);
+    control(&h, "/produce", json!({}));
+    control(&h, "/bury", json!({}));
+    sync_until(&mut a, "A's new board live", |c| c.iter().any(|c| c["state"] == "live" && c["kind"] == "board" && c["asset"] == json!(z)));
+    let req4 = ok(b.run("receive", &json!({"asset": z, "amount": "10000"})), "receive")["result"]["request"].as_str().unwrap().to_string();
+    let paid = ok(a.run("send", &json!({"request": req4})), "A pays again once lifted")["result"].clone();
+    eprintln!("paid again: {}", paid["sent"]);
     drop(a);
     drop(b);
     let _ = std::fs::remove_dir_all(&adir);

@@ -301,7 +301,8 @@ class _BalanceCard extends StatelessWidget {
     final b = svc.balance;
     final arca = (b?['arca'] as Map?) ?? const {};
     final onchain = (b?['sequentia_onchain'] as Map?) ?? const {};
-    final assets = {...arca.keys, ...onchain.keys}.map((e) => '$e').toList()..sort();
+    final frozenOnchain = (b?['sequentia_onchain_frozen'] as Map?) ?? const {};
+    final assets = {...arca.keys, ...onchain.keys, ...frozenOnchain.keys}.map((e) => '$e').toList()..sort();
     return AmbraCard(
       key: const Key('leaf-balance'),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -317,6 +318,7 @@ class _BalanceCard extends StatelessWidget {
           for (final e in ((arca[a] as Map?) ?? const {}).entries)
             Text('${_amount(a, e.value)} ${e.key}', style: AmbraText.mono),
           if (onchain[a] != null) Text('${_amount(a, onchain[a])} on-chain, for boards and exit fees', style: AmbraText.mono),
+          if (frozenOnchain[a] != null) Text('${_amount(a, frozenOnchain[a])} on-chain and frozen by its issuer (landed)', style: AmbraText.mono),
         ],
       ]),
     );
@@ -637,6 +639,19 @@ class _CoinsCardState extends State<_CoinsCard> {
           if (c['refresh_from'] != null) Text('Refresh from ${_when(c['refresh_from'], now)}', style: AmbraText.sub),
           if (c['home_from'] != null) Text('Home from ${_when(c['home_from'], now)}', style: AmbraText.sub),
           if (c['exit_by'] != null) Text('Exit by ${_when(c['exit_by'], now)}', style: AmbraText.sub),
+          if (c['landing'] != null)
+            Text('Lands at ${c['landing']} (this wallet\'s landing key: a supervised asset\'s leaf leaves the tree only there)',
+                key: Key('leaf-landing-${c['leaf_id']}'), style: AmbraText.sub),
+          if (c['frozen'] is Map) ...[
+            Text(
+                'Frozen: ${(c['frozen']['frozen'] == true || c['frozen']['paused'] == true) ? (c['frozen']['paused'] == true ? 'yes: the issuer paused the asset' : 'yes: the issuer froze this landing') : 'no'}',
+                key: Key('leaf-frozen-${c['leaf_id']}'),
+                style: AmbraText.sub),
+            if (c['frozen']['frozen'] == true || c['frozen']['paused'] == true)
+              Text(frozenSentence(formatAtoms('${c['value'] ?? '0'}', SeqAssets.labelFor('${c['asset']}').precision), SeqAssets.labelFor('${c['asset']}').ticker),
+                  style: const TextStyle(color: AmbraColors.amber2, fontSize: 12)),
+            if ('${c['frozen']['note'] ?? ''}'.isNotEmpty) Text('${c['frozen']['note']}', style: AmbraText.sub),
+          ],
           if (planned['${c['leaf_id']}'] case final p?)
             Text('Planned: plan ${_short('${p['plan_id']}', 6)}, ${p['state']}: paid out of round only once released into the next round',
                 key: Key('leaf-planned-${c['leaf_id']}'), style: AmbraText.sub),

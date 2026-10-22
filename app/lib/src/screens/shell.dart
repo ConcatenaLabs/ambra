@@ -466,6 +466,7 @@ class _BalanceTabState extends State<BalanceTab> {
                     figure: figureOf[h],
                     dev: dev,
                     leavesJoined: LeafService.instance.joined,
+                    frozen: LeafService.instance.joined ? LeafService.instance.frozenAtoms(h) : BigInt.zero,
                     channels: _lnChannels,
                     onChanged: _refresh,
                     onHide: () async {
@@ -498,6 +499,7 @@ class _AssetRow extends StatefulWidget {
       this.figure,
       this.dev = false,
       this.leavesJoined = false,
+      this.frozen,
       this.channels = const [],
       this.onChanged,
       this.onHide});
@@ -509,6 +511,9 @@ class _AssetRow extends StatefulWidget {
   // one figure, its parts one tap away.
   final bool dev;
   final bool leavesJoined;
+  // What of the asset its issuer has frozen for this wallet: one plain sentence under
+  // the figure, in both modes, never hidden.
+  final BigInt? frozen;
   final List<Map<dynamic, dynamic>> channels;
   final VoidCallback? onChanged;
   // Per-asset Hide control (quiet trailing icon). null = no control — the BTC row
@@ -583,6 +588,15 @@ class _AssetRowState extends State<_AssetRow> {
           ]),
         ),
       ),
+      if ((widget.frozen ?? BigInt.zero) > BigInt.zero)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(frozenSentence(formatAtoms(widget.frozen.toString(), label.precision), label.ticker),
+                key: Key('frozen-${label.ticker}'), style: const TextStyle(color: AmbraColors.amber2, fontSize: 12)),
+          ),
+        ),
       if (!widget.dev && _open && parts.isNotEmpty)
         _SplitLine(ticker: label.ticker, precision: label.precision, parts: parts),
       if (widget.dev && figure != null)
