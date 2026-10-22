@@ -71,6 +71,7 @@ class _LeavesScreenState extends State<LeavesScreen> {
               const SizedBox(height: 14),
               _BondCard(svc: svc),
               const SizedBox(height: 14),
+              if (issuerAssetsOf(svc.info).isNotEmpty) ...[_SupplyCard(svc: svc), const SizedBox(height: 14)],
               _CoinsCard(svc: svc),
               const SizedBox(height: 14),
               const _BoardCard(),
@@ -641,6 +642,8 @@ class _CoinsCardState extends State<_CoinsCard> {
           if (c['refresh_from'] != null) Text('Refresh from ${_when(c['refresh_from'], now)}', style: AmbraText.sub),
           if (c['home_from'] != null) Text('Home from ${_when(c['home_from'], now)}', style: AmbraText.sub),
           if (c['exit_by'] != null) Text('Exit by ${_when(c['exit_by'], now)}', style: AmbraText.sub),
+          if (batchProfileLine(c['batch_profile']) case final line?)
+            Text(line, key: Key('leaf-batch-${c['leaf_id']}'), style: AmbraText.sub),
           if (c['landing'] != null)
             Text('Lands at ${c['landing']} (this wallet\'s landing key: a supervised asset\'s leaf leaves the tree only there)',
                 key: Key('leaf-landing-${c['leaf_id']}'), style: AmbraText.sub),
@@ -1036,6 +1039,76 @@ class _BondCardState extends State<_BondCard> {
         ],
         const SizedBox(height: 10),
         SecondaryButton(key: const Key('bond-watch-now'), label: _busy ? 'Watching…' : 'Watch now', icon: Icons.visibility, onPressed: _busy ? null : _watch),
+      ]),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Issuer-operated assets
+// ---------------------------------------------------------------------------
+
+/// Each asset the operator serves issuer-operated, with Supply: the operator's report of
+/// what it minted, burned and holds under burn-only sweeps (`supply`), each mint and burn
+/// it lists read again from this wallet's node.
+class _SupplyCard extends StatefulWidget {
+  const _SupplyCard({required this.svc});
+  final LeafService svc;
+  @override
+  State<_SupplyCard> createState() => _SupplyCardState();
+}
+
+class _SupplyCardState extends State<_SupplyCard> {
+  final Map<String, Map> _report = {};
+  final Map<String, LeafRefusal> _err = {};
+  String? _busy;
+
+  Future<void> _supply(String asset) async {
+    setState(() {
+      _busy = asset;
+      _err.remove(asset);
+    });
+    try {
+      _report[asset] = Map.from(await widget.svc.run('supply', {'asset': asset}) as Map);
+    } catch (e) {
+      _err[asset] = LeafRefusal.of(e);
+    }
+    if (mounted) setState(() => _busy = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final assets = issuerAssetsOf(widget.svc.info);
+    return AmbraCard(
+      key: const Key('supply-card'),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SectionLabel('Issuer-operated assets'),
+        const SizedBox(height: 8),
+        const Text(
+            'The operator serves these assets issuer-operated: each round\'s float is minted by the issuer through its '
+            'mint limiter, and every batch\'s sweep can only burn. Supply asks the operator for its report and reads each '
+            'mint and burn it lists again on this wallet\'s node; it does not prove the list complete.',
+            style: AmbraText.sub),
+        for (final a in assets) ...[
+          const Divider(color: AmbraColors.line),
+          Text(SeqAssets.labelFor(a).ticker, style: AmbraText.body),
+          Text(_short(a), style: AmbraText.mono.copyWith(fontSize: 11)),
+          if (_report[a] case final r?) ...[
+            for (final k in ['minted', 'burned', 'in_batches'])
+              if (r[k] != null && r[k] is! Map && r[k] is! List)
+                Text('${k.replaceAll('_', ' ')}: ${_amount(a, r[k])}', key: Key('supply-$k-$a'), style: AmbraText.mono),
+            Text('Checked on this node: ${r['checked_on_the_node'] == true ? 'yes: every listed mint and burn agrees' : 'no'}',
+                key: Key('supply-checked-$a'), style: AmbraText.sub),
+            SelectableText(const JsonEncoder.withIndent(' ').convert(r), style: AmbraText.mono.copyWith(fontSize: 10)),
+          ],
+          if (_err[a] != null) RefusalText(_err[a]!),
+          const SizedBox(height: 6),
+          SecondaryButton(
+              key: Key('supply-$a'),
+              label: _busy == a ? 'Reading…' : 'Supply',
+              icon: Icons.account_balance,
+              onPressed: _busy != null ? null : () => _supply(a)),
+        ],
       ]),
     );
   }

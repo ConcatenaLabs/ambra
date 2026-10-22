@@ -1,7 +1,8 @@
 //! The leaf service against a whole operator: a payment that arrives while the app
 //! is closed, an in-tree swap between two wallets, what `care` does by itself, and a
 //! payment out of planned coins made through a release, and a supervised asset's
-//! landing, freeze, exit and lift, and a receive that rests on the operator's bond. Runs against arca's long-running operator harness
+//! landing, freeze, exit and lift, a receive that rests on the operator's bond, and
+//! an issuer-operated asset's batch profile and supply. Runs against arca's long-running operator harness
 //! (`bark-cli/tests/arca_operator_for_browsers.rs` in ConcatenaLabs/arca), named by
 //! its control address:
 //!
@@ -635,4 +636,63 @@ fn a_receive_rests_on_the_operator_bond() {
 
     drop(a);
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// An issuer-operated asset through the core, as developer mode shows it: a leaf of a
+/// round of the asset carries `batch_profile` `issuer-operated` (a leaf of X `open`),
+/// and `supply` answers the operator's report with each mint and burn read again from
+/// the wallet's node.
+#[test]
+fn an_issuer_operated_asset_shows_its_batch_profile_and_supply() {
+    let Ok(h) = std::env::var("AMBRA_LEAVES_HARNESS") else {
+        eprintln!("AMBRA_LEAVES_HARNESS is not set: the operator harness is not running, nothing to test against");
+        return;
+    };
+    let state = control(&h, "/state", json!({}));
+    let x = state["x"].as_str().unwrap().to_string();
+    let Some(i) = state["issuer"].as_str().map(String::from) else {
+        eprintln!("the harness serves no issuer-operated asset (ARCA_OPERATOR_ISSUER): nothing to test");
+        return;
+    };
+    let config = harness_config(&state);
+    let (mut a, adir) = boarded(&h, "issuer-holder", &config, &x, &i, 1_000_000);
+    let addr = ok(a.run("address", &json!({})), "address")["result"].clone();
+    control(&h, "/fund", json!({"script": addr["script_pubkey"], "asset": x, "amount": 1_500_000}));
+    control(&h, "/produce", json!({}));
+    ok(a.run("board", &json!({"asset": x, "amount": "1000000", "fee_asset": x})), "board X");
+    control(&h, "/produce", json!({}));
+    control(&h, "/bury", json!({}));
+    let _ = a.run("sync", &json!({}));
+    let info = ok(a.run("info", &json!({})), "info")["result"].clone();
+    let served = info["server_info"]["assets"].as_array().unwrap().iter().find(|s| s["asset"] == json!(i)).cloned().unwrap();
+    eprintln!("served: {served}");
+    assert!(served["issuer"].is_object(), "{served}");
+    let q = ok(a.run("quote", &json!({})), "quote")["result"].clone();
+    ok(a.run("participate", &json!({"shown": q["coins"]})), "participate");
+    // One round per asset: each /round builds the next that stands.
+    for _ in 0..3 {
+        let r = control(&h, "/round", json!({}));
+        eprintln!("round: {r}");
+        if r["round"].is_null() {
+            break;
+        }
+        let _ = a.run("sync", &json!({}));
+    }
+    let parts = ok(a.run("participations", &json!({})), "participations")["result"].clone();
+    eprintln!("participations: {}", parts.as_array().unwrap().iter().map(|p| format!("{} {}", p["asset"], p["state"])).collect::<Vec<_>>().join(", "));
+    let coins = sync_until(&mut a, "both round leaves", |c| {
+        [&i, &x].iter().all(|asset| c.iter().any(|c| c["state"] == "live" && c["kind"] == "batch" && c["asset"] == json!(asset)))
+    });
+    for c in coins.iter().filter(|c| c["state"] == "live") {
+        eprintln!("leaf {} of {}: kind {} batch_profile {}", c["value"], c["asset"], c["kind"], c["batch_profile"]);
+    }
+    let of = |asset: &str| coins.iter().find(|c| c["state"] == "live" && c["kind"] == "batch" && c["asset"] == json!(asset)).unwrap()["batch_profile"].clone();
+    assert_eq!(of(&i), json!("issuer-operated"));
+    assert_eq!(of(&x), json!("open"));
+    let report = ok(a.run("supply", &json!({"asset": i})), "supply")["result"].clone();
+    eprintln!("supply: minted {} burned {} in_batches {} checked_on_the_node {} mints {}", report["minted"], report["burned"],
+        report["in_batches"], report["checked_on_the_node"], report["mints"].as_array().map_or(0, |m| m.len()));
+    assert_eq!(report["checked_on_the_node"], json!(true), "{report}");
+    drop(a);
+    let _ = std::fs::remove_dir_all(&adir);
 }

@@ -341,5 +341,22 @@ void main() {
       expect(plainRefusal(LeafRefusal('refused', 'the request was paid already')).plain, isFalse);
     });
   });
+
+  test('issuer-operated assets and a leaf\'s batch profile, for developer mode', () {
+    final info = {
+      'server_info': {
+        'assets': [
+          {'asset': 'xx'},
+          {'asset': 'ii', 'issuer': {'limiter': 'm'}},
+          {'asset': 'zz', 'supervised': {}},
+        ]
+      }
+    };
+    expect(issuerAssetsOf(info), ['ii']);
+    expect(issuerAssetsOf(null), isEmpty);
+    expect(batchProfileLine('issuer-operated'), 'Batch: issuer-operated: its sweep can only burn');
+    expect(batchProfileLine('open'), 'Batch: open: its sweep pays the operator');
+    expect(batchProfileLine(null), isNull);
+  });
 }
 
