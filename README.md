@@ -139,7 +139,11 @@ module that implements it.
 - **In user mode** (the default) the Swap tab is three inputs and one button: **You pay**
   (an asset and an amount), **You get**, and **Review** (`app/lib/src/screens/user_composer.dart`,
   its engine `app/lib/src/data/user_trade.dart`, the web wallet's `user-trade.js` in Dart). BTC
-  heads both pickers. Review shows what you pay, what you get and one line of fees, each in
+  heads both pickers, and each picker shows what the wallet holds of an asset as its one
+  figure on the balance (`heldFigure`, `app/lib/src/data/ln_rail.dart`: BTC in the wallet's
+  own Bitcoin Lightning node included), while a trade is bounded by what can be spent now.
+  The wallet's Lightning channels are read apart from the on-chain sync, so a sync that fails
+  hides none of them. Review shows what you pay, what you get and one line of fees, each in
   the asset it is paid in, before anything is signed; **Trade** confirms it, and the trade then
   reads **Sent**, **Settled** once final, or **Returned: nothing traded.**, with nothing to do
   either way. It trades only what settles in one step from the wallet's coins in a leaf
