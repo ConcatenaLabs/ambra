@@ -69,8 +69,10 @@ module that implements it.
   held asset is one equal row: BTC (Bitcoin testnet4) first, listed at 0 too, then tSEQ,
   issued assets and OpenAMP restricted assets side by side
   (`app/lib/src/screens/shell.dart`).
-- An asset's figure counts everything the wallet holds of it: on-chain coins, leaves,
-  Lightning (the wallet's own channels in a `CHANNELD_*` state, its share with the
+- An asset's figure counts everything the wallet holds of it: on-chain coins, leaves
+  (the leaf library's `held` less its own on-chain coins, which sit at the phrase's keys
+  and are counted on-chain, so a leaf taken home by its exit counts once, as the coin on
+  the chain), Lightning (the wallet's own channels in a `CHANNELD_*` state, its share with the
   channel reserve, `balance_units`, or `spendable_units` from an LSP that does not report
   it) and, for the Sequence token, what is staked (each bonded stake under either lock,
   each unbonding output not yet returned, and the delegation record; a stake returned to
