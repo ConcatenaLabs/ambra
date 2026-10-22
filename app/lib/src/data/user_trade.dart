@@ -15,6 +15,9 @@ library;
 
 import 'dart:convert';
 
+import 'btc_lightning.dart';
+import 'user_trade_btc.dart';
+
 const String kUserBtc = 'BTC';
 
 /// How long the wallet waits for a maker to complete a swap it accepted before it cancels it.
@@ -181,7 +184,7 @@ class BookEntry {
     required this.lot,
     required this.raw,
   });
-  final String source; // 'leaf-maker' | 'covenant-round' | 'leaf-resting'
+  final String source; // 'leaf-maker' | 'covenant-round' | 'leaf-resting' | 'btc-gateway'
   final String id;
   final String? maker;
   final BigInt rateNum, rateDen, lot;
@@ -191,6 +194,9 @@ class BookEntry {
 
 const Map<String, int> kSourceParties = {'onchain-fill': 0, 'covenant-round': 1, 'leaf-resting': 1, 'leaf-maker': 2, 'btc-gateway': 2};
 
+/// A live maker's quotes for the pair. A quote with BTC on one side (in satoshis) is a
+/// 'btc-gateway' entry, one hash-lock between a leaf and Bitcoin Lightning; any other is a
+/// 'leaf-maker' one, an in-tree swap.
 List<BookEntry> makerEntries(String maker, List quotes, {required String pay, required String receive}) {
   final out = <BookEntry>[];
   for (final q in quotes) {
@@ -199,7 +205,7 @@ List<BookEntry> makerEntries(String maker, List quotes, {required String pay, re
     if (n <= BigInt.zero || d <= BigInt.zero || max <= BigInt.zero || max < min) continue;
     out.add(
       BookEntry(
-        source: 'leaf-maker',
+        source: q['give_asset'] == kUserBtc || q['want_asset'] == kUserBtc ? 'btc-gateway' : 'leaf-maker',
         id: '$maker#${q['give_asset']}:${q['want_asset']}',
         maker: maker,
         rateNum: n,
@@ -336,12 +342,16 @@ class Candidate {
     this.offer,
     this.terms,
     this.settle,
+    this.btc,
   });
   final String source, id;
   final BookEntry entry;
   final BigInt receive, give;
   final List<Map<String, dynamic>> fees;
   final Map<String, dynamic>? quote, offer, terms, settle;
+
+  /// A BTC trade's terms (source 'btc-gateway').
+  final BtcTerms? btc;
 }
 
 class Ticket {
@@ -403,6 +413,7 @@ class UserTradeDeps {
     required this.read,
     required this.write,
     this.relayFills,
+    this.btc,
     int Function()? now,
     void Function(String)? log,
     Future<void> Function(int ms)? sleep,
@@ -418,6 +429,10 @@ class UserTradeDeps {
   /// its record (keyed by the operator's transfer id) is final.
   final Future<List<Map<String, dynamic>>> Function(String pay, String receive)? relayFills;
   final Future<({Map? pairs, String? genesis})> Function() admitted;
+
+  /// The wallet's Bitcoin Lightning, read at each use (null, or answering null: then nothing is
+  /// traded for or with BTC).
+  final BtcLightning? Function()? btc;
   final Future<String?> Function() read;
   final Future<void> Function(String value) write;
   final int Function() now;
@@ -426,8 +441,22 @@ class UserTradeDeps {
 }
 
 class UserTradeEngine {
-  UserTradeEngine(this.d);
+  UserTradeEngine(this.d) {
+    _btcT = BtcTrades(
+      run: _run,
+      btc: () => d.btc?.call(),
+      fetchJson: d.fetchJson,
+      put: _put,
+      log: d.log,
+      now: d.now,
+      settleStep: _settleStep,
+      maxFeePpm: kMaxFeePpm,
+      firmMarginMs: kFirmMarginMs,
+    );
+  }
   final UserTradeDeps d;
+  late final BtcTrades _btcT;
+  BtcLightning? get _btc => d.btc?.call();
 
   Future<dynamic> _run(String cmd, [Map<String, dynamic> args = const {}]) async {
     for (var i = 0; ; i++) {
@@ -485,11 +514,12 @@ class UserTradeEngine {
 
   Future<List<BookEntry>> _entries(String pay, String receive, List<String> sources) async {
     final out = <BookEntry>[];
-    if (sources.contains('leaf-maker')) {
+    // A maker quotes in-tree swaps, and, with a Bitcoin Lightning node, BTC in one hash-lock.
+    if (sources.contains('leaf-maker') || (sources.contains('btc-gateway') && _btc != null)) {
       for (final m in d.makers()) {
         try {
           final q = await d.fetchJson('$m/v1/quotes');
-          out.addAll(makerEntries(m, (q['quotes'] as List?) ?? const [], pay: pay, receive: receive));
+          out.addAll(makerEntries(m, (q['quotes'] as List?) ?? const [], pay: pay, receive: receive).where((e) => sources.contains(e.source)));
         } catch (e) {
           d.log('[user trade] maker $m did not answer: $e');
         }
@@ -642,6 +672,21 @@ class UserTradeEngine {
       return null;
     }
     if (e.source == 'leaf-resting') return _firmResting(e, pay, receive, limit, size.receive);
+    if (e.source == 'btc-gateway') {
+      final t = await _btcT.firm(
+        maker: e.maker,
+        rateNum: e.rateNum,
+        rateDen: e.rateDen,
+        minReceive: e.minReceive,
+        payAsset: pay,
+        receiveAsset: receive,
+        pay: amount,
+        have: have,
+        first: size.receive,
+      );
+      if (t == null) return null;
+      return Candidate(source: e.source, id: e.id, entry: e, receive: t.receive, give: t.give, fees: t.fees, offer: t.offer, btc: t);
+    }
     if (e.source == 'leaf-maker') {
       var give = size.receive;
       for (var i = 0; i < 4; i++) {
@@ -716,7 +761,18 @@ class UserTradeEngine {
     final ad = await d.admitted();
     final sources = admittedSources(ad.pairs, ad.genesis, pay, receive);
     if (sources.isEmpty) return QuoteResult.no('not-listed');
-    final have = (await spendable())[pay] ?? BigInt.zero;
+    // BTC is paid over the wallet's Bitcoin Lightning, never from a leaf.
+    BigInt have;
+    if (pay == kUserBtc) {
+      final b = _btc;
+      try {
+        have = b == null ? BigInt.zero : await b.balance();
+      } catch (_) {
+        have = BigInt.zero;
+      }
+    } else {
+      have = (await spendable())[pay] ?? BigInt.zero;
+    }
     if (have <= BigInt.zero) return QuoteResult.no('no-funds');
     final es = await _entries(pay, receive, sources);
     final limit = amount < have ? amount : have;
@@ -731,7 +787,12 @@ class UserTradeEngine {
     }
     final best = chooseCandidate(cands);
     for (final c in cands) {
-      if (c != best && c.offer != null) release(c.entry.maker, '${c.offer!['swap']}');
+      if (c == best) continue;
+      if (c.btc != null) {
+        _btcT.drop(c.entry.maker, c.btc!);
+      } else if (c.offer != null) {
+        release(c.entry.maker, '${c.offer!['swap']}');
+      }
     }
     if (best == null) return QuoteResult.no(es.isEmpty ? 'not-offered' : 'too-small');
     return QuoteResult.ok(
@@ -842,8 +903,19 @@ class UserTradeEngine {
         rec['sentAt'] = d.now();
         return _put(rec);
       }
+      if (c.source == 'btc-gateway') return await _btcT.confirm(c.entry.maker!, c.btc!, rec);
       throw StateError('no such source');
     } catch (e) {
+      if (e is BtcLapsed) throw LapsedError();
+      // A BTC trade's step that did not answer may still have been made (the library completes it
+      // at its next sync): it is looked for, and called failed only if it never shows.
+      if (rec['state'] == 'confirming' && c.source == 'btc-gateway' && e is! BtcLapsed && !RegExp(r'^(Exception: )?refused\b', caseSensitive: false).hasMatch('$e')) {
+        rec['uncertain'] = true;
+        rec['uncertainAt'] = d.now();
+        rec['error'] = '$e';
+        d.log('[user trade] the step did not answer; the trade is followed: $e');
+        return _put(rec);
+      }
       if (rec['state'] == 'confirming') {
         rec['state'] = 'failed';
         rec['error'] = '$e';
@@ -865,6 +937,16 @@ class UserTradeEngine {
 
   Future<Map<String, dynamic>> advance(Map<String, dynamic> rec) async {
     if (['settled', 'returned', 'failed'].contains(rec['state'])) return rec;
+    if (rec['state'] == 'confirming' && rec['source'] == 'btc-gateway') {
+      if (rec['hash'] == null) {
+        rec['state'] = 'failed';
+        rec['error'] = 'not made';
+        return _put(rec);
+      }
+      await _btcT.found(rec);
+      if (rec['state'] != 'sent' && rec['state'] != 'waiting') return rec;
+    }
+    if (rec['source'] == 'btc-gateway') return _btcT.advance(rec);
     if (rec['state'] == 'confirming') {
       if (rec['source'] == 'leaf-maker' && rec['swap'] != null) {
         final s = ((await _run('swaps')) as List? ?? const []).cast<Map>().where((x) => x['swap'] == rec['swap']).toList();

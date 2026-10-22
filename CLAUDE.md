@@ -158,7 +158,9 @@ release build on a device before a release.
   PR only and never becomes the default.
 - **The Swap tab in user mode is a port.** `app/lib/src/data/user_trade.dart` is the web
   wallet's `user-trade.js` in Dart (its single-step book, ticket, word list and trade records),
-  and `user_composer.dart` its screen. Change the two together with the web wallet's, keep every
+  `user_trade_btc.dart` its `user-trade-btc.js` (BTC in one hash-lock), `btc_lightning.dart`
+  its `btc-lightning.js` (the wallet's own hosted Bitcoin node), and `user_composer.dart` its
+  screen. Change the two together with the web wallet's, keep every
   string it shows in `UserWords` and none in `kUserModeForbiddenWords` (its test checks both), and
   let a pair reach user mode only through the web wallet's `user-mode/pairs.json`.
 - The remote default branch is `main` and all development lands there. `terminal-rebuild`

@@ -15,12 +15,64 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/btc_lightning.dart';
 import '../data/config.dart';
 import '../data/format.dart';
 import '../data/leaf_rail.dart' show offerForVerify;
 import '../data/leaf_service.dart';
+import '../data/lightning_service.dart';
+import '../data/ln_rail.dart';
+import '../data/lsp_client.dart';
+import '../data/seqln_keys.dart' as lnkeys;
 import '../data/user_trade.dart';
+import '../data/wallet_repository.dart';
 import '../rust/api.dart' as core;
+
+/// The wallet's own hosted Bitcoin node, as the composer's BTC trades drive it ([HostedBtcLightning]:
+/// holds under the wallet's own hash, payments capped at the ticket's route), once Lightning runs
+/// for this build; null before.
+BtcLightning? _btcLn;
+String? _btcLnTag;
+BtcLightning? appBtcLightning(String walletTag) {
+  if (!LightningService.instance.configured) return null;
+  if (_btcLn != null && _btcLnTag == walletTag) return _btcLn;
+  Future<String>? up;
+  Future<String> nodeKey() async {
+    // Brought up once, and again after a failure (the node may have restarted).
+    final f = up ??= () async {
+      final k = await LightningService.instance.btcNodeKey();
+      await LspClient.waitNodeReady(k);
+      return k;
+    }();
+    try {
+      return await f;
+    } catch (_) {
+      up = null;
+      rethrow;
+    }
+  }
+
+  // The wallet's own BTC channels, as /status reports them now: read again at each call, never
+  // kept, so room a first trade's node was just given shows at once.
+  Future<LegLiquidity> btcLeg() async {
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m == null) return legLiquidity(const [], RailTarget.btc());
+    final st = await LightningService.instance.getStatus(nodes: [lnkeys.ownNodeKeyForBtc(m)]);
+    return legLiquidity(((st.raw['channels'] as List?) ?? const []).whereType<Map>().toList(), RailTarget.btc());
+  }
+
+  final key = 'ambra.btcln.holds.$walletTag';
+  _btcLnTag = walletTag;
+  return _btcLn = HostedBtcLightning(
+    lsp: const LspBtcCalls(),
+    nodeKey: nodeKey,
+    spendable: () async => (await btcLeg()).spendable,
+    receivable: () async => (await btcLeg()).receivable,
+    read: () async => (await SharedPreferences.getInstance()).getString(key),
+    write: (v) async => (await SharedPreferences.getInstance()).setString(key, v),
+    log: (m) => debugPrint(m),
+  );
+}
 
 /// The engine as the app runs it: the leaf library through [LeafService], the maker and the
 /// relay at the app's backend, the pairs list the drill keeps (the web wallet's
@@ -76,7 +128,7 @@ UserTradeEngine appTradeEngine({required String walletTag}) {
     // refusal user mode has plain words for is said in them.
     run: (cmd, args) => LeafService.instance.pay(cmd, args, true),
     fetchJson: fetchJson,
-    makers: () => [Backend.leafMaker],
+    makers: () => [Backend.leafMaker, Backend.leafMakerBtc],
     relayBook: (pay, receive) async => [...await one(receive, pay), ...await one(pay, receive)],
     relayFills: (pay, receive) async {
       Future<List<Map<String, dynamic>>> fills(String base, String quote) async {
@@ -113,6 +165,7 @@ UserTradeEngine appTradeEngine({required String walletTag}) {
     },
     read: () async => (await SharedPreferences.getInstance()).getString(key),
     write: (v) async => (await SharedPreferences.getInstance()).setString(key, v),
+    btc: () => appBtcLightning(walletTag),
     log: (m) => debugPrint(m),
   ));
 }

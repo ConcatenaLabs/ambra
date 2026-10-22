@@ -36,6 +36,7 @@ class Backend {
   static String get arcaOperator => '$_origin/arca'; // the node's leaf operator (Leaves > Join)
   static String get nodeRpc => '$_origin/node-rpc'; // the node's read-only RPC for the leaf wallet
   static String get leafMaker => '$_origin/leafmaker'; // the live leaf maker user mode's Swap tab trades with
+  static String get leafMakerBtc => '$_origin/leafmaker-btc'; // the leaf maker that trades BTC for an asset over Lightning
   /// The pairs user mode's Swap tab offers per chain: the list the web wallet's reliability
   /// drill keeps (`user-mode/pairs.json` in ConcatenaLabs/sequentia-web-wallet), as the web
   /// wallet serves it.
