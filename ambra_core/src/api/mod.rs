@@ -333,7 +333,12 @@ pub struct SeqdexSwapRequestOut {
 /// funds it in `fee_asset` (any held, fee-eligible asset except `asset_r`),
 /// adding a fee input + explicit fee output. `fee_rate` is `fee_asset`'s
 /// published rate (atoms per 1e8 native), used only for the dust threshold.
-/// Returns the swap id + the SwapRequest JSON to hand to the daemon's ProposeTrade.
+/// `confidential` is the holder's choice for this swap: false (the default) receives
+/// at the wallet's usual address, every output of the taker's half explicit, and
+/// spends coins held in the clear only; true receives at the blinded form, which the
+/// maker blinds to.
+/// Returns the swap id + the SwapRequest JSON to hand to the daemon's ProposeTrade;
+/// keep the JSON: [`seqdex_sign_accept`] checks the maker's answer against it.
 #[allow(clippy::too_many_arguments)]
 pub fn seqdex_build_swap_request(
     mnemonic: String,
@@ -345,16 +350,18 @@ pub fn seqdex_build_swap_request(
     fee_asset: String,
     fee_amount: u64,
     fee_rate: u64,
+    confidential: bool,
 ) -> Result<SeqdexSwapRequestOut> {
     with_synced_wollet(&mnemonic, &esplora_url, |wollet| {
+        let address = wollet.address(None).map_err(rerr)?.address().clone();
         let opts = lwk_wollet::SeqdexSwapRequestOpts {
             asset_p: AssetId::from_str(&asset_p).map_err(rerr)?,
             amount_p,
             asset_r: AssetId::from_str(&asset_r).map_err(rerr)?,
             amount_r,
-            // seqdex_swap_request needs the CONFIDENTIAL address: the maker blinds
-            // the receive + change outputs to its blinding key (else NotConfidentialAddress).
-            receive_address: wollet.address(None).map_err(rerr)?.address().clone(),
+            // Transparent by default: the usual address builds an explicit half; the
+            // blinded form only when the holder chose it for this swap.
+            receive_address: if confidential { address } else { address.to_unconfidential() },
             fee_asset: AssetId::from_str(&fee_asset).map_err(rerr)?,
             fee_amount,
             fee_rate,
@@ -365,13 +372,26 @@ pub fn seqdex_build_swap_request(
     })
 }
 
-/// Sign the maker's SwapAccept PSET (base64) and return the stripped, signed PSET
-/// (base64) for /v1/trade/complete. Runs through the synced wallet so add_details
-/// can recognise the taker's own input by its scriptPubKey (else it's skipped and
-/// left unsigned). The maker's signatures on its inputs are preserved.
-pub fn seqdex_sign_accept(mnemonic: String, esplora_url: String, accept_pset: String) -> Result<String> {
+/// Check the maker's SwapAccept PSET (base64) against this wallet's own
+/// `swap_request_json` (from [`seqdex_build_swap_request`]), then sign it and return
+/// the stripped, signed PSET (base64) for /v1/trade/complete. Nothing is signed
+/// unless the maker's transaction is the swap this wallet proposed: its inputs
+/// unchanged and signed over the whole transaction, no other coin of the wallet
+/// spent, and every output of its half paying the same script, asset and amount in
+/// the form it asked for (lwk_wollet `seqdex_verify_accept`); otherwise this fails,
+/// naming what the maker changed. Runs through the synced wallet so add_details can
+/// recognise the taker's own input by its scriptPubKey. The maker's signatures on
+/// its inputs are preserved.
+pub fn seqdex_sign_accept(
+    mnemonic: String,
+    esplora_url: String,
+    swap_request_json: String,
+    accept_pset: String,
+) -> Result<String> {
+    let request = crate::seqdex::swap_request_from_json(&swap_request_json).map_err(err)?;
     with_synced_wollet(&mnemonic, &esplora_url, |wollet| {
         let mut pset = PartiallySignedTransaction::from_str(&accept_pset).map_err(rerr)?;
+        wollet.seqdex_verify_accept(&request, &pset).map_err(rerr)?;
         // The bare swap PSET carries no bip32 derivation; re-attach the taker
         // input's keypath from the wallet descriptor so the signer can sign it.
         wollet.add_details(&mut pset).map_err(rerr)?;

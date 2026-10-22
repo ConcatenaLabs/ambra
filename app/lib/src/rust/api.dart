@@ -137,7 +137,12 @@ Future<String> btcBroadcast({required String t4Api, required String txHex}) =>
 /// funds it in `fee_asset` (any held, fee-eligible asset except `asset_r`),
 /// adding a fee input + explicit fee output. `fee_rate` is `fee_asset`'s
 /// published rate (atoms per 1e8 native), used only for the dust threshold.
-/// Returns the swap id + the SwapRequest JSON to hand to the daemon's ProposeTrade.
+/// `confidential` is the holder's choice for this swap: false (the default) receives
+/// at the wallet's usual address, every output of the taker's half explicit, and
+/// spends coins held in the clear only; true receives at the blinded form, which the
+/// maker blinds to.
+/// Returns the swap id + the SwapRequest JSON to hand to the daemon's ProposeTrade;
+/// keep the JSON: [`seqdex_sign_accept`] checks the maker's answer against it.
 Future<SeqdexSwapRequestOut> seqdexBuildSwapRequest({
   required String mnemonic,
   required String esploraUrl,
@@ -148,6 +153,7 @@ Future<SeqdexSwapRequestOut> seqdexBuildSwapRequest({
   required String feeAsset,
   required BigInt feeAmount,
   required BigInt feeRate,
+  required bool confidential,
 }) => RustLib.instance.api.crateApiSeqdexBuildSwapRequest(
   mnemonic: mnemonic,
   esploraUrl: esploraUrl,
@@ -158,19 +164,28 @@ Future<SeqdexSwapRequestOut> seqdexBuildSwapRequest({
   feeAsset: feeAsset,
   feeAmount: feeAmount,
   feeRate: feeRate,
+  confidential: confidential,
 );
 
-/// Sign the maker's SwapAccept PSET (base64) and return the stripped, signed PSET
-/// (base64) for /v1/trade/complete. Runs through the synced wallet so add_details
-/// can recognise the taker's own input by its scriptPubKey (else it's skipped and
-/// left unsigned). The maker's signatures on its inputs are preserved.
+/// Check the maker's SwapAccept PSET (base64) against this wallet's own
+/// `swap_request_json` (from [`seqdex_build_swap_request`]), then sign it and return
+/// the stripped, signed PSET (base64) for /v1/trade/complete. Nothing is signed
+/// unless the maker's transaction is the swap this wallet proposed: its inputs
+/// unchanged and signed over the whole transaction, no other coin of the wallet
+/// spent, and every output of its half paying the same script, asset and amount in
+/// the form it asked for (lwk_wollet `seqdex_verify_accept`); otherwise this fails,
+/// naming what the maker changed. Runs through the synced wallet so add_details can
+/// recognise the taker's own input by its scriptPubKey. The maker's signatures on
+/// its inputs are preserved.
 Future<String> seqdexSignAccept({
   required String mnemonic,
   required String esploraUrl,
+  required String swapRequestJson,
   required String acceptPset,
 }) => RustLib.instance.api.crateApiSeqdexSignAccept(
   mnemonic: mnemonic,
   esploraUrl: esploraUrl,
+  swapRequestJson: swapRequestJson,
   acceptPset: acceptPset,
 );
 

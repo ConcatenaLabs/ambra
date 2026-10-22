@@ -26,6 +26,7 @@ fn repro_swap_request() {
         TSEQ.to_string(),
         0,
         0,
+        false,
     ) {
         Ok(out) => {
             eprintln!("SWAP_ID={}", out.id);
