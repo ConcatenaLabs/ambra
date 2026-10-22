@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ambra/src/data/leaf_service.dart';
+import 'package:ambra/src/data/user_trade.dart' show forbiddenIn, admittedSources, admittedReceives;
 
 class _FrbLike {
   _FrbLike(this.message);
@@ -249,4 +250,81 @@ void main() {
       expect(w.calls.where((c) => c == 'send').length, 1, reason: 'not asked again after the timeout');
     });
   });
+
+  group('supervised assets', () {
+    final info = {
+      'landing_address': 'tex1qlanding',
+      'server_info': {
+        'assets': [
+          {'asset': 'xx', 'supervised': null},
+          {'asset': 'zz', 'supervised': {'landing_allowance': '24'}},
+          {'asset': 'ii', 'issuer': {'limiter': 'm'}},
+        ]
+      }
+    };
+
+    test('the operator\'s supervised assets come from its info', () {
+      expect(supervisedAssetsOf(info), ['zz']);
+      expect(supervisedAssetsOf(null), isEmpty);
+      expect(supervisedAssetsOf({'server_info': {'unreachable': 'x'}}), isEmpty);
+    });
+
+    test('frozen atoms: held leaves frozen or paused, and frozen coins on the chain', () {
+      final coins = [
+        {'asset': 'zz', 'value': '100', 'state': 'live', 'frozen': {'frozen': true, 'paused': false}},
+        {'asset': 'zz', 'value': '7', 'state': 'exiting', 'frozen': {'frozen': false, 'paused': true}},
+        {'asset': 'zz', 'value': '50', 'state': 'live', 'frozen': {'frozen': false, 'paused': false}},
+        {'asset': 'zz', 'value': '900', 'state': 'spent', 'frozen': {'frozen': true}},
+        {'asset': 'xx', 'value': '5', 'state': 'live'},
+      ];
+      final f = frozenAtomsOf(coins, {
+        'sequentia_onchain_frozen': {'zz': '1000'}
+      });
+      expect(f, {'zz': BigInt.from(1107)});
+      expect(frozenAtomsOf(const [], null), isEmpty);
+    });
+
+    test('one plain sentence, the same in the three wallets, free of the developer words', () {
+      expect(frozenSentence('17.2', 'USDC.e'), "17.2 USDC.e is frozen by its issuer: it can't be sent until the issuer lifts the freeze.");
+      expect(kFrozenRefusal, 'This asset is frozen by its issuer for this wallet: nothing was sent.');
+      expect(forbiddenIn(frozenSentence('1', 'ZT')), isEmpty);
+      expect(forbiddenIn(kFrozenRefusal), isEmpty);
+    });
+
+    test('user mode says a frozen refusal plainly, every other as the library does', () {
+      final f = plainRefusal(LeafRefusal('server_refused', 'the server refused cosign_transfer (409 frozen): …', code: 'frozen', status: 409));
+      expect(f.message, kFrozenRefusal);
+      expect(f.plain, isTrue);
+      expect(f.code, 'frozen');
+      expect(plainRefusal(LeafRefusal('refused', "refused: the issuer has frozen this coin's landing")).message, kFrozenRefusal);
+      expect(plainRefusal(LeafRefusal('refused', 'the asset is paused by its issuer')).plain, isTrue);
+      final o = LeafRefusal('refused', 'the request was paid already');
+      expect(identical(plainRefusal(o), o), isTrue);
+      expect(o.plain, isFalse);
+    });
+
+    test('a pair with a supervised asset keeps only the in-tree swap', () {
+      final pairs = {
+        'chains': {
+          'g': {
+            'pairs': [
+              {'pay': 'xx', 'receive': 'zz', 'sources': ['leaf-maker', 'covenant-round', 'leaf-resting']},
+              {'pay': 'zz', 'receive': 'BTC', 'sources': ['btc-lightning']},
+              {'pay': 'xx', 'receive': 'yy', 'sources': ['leaf-maker', 'covenant-round']},
+            ]
+          }
+        }
+      };
+      final s = servedPairs(pairs, ['zz'])!;
+      final ps = (s['chains']['g']['pairs'] as List).cast<Map>();
+      expect(ps[0]['sources'], ['leaf-maker']);
+      expect(ps[1]['sources'], isEmpty);
+      expect(ps[2]['sources'], ['leaf-maker', 'covenant-round']);
+      expect(identical(servedPairs(pairs, const []), pairs), isTrue);
+      expect(servedPairs(null, ['zz']), isNull);
+      expect(admittedSources(s, 'g', 'xx', 'zz'), ['leaf-maker']);
+      expect(admittedReceives(s, 'g', 'zz'), isEmpty, reason: 'nothing is offered for the supervised asset but the in-tree swap');
+    });
+  });
 }
+

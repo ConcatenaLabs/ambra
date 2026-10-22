@@ -72,8 +72,9 @@ UserTradeEngine appTradeEngine({required String walletTag}) {
   String? readFrom;
   final key = 'ambra.usertrade.$walletTag';
   return UserTradeEngine(UserTradeDeps(
-    // A trade that needs a planned coin is made through the next round, by itself.
-    run: (cmd, args) => LeafService.instance.pay(cmd, args),
+    // A trade that needs a planned coin is made through the next round, by itself; a
+    // refusal user mode has plain words for is said in them.
+    run: (cmd, args) => LeafService.instance.pay(cmd, args, true),
     fetchJson: fetchJson,
     makers: () => [Backend.leafMaker],
     relayBook: (pay, receive) async => [...await one(receive, pay), ...await one(pay, receive)],
@@ -107,7 +108,8 @@ UserTradeEngine appTradeEngine({required String walletTag}) {
           if (RegExp(r'^[0-9a-f]{64}$').hasMatch(h)) genesis = h;
         } catch (_) {}
       }
-      return (pairs: pairsCache, genesis: genesis);
+      // A pair with a supervised asset only as the operator serves it: the in-tree swap.
+      return (pairs: servedPairs(pairsCache, LeafService.instance.supervisedAssets()), genesis: genesis);
     },
     read: () async => (await SharedPreferences.getInstance()).getString(key),
     write: (v) async => (await SharedPreferences.getInstance()).setString(key, v),
@@ -213,7 +215,7 @@ class _UserComposerState extends State<UserComposer> {
       });
     } catch (e) {
       debugPrint('[user composer] quote: $e');
-      setState(() => _error = UserWords.notOffered(widget.ticker(_get!), widget.ticker(_pay!)));
+      setState(() => _error = e is LeafRefusal && e.plain ? e.message : UserWords.notOffered(widget.ticker(_get!), widget.ticker(_pay!)));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -238,7 +240,7 @@ class _UserComposerState extends State<UserComposer> {
       debugPrint('[user composer] confirm: $e');
       setState(() {
         _reset();
-        _error = UserWords.failed;
+        _error = e is LeafRefusal && e.plain ? e.message : UserWords.failed;
       });
     } finally {
       if (mounted) setState(() => _busy = false);

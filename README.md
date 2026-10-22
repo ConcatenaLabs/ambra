@@ -275,6 +275,24 @@ module that implements it.
   final), each planned leaf is marked under "Coins and their dates", and a "Paying through
   the next round" card stands while a payment waits for its round. User mode
   shows none of it.
+- Supervised assets: an asset whose issuer can freeze holdings by a rule of the chain is
+  held, received and paid like any other, and counted in its one figure. The library
+  holds a coin of such an asset only as a landing-1 leaf, whose way out of the tree pays
+  one key of the wallet's own, its landing key (the first on-chain key of the phrase,
+  `landing_address` in the leaf wallet's `info`). A board, a refresh, a payment received
+  and the change of a payment sent all land there; the app computes none of it. When the
+  issuer freezes that key, or pauses the asset, the frozen part shows under the asset's
+  figure on the balance, in either mode, as one sentence ("… is frozen by its issuer: it
+  can't be sent until the issuer lifts the freeze"); it is never hidden. A payment of it
+  is refused, in user mode in plain words ("This asset is frozen by its issuer for this
+  wallet: nothing was sent."). Developer mode's Leaves screen shows each leaf's landing
+  and whether it is frozen, with the library's note, and the landed coins on the chain
+  that are frozen; such a leaf leaves the tree only into the landing key (the exit drill,
+  or sync before its exit date), where the coin stays frozen on the chain until the issuer
+  lifts the freeze, and is then spent like any coin. The operator serves no take, no
+  resting order and no Lightning payment in a supervised asset, so user mode's Swap tab
+  offers such an asset only through an in-tree swap with a live maker (`servedPairs`, in
+  `app/lib/src/data/leaf_service.dart`).
 
 **Assets, staking, faucet, node**
 - Issue a new asset, reissue (mint more of) an asset you hold the reissuance token for,
