@@ -282,7 +282,8 @@ class LspClient {
     int? minFinalCltv,
   }) async {
     final body = <String, dynamic>{'node_key': nodeKey, 'bolt11': bolt11};
-    if (wantHash != null && wantHash.isNotEmpty) body['want_hash'] = wantHash;
+    // `wantHash`, the name /node/pay reads: under any other name the service never binds the hash.
+    if (wantHash != null && wantHash.isNotEmpty) body['wantHash'] = wantHash;
     if (amountMsat != null) body['amount_msat'] = amountMsat.toInt();
     if (maxCltv != null && maxCltv > 0) body['max_cltv'] = maxCltv;
     if (minFinalCltv != null && minFinalCltv > 0) body['min_final_cltv'] = minFinalCltv;
