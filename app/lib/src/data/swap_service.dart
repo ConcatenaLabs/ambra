@@ -58,13 +58,17 @@ class SwapService {
       feeAsset: q.feeAsset,
       feeAmount: q.feeAmount,
       feeRate: q.feeRate,
+      // Transparent by default: the swap pays the wallet's usual address in the clear.
+      confidential: false,
     );
     final swapReq = jsonDecode(out.swapRequestJson) as Map<String, dynamic>;
     // The network fee now lives in the PSET (taker-funded); the wire fee_amount is
     // the market COMMISSION channel only — send 0 so the daemon doesn't double the
     // fee or shift the maker's receive amount.
     final accept = await SeqdexClient.propose(q.market, q.side, swapReq, BigInt.zero, q.feeAsset);
-    final stripped = await core.seqdexSignAccept(mnemonic: mnemonic, esploraUrl: Backend.esplora, acceptPset: accept.transaction);
+    // The maker's answer is checked against this wallet's own request before anything is signed.
+    final stripped = await core.seqdexSignAccept(
+        mnemonic: mnemonic, esploraUrl: Backend.esplora, swapRequestJson: out.swapRequestJson, acceptPset: accept.transaction);
     try {
       return await SeqdexClient.complete(_randId(), accept.id, stripped);
     } catch (_) {

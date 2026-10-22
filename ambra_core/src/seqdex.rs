@@ -65,6 +65,51 @@ pub fn swap_request_json(req: &SeqdexSwapRequest) -> AmbraResult<String> {
     serde_json::to_string(&json).map_err(|e| format!("{e:?}"))
 }
 
+/// Read back a SwapRequest JSON written by [`swap_request_json`], so the taker can
+/// check the maker's answer against the request it built (the transaction is what
+/// the check compares; the other fields come back as written).
+pub fn swap_request_from_json(json: &str) -> AmbraResult<SeqdexSwapRequest> {
+    #[derive(serde::Deserialize)]
+    struct In {
+        index: u32,
+        asset: String,
+        amount: u64,
+        asset_blinder: String,
+        amount_blinder: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Req {
+        id: String,
+        amount_p: String,
+        asset_p: String,
+        amount_r: String,
+        asset_r: String,
+        transaction: String,
+        unblinded_inputs: Vec<In>,
+    }
+    let r: Req = serde_json::from_str(json).map_err(|e| format!("swap request JSON: {e}"))?;
+    let num = |s: &str| s.parse::<u64>().map_err(|e| format!("swap request amount {s:?}: {e}"));
+    Ok(SeqdexSwapRequest {
+        id: r.id,
+        amount_p: num(&r.amount_p)?,
+        asset_p: r.asset_p,
+        amount_r: num(&r.amount_r)?,
+        asset_r: r.asset_r,
+        transaction: r.transaction,
+        unblinded_inputs: r
+            .unblinded_inputs
+            .into_iter()
+            .map(|u| lwk_wollet::SeqdexUnblindedInput {
+                index: u.index,
+                asset: u.asset,
+                amount: u.amount,
+                asset_blinder: u.asset_blinder,
+                amount_blinder: u.amount_blinder,
+            })
+            .collect(),
+    })
+}
+
 /// Remove the elements-rs bip32 derivation + global-xpub fields a freshly-signed
 /// PSET carries, which the daemon's go-elements parser rejects
 /// ("invalid swap request transaction"). The partial signatures (and everything
@@ -116,5 +161,11 @@ mod tests {
         assert_eq!(v["unblinded_inputs"][0]["index"], serde_json::json!(0)); // number
         assert_eq!(v["unblinded_inputs"][0]["asset_blinder"], serde_json::json!("01"));
         assert_eq!(v["id"], serde_json::json!("deadbeefdeadbeef"));
+        // And it reads back as written.
+        let back = swap_request_from_json(&s).unwrap();
+        assert_eq!(back.amount_p, 1000);
+        assert_eq!(back.amount_r, 2500);
+        assert_eq!(back.transaction, "cHNldP8B");
+        assert_eq!(back.unblinded_inputs, req.unblinded_inputs);
     }
 }

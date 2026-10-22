@@ -522,11 +522,13 @@ abstract class RustLibApi extends BaseApi {
     required String feeAsset,
     required BigInt feeAmount,
     required BigInt feeRate,
+    required bool confidential,
   });
 
   Future<String> crateApiSeqdexSignAccept({
     required String mnemonic,
     required String esploraUrl,
+    required String swapRequestJson,
     required String acceptPset,
   });
 
@@ -3713,6 +3715,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String feeAsset,
     required BigInt feeAmount,
     required BigInt feeRate,
+    required bool confidential,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -3727,6 +3730,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(feeAsset, serializer);
           sse_encode_u_64(feeAmount, serializer);
           sse_encode_u_64(feeRate, serializer);
+          sse_encode_bool(confidential, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -3749,6 +3753,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           feeAsset,
           feeAmount,
           feeRate,
+          confidential,
         ],
         apiImpl: this,
       ),
@@ -3768,6 +3773,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "feeAsset",
           "feeAmount",
           "feeRate",
+          "confidential",
         ],
       );
 
@@ -3775,6 +3781,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<String> crateApiSeqdexSignAccept({
     required String mnemonic,
     required String esploraUrl,
+    required String swapRequestJson,
     required String acceptPset,
   }) {
     return handler.executeNormal(
@@ -3783,6 +3790,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(mnemonic, serializer);
           sse_encode_String(esploraUrl, serializer);
+          sse_encode_String(swapRequestJson, serializer);
           sse_encode_String(acceptPset, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
@@ -3796,7 +3804,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiSeqdexSignAcceptConstMeta,
-        argValues: [mnemonic, esploraUrl, acceptPset],
+        argValues: [mnemonic, esploraUrl, swapRequestJson, acceptPset],
         apiImpl: this,
       ),
     );
@@ -3804,7 +3812,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiSeqdexSignAcceptConstMeta => const TaskConstMeta(
     debugName: "seqdex_sign_accept",
-    argNames: ["mnemonic", "esploraUrl", "acceptPset"],
+    argNames: ["mnemonic", "esploraUrl", "swapRequestJson", "acceptPset"],
   );
 
   @override

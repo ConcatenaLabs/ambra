@@ -3399,6 +3399,7 @@ fn wire__crate__api__seqdex_build_swap_request_impl(
             let api_fee_asset = <String>::sse_decode(&mut deserializer);
             let api_fee_amount = <u64>::sse_decode(&mut deserializer);
             let api_fee_rate = <u64>::sse_decode(&mut deserializer);
+            let api_confidential = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -3413,6 +3414,7 @@ fn wire__crate__api__seqdex_build_swap_request_impl(
                             api_fee_asset,
                             api_fee_amount,
                             api_fee_rate,
+                            api_confidential,
                         )?;
                         Ok(output_ok)
                     })(),
@@ -3445,6 +3447,7 @@ fn wire__crate__api__seqdex_sign_accept_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_mnemonic = <String>::sse_decode(&mut deserializer);
             let api_esplora_url = <String>::sse_decode(&mut deserializer);
+            let api_swap_request_json = <String>::sse_decode(&mut deserializer);
             let api_accept_pset = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
@@ -3453,6 +3456,7 @@ fn wire__crate__api__seqdex_sign_accept_impl(
                         let output_ok = crate::api::seqdex_sign_accept(
                             api_mnemonic,
                             api_esplora_url,
+                            api_swap_request_json,
                             api_accept_pset,
                         )?;
                         Ok(output_ok)
