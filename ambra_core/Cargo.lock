@@ -273,7 +273,7 @@ dependencies = [
 [[package]]
 name = "arca-bitcoin-ext"
 version = "0.7.1"
-source = "git+https://github.com/ConcatenaLabs/arca?rev=7267c19a806e3c73f189cef8f4aa8dae7661f6bf#7267c19a806e3c73f189cef8f4aa8dae7661f6bf"
+source = "git+https://github.com/ConcatenaLabs/arca?rev=359df8168446dd062b707f909705966cf12343b7#359df8168446dd062b707f909705966cf12343b7"
 dependencies = [
  "bdk_bitcoind_rpc",
  "bitcoin",
@@ -286,7 +286,7 @@ dependencies = [
 [[package]]
 name = "arca-common"
 version = "0.7.1"
-source = "git+https://github.com/ConcatenaLabs/arca?rev=7267c19a806e3c73f189cef8f4aa8dae7661f6bf#7267c19a806e3c73f189cef8f4aa8dae7661f6bf"
+source = "git+https://github.com/ConcatenaLabs/arca?rev=359df8168446dd062b707f909705966cf12343b7#359df8168446dd062b707f909705966cf12343b7"
 dependencies = [
  "anyhow",
  "serde",
@@ -296,7 +296,7 @@ dependencies = [
 [[package]]
 name = "arca-covenant"
 version = "0.1.0"
-source = "git+https://github.com/ConcatenaLabs/arca?rev=7267c19a806e3c73f189cef8f4aa8dae7661f6bf#7267c19a806e3c73f189cef8f4aa8dae7661f6bf"
+source = "git+https://github.com/ConcatenaLabs/arca?rev=359df8168446dd062b707f909705966cf12343b7#359df8168446dd062b707f909705966cf12343b7"
 dependencies = [
  "elements 0.25.3",
  "serde",
@@ -307,7 +307,7 @@ dependencies = [
 [[package]]
 name = "arca-lib"
 version = "0.7.1"
-source = "git+https://github.com/ConcatenaLabs/arca?rev=7267c19a806e3c73f189cef8f4aa8dae7661f6bf#7267c19a806e3c73f189cef8f4aa8dae7661f6bf"
+source = "git+https://github.com/ConcatenaLabs/arca?rev=359df8168446dd062b707f909705966cf12343b7#359df8168446dd062b707f909705966cf12343b7"
 dependencies = [
  "arca-bitcoin-ext",
  "async-trait",
@@ -327,7 +327,7 @@ dependencies = [
 [[package]]
 name = "arca-runtime"
 version = "0.7.1"
-source = "git+https://github.com/ConcatenaLabs/arca?rev=7267c19a806e3c73f189cef8f4aa8dae7661f6bf#7267c19a806e3c73f189cef8f4aa8dae7661f6bf"
+source = "git+https://github.com/ConcatenaLabs/arca?rev=359df8168446dd062b707f909705966cf12343b7#359df8168446dd062b707f909705966cf12343b7"
 dependencies = [
  "futures",
  "gloo-timers",
@@ -340,7 +340,7 @@ dependencies = [
 [[package]]
 name = "arca-sequentia-ext"
 version = "0.1.0"
-source = "git+https://github.com/ConcatenaLabs/arca?rev=7267c19a806e3c73f189cef8f4aa8dae7661f6bf#7267c19a806e3c73f189cef8f4aa8dae7661f6bf"
+source = "git+https://github.com/ConcatenaLabs/arca?rev=359df8168446dd062b707f909705966cf12343b7#359df8168446dd062b707f909705966cf12343b7"
 dependencies = [
  "base64 0.22.1",
  "elements 0.25.3",
@@ -352,7 +352,7 @@ dependencies = [
 [[package]]
 name = "arca-server-rpc"
 version = "0.7.1"
-source = "git+https://github.com/ConcatenaLabs/arca?rev=7267c19a806e3c73f189cef8f4aa8dae7661f6bf#7267c19a806e3c73f189cef8f4aa8dae7661f6bf"
+source = "git+https://github.com/ConcatenaLabs/arca?rev=359df8168446dd062b707f909705966cf12343b7#359df8168446dd062b707f909705966cf12343b7"
 dependencies = [
  "arca-lib",
  "bitcoin",
@@ -370,7 +370,7 @@ dependencies = [
 [[package]]
 name = "arca-wallet"
 version = "0.7.1"
-source = "git+https://github.com/ConcatenaLabs/arca?rev=7267c19a806e3c73f189cef8f4aa8dae7661f6bf#7267c19a806e3c73f189cef8f4aa8dae7661f6bf"
+source = "git+https://github.com/ConcatenaLabs/arca?rev=359df8168446dd062b707f909705966cf12343b7#359df8168446dd062b707f909705966cf12343b7"
 dependencies = [
  "anyhow",
  "arca-bitcoin-ext",
@@ -562,7 +562,7 @@ checksum = "32637268377fc7b10a8c6d51de3e7fba1ce5dd371a96e342b34e6078db558e7f"
 [[package]]
 name = "bip321"
 version = "0.4.0"
-source = "git+https://github.com/ConcatenaLabs/arca?rev=7267c19a806e3c73f189cef8f4aa8dae7661f6bf#7267c19a806e3c73f189cef8f4aa8dae7661f6bf"
+source = "git+https://github.com/ConcatenaLabs/arca?rev=359df8168446dd062b707f909705966cf12343b7#359df8168446dd062b707f909705966cf12343b7"
 dependencies = [
  "arca-bitcoin-ext",
  "bitcoin",
