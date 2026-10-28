@@ -226,7 +226,11 @@ module that implements it.
     is the shared tb1 address, `ark` is where BTC arrives in seconds, and `sequentia` is the
     single-use receive request where an asset arrives in seconds. Neither extra part is
     required, so any Bitcoin wallet reads it as a plain request for the address. A new code
-    is drawn when the one shown is paid, or on "New code". While a code handed out in the
+    is drawn when the one shown is paid, or on "New code". With BTC on the ark, Receive has
+    one optional field, "Amount in BTC (optional)": with an amount the code also carries
+    `amount=` and a `lightning=` invoice from the Bitcoin ark for exactly that amount
+    (`bitcoin:<address>?amount=<BTC>&lightning=<invoice>&ark=…&sequentia=…`), claimed while
+    the wallet is open; a new invoice comes with each new code and each new amount. While a code handed out in the
     last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
     the address alone; so does user mode until the wallet holds coins with the operator or
     BTC on the ark.

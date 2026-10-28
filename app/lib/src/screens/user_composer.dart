@@ -415,12 +415,16 @@ class _UserComposerState extends State<UserComposer> {
           Padding(
             key: ValueKey('ucTrade-${r['id']}'),
             padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(children: [
-              Expanded(
-                  child: Text(
-                      '${_amt('${(r['ticket'] as Map)['payAsset']}', BigInt.parse('${(r['ticket'] as Map)['amountIn']}'))} → ${_amt('${(r['ticket'] as Map)['receiveAsset']}', BigInt.parse('${(r['ticket'] as Map)['amountOut']}'))}')),
-              Text(_stateWord(r), key: ValueKey('ucState-${r['id']}')),
-            ]),
+            // A short status beside the amounts; a sentence (a returned trade) on its own line
+            // under them, so neither squeezes the other.
+            child: Builder(builder: (_) {
+              final amounts = Text(
+                  '${_amt('${(r['ticket'] as Map)['payAsset']}', BigInt.parse('${(r['ticket'] as Map)['amountIn']}'))} → ${_amt('${(r['ticket'] as Map)['receiveAsset']}', BigInt.parse('${(r['ticket'] as Map)['amountOut']}'))}');
+              final word = _stateWord(r);
+              final state = Text(word, key: ValueKey('ucState-${r['id']}'));
+              if (word.length <= 16) return Row(children: [Expanded(child: amounts), state]);
+              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [amounts, state]);
+            }),
           ),
       ],
     ]);
