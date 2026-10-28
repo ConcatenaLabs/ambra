@@ -140,7 +140,8 @@ module that implements it.
 - **In user mode** (the default) the Swap tab is three inputs and one button: **You pay**
   (an asset and an amount), **You get**, and **Review** (`app/lib/src/screens/user_composer.dart`,
   its engine `app/lib/src/data/user_trade.dart`, the web wallet's `user-trade.js` in Dart). BTC
-  heads both pickers, and each picker shows what the wallet holds of an asset as its one
+  heads both pickers; You pay lists BTC and the assets the wallet holds, so a brand-new wallet
+  lists BTC alone, and You get adds what the book offers for the asset paid, and each picker shows what the wallet holds of an asset as its one
   figure on the balance (`heldFigure`, `app/lib/src/data/ln_rail.dart`: BTC in the wallet's
   own Bitcoin Lightning node included), while a trade is bounded by what can be spent now.
   The wallet's Lightning channels are read apart from the on-chain sync, so a sync that fails
@@ -207,6 +208,9 @@ module that implements it.
 - A wallet that joined a leaf operator keeps its leaf wallet syncing in either mode, since
   its coins have dates to keep; user mode shows nothing of leaves but their value, in each
   asset's figure and in the headline.
+- Removing the wallet closes the leaf wallet and the Bitcoin ark wallet of its phrase and
+  forgets what was read of them (`LeafService.forget`), so the next wallet, new or restored,
+  shows and spends only its own.
 - **User mode runs on the default node's operator by itself** (`LeafService.autoJoin`,
   `autoBoard`, `receiveCode` in `app/lib/src/data/leaf_service.dart`), in the same words
   and ways as the web wallet:

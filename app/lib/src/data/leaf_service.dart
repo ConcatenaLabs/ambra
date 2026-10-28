@@ -210,6 +210,37 @@ class LeafService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The wallet is being removed from this phone: the leaf wallet of its phrase is closed
+  /// and everything read of it forgotten, so the next wallet (a new one, or another phrase
+  /// restored) starts from nothing and opens its own.
+  Future<void> forget() async {
+    await stop();
+    joined = false;
+    operator = null;
+    balance = null;
+    coins = const [];
+    participations = const [];
+    schedule = null;
+    plans = null;
+    lastSync = null;
+    lastError = null;
+    lastCare = null;
+    lastCareAt = null;
+    careError = null;
+    bond = null;
+    bondError = null;
+    lastWatch = null;
+    lastWatchAt = null;
+    watchError = null;
+    autoJoinError = null;
+    autoBoardError = null;
+    releasing = null;
+    _caredThisRun = false;
+    _heldFor = null;
+    _boardRefused.clear();
+    notifyListeners();
+  }
+
   // -------------------------------------------------------------------------
   // User mode on the operator: joined, received and boarded by itself
   // -------------------------------------------------------------------------
