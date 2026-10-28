@@ -810,9 +810,16 @@ String frozenSentence(String amount, String ticker) =>
 /// User mode's words for a payment of a frozen holding.
 const kFrozenRefusal = 'This asset is frozen by its issuer for this wallet: nothing was sent.';
 
-/// A refusal in user mode's words: a refusal of the operator's bond, and a frozen
-/// holding, said plainly; every other refusal as the library says it.
+/// User mode's words for a payment the operator's signer refuses for what it asks, which
+/// it would refuse again however often it were asked (the server's `declined`): the
+/// library has put the coins back.
+const kDeclinedRefusal = 'This payment was declined; nothing was sent.';
+
+/// A refusal in user mode's words: one the operator declines, a refusal of the
+/// operator's bond, and a frozen holding, said plainly; every other refusal as the
+/// library says it.
 LeafRefusal plainRefusal(LeafRefusal e) {
+  if (e.code == 'declined') return LeafRefusal(e.kind, kDeclinedRefusal, code: e.code, status: e.status, plain: true);
   if (bondRefusal(e)) return LeafRefusal(e.kind, kBondRefusal, code: e.code, status: e.status, plain: true);
   if (e.code == 'frozen' || RegExp(r'\bfrozen\b|\bpaused\b', caseSensitive: false).hasMatch(e.message)) {
     return LeafRefusal(e.kind, kFrozenRefusal, code: e.code, status: e.status, plain: true);

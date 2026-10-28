@@ -303,6 +303,21 @@ void main() {
       expect(o.plain, isFalse);
     });
 
+    test('a payment the operator declines reads plainly in user mode, in the words the three wallets share', () {
+      final d = plainRefusal(LeafRefusal('server_refused',
+          'the server refused cosign_transfer (422 declined): the signer: the signer declined: policy: …',
+          code: 'declined', status: 422));
+      expect(d.message, 'This payment was declined; nothing was sent.');
+      expect(d.message, kDeclinedRefusal);
+      expect(d.plain, isTrue);
+      expect(d.code, 'declined');
+      expect(d.status, 422);
+      expect(forbiddenIn(kDeclinedRefusal), isEmpty);
+      // An operator not reached is no refusal: said as the library says it.
+      final u = LeafRefusal('unreachable', 'cosign_transfer: the server answered 503 signer_unavailable: …');
+      expect(identical(plainRefusal(u), u), isTrue);
+    });
+
     test('a pair with a supervised asset keeps only the in-tree swap', () {
       final pairs = {
         'chains': {

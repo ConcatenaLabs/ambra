@@ -306,6 +306,12 @@ module that implements it.
   resting order and no Lightning payment in a supervised asset, so user mode's Swap tab
   offers such an asset only through an in-tree swap with a live maker (`servedPairs`, in
   `app/lib/src/data/leaf_service.dart`).
+- A payment the operator declines: the operator's signer refuses what it asks, and would
+  refuse it again however often it were asked (the server's code `declined`), so the
+  payment is refused for good. The library puts the coins back at once and sends nothing
+  again; user mode reads "This payment was declined; nothing was sent.", and developer
+  mode shows the operator's own words, which name the code. An operator that cannot be
+  reached is no refusal: the payment stands, and the next sync sends it again.
 - The operator's bond: the operator posts an equivocation bond, which two different
   messages its key signs under one coin's salt burn whole. At `care`'s pace, in either
   mode, while the app runs, the leaf wallet reads the bond (`bond`; once it has seen it
