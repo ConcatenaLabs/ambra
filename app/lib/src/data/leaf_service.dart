@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../rust/api/leaves.dart' as leaves;
 import 'btc_state.dart';
 import 'config.dart';
+import 'dev_mode.dart';
 import 'format.dart';
 import 'wallet_repository.dart';
 
@@ -97,6 +99,10 @@ class LeafService extends ChangeNotifier {
   static const tick = Duration(seconds: 60);
 
   bool joined = false;
+
+  /// How many coins arrived since the app started: the default Receive draws a new code
+  /// once the one it shows is paid.
+  int arrivedCount = 0;
   bool open = false;
   bool busy = false;
   LeafOperator? operator;
@@ -153,6 +159,8 @@ class LeafService extends ChangeNotifier {
     operator = await savedOperator();
     if (!joined) {
       notifyListeners();
+      // User mode joins the default node's operator by itself, in the background.
+      unawaited(autoJoin());
       return;
     }
     try {
@@ -193,11 +201,167 @@ class LeafService extends ChangeNotifier {
   Future<void> stop() async {
     _timer?.cancel();
     _timer = null;
+    _joinTimer?.cancel();
+    _joinTimer = null;
     if (open) leaves.leavesClose();
     open = false;
     info = null;
     await _foreground(false);
     notifyListeners();
+  }
+
+  // -------------------------------------------------------------------------
+  // User mode on the operator: joined, received and boarded by itself
+  // -------------------------------------------------------------------------
+
+  /// How often user mode reads for a payment to a receive code handed out lately.
+  static const fastAsk = Duration(seconds: 4);
+
+  /// How long after a join that failed user mode tries again.
+  static const joinRetry = Duration(minutes: 2);
+
+  /// How long after something a person asked for the wallet leaves its on-chain coins
+  /// alone: the leaf wallet spends the same coins as the on-chain wallet (one key per
+  /// address, both chains), so a board must never race a send or a trade.
+  static const boardQuiet = Duration(seconds: 60);
+
+  /// How long an asset whose board was refused is left before it is tried again.
+  static const boardBackoff = Duration(minutes: 10);
+
+  Timer? _joinTimer;
+  bool _joining = false;
+  int _asking = 0;
+  DateTime? _personAt;
+  bool _boarding = false;
+  final Map<String, DateTime> _boardRefused = {};
+
+  /// The last join user mode tried and its refusal, for developer mode's eyes.
+  LeafRefusal? autoJoinError;
+
+  /// The last automatic board's refusal, for developer mode's eyes.
+  LeafRefusal? autoBoardError;
+
+  /// Something a person asked for just ran (a payment, a trade, an on-chain send): the
+  /// wallet's own upkeep keeps off the coins for [boardQuiet].
+  void personActed() => _personAt = DateTime.now();
+
+  /// User mode: a wallet that holds no leaf wallet joins the default node's operator by
+  /// itself. The server must show the pinned key ([Backend.arcaOperatorKey]) before
+  /// anything is made, and the wallet made must name it; the join restores whatever the
+  /// operator and the chain hold of this recovery phrase. A join that fails changes
+  /// nothing (the wallet works as before, on the chain) and is tried again after
+  /// [joinRetry]. Developer mode keeps its join form and joins nothing by itself.
+  Future<void> autoJoin() async {
+    final pinned = Backend.arcaOperatorKey;
+    if (joined || _joining || pinned == null || DevMode.instance.on) return;
+    _joinTimer?.cancel();
+    _joining = true;
+    try {
+      final op = LeafOperator(server: Backend.arcaOperator, nodeUrl: Backend.nodeRpc);
+      final shown = await operatorKeyAt(op.server);
+      if (shown != pinned) {
+        throw LeafRefusal('refused', 'the server at ${op.server} shows operator $shown, not $pinned');
+      }
+      final out = await join(op, '');
+      final named = (out['info'] is Map) ? '${(out['info'] as Map)['operator']}' : null;
+      if (named != pinned) {
+        await stop();
+        throw LeafRefusal('refused', 'the wallet joined operator $named, not $pinned');
+      }
+      autoJoinError = null;
+    } catch (e) {
+      autoJoinError = LeafRefusal.of(e);
+      _joinTimer = Timer(joinRetry, () => unawaited(autoJoin()));
+    } finally {
+      _joining = false;
+      notifyListeners();
+    }
+  }
+
+  /// The operator key the server at [server] shows (`GET /v1/info`).
+  static Future<String?> operatorKeyAt(String server) async {
+    final r = await http.get(Uri.parse('$server/v1/info')).timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) throw LeafRefusal('refused', 'the operator answered HTTP ${r.statusCode}');
+    final j = jsonDecode(r.body);
+    return j is Map ? j['operator']?.toString() : null;
+  }
+
+  /// User mode: every on-chain coin of an asset the operator serves is boarded, as the
+  /// wallet's own upkeep: the amount is what the chain holds less the board's fee, paid
+  /// in the same asset, and only on the fee quoted. Never while something a person asked
+  /// for runs or within [boardQuiet] of it; an asset whose board is refused (coins not
+  /// confirmed yet, too small for the smallest leaf, a fee the node does not take) is
+  /// left for [boardBackoff]. Whatever is boarded shows as arriving until its board is
+  /// final, then in the figure as before.
+  Future<void> autoBoard() async {
+    if (!open || DevMode.instance.on || _boarding || _asking > 0) return;
+    final at = _personAt;
+    if (at != null && DateTime.now().difference(at) < boardQuiet) return;
+    final served = minLeaves(info);
+    final on = balance?['sequentia_onchain'];
+    if (on is! Map || served.isEmpty) return;
+    _boarding = true;
+    var boarded = false;
+    try {
+      for (final e in on.entries) {
+        final asset = '${e.key}';
+        final held = BigInt.tryParse('${e.value}') ?? BigInt.zero;
+        final min = served[asset];
+        if (min == null || held <= min) continue;
+        final refused = _boardRefused[asset];
+        if (refused != null && DateTime.now().difference(refused) < boardBackoff) continue;
+        if (_asking > 0) break;
+        try {
+          final first = await run('board_quote', {'asset': asset, 'amount': held.toString(), 'fee_asset': asset});
+          final fee = boardFee(first);
+          if (fee == null) continue;
+          final amount = held - fee;
+          if (amount < min) continue;
+          final quote = await run('board_quote', {'asset': asset, 'amount': amount.toString(), 'fee_asset': asset});
+          if (boardFee(quote) != fee || _asking > 0) continue;
+          await run('board', {
+            'asset': asset,
+            'amount': amount.toString(),
+            'fee_asset': asset,
+            'shown': (quote as Map)['fee'],
+          });
+          boarded = true;
+          _boardRefused.remove(asset);
+          autoBoardError = null;
+        } catch (err) {
+          autoBoardError = LeafRefusal.of(err);
+          _boardRefused[asset] = DateTime.now();
+        }
+      }
+    } finally {
+      _boarding = false;
+    }
+    if (boarded) await refresh();
+  }
+
+  /// What of each asset is arriving: leaves not final yet (a board, a payment in
+  /// flight), shown under the asset's one figure until they are.
+  Map<String, BigInt> arrivingAtoms() => arrivingAtomsOf(balance, schedule);
+
+  /// A fresh receive code (the library's receive request, any asset, any amount): the
+  /// default Receive's QR. Null when the leaf wallet is not open or refuses one.
+  Future<String?> receiveCode() async {
+    if (!open) return null;
+    try {
+      final r = await run('receive');
+      final req = r is Map ? r['request']?.toString() : null;
+      return (req == null || req.isEmpty) ? null : req;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Whether [text] is a receive code this wallet can pay in the tree: a receive
+  /// request naming this wallet's operator and chain.
+  bool paysInTree(String text) {
+    final i = info;
+    if (!open || i == null) return false;
+    return requestFor(text, operator: '${i['operator']}', genesis: '${i['genesis_hash']}') != null;
   }
 
   /// Joins an operator: creates the leaf wallet of this wallet's mnemonic against
@@ -220,9 +384,8 @@ class LeafService extends ChangeNotifier {
       open = true;
       lastError = null;
       info = out['info'] as Map<String, dynamic>?;
-      try {
-        await Permission.notification.request();
-      } catch (_) {}
+      // Asked for, never waited on: the wallet goes on while the person answers.
+      unawaited(Permission.notification.request().then((_) {}, onError: (_) {}));
       await _foreground(true);
       await refresh();
       _plan(tick);
@@ -263,6 +426,7 @@ class LeafService extends ChangeNotifier {
   /// With [plain] (user mode), a refusal user mode has plain words for is said in them
   /// ([plainRefusal]); every other refusal is the library's.
   Future<dynamic> pay(String command, [Map<String, dynamic> args = const {}, bool plain = false]) async {
+    _asking++;
     try {
       return await payThroughRelease(
         command,
@@ -271,7 +435,8 @@ class LeafService extends ChangeNotifier {
         synced: (v) async {
           lastSync = DateTime.now();
           for (final a in arrivals(v is Map ? v['mailbox'] : null)) {
-            await notifyArrived(a, channel: _channel);
+            arrivedCount++;
+          await notifyArrived(a, channel: _channel);
           }
         },
         onWait: (w) {
@@ -282,6 +447,8 @@ class LeafService extends ChangeNotifier {
     } on LeafRefusal catch (e) {
       throw plain ? plainRefusal(e) : e;
     } finally {
+      _asking--;
+      personActed();
       if (releasing != null) {
         releasing = null;
         notifyListeners();
@@ -322,7 +489,8 @@ class LeafService extends ChangeNotifier {
     _heldFor = null;
     lastSync = DateTime.now();
     for (final a in arrivals(r['mailbox'])) {
-      await notifyArrived(a, channel: _channel);
+      arrivedCount++;
+          await notifyArrived(a, channel: _channel);
     }
     await careIfDue();
     await refresh();
@@ -466,18 +634,23 @@ class LeafService extends ChangeNotifier {
       } else if (freshRequestWaits(s, DateTime.now())) {
         final mb = await run('mailbox');
         for (final a in arrivals(mb)) {
+          arrivedCount++;
           await notifyArrived(a, channel: _channel);
         }
         if (arrivals(mb).isNotEmpty) await refresh();
       }
       lastError = null;
       wait = nextAsk(schedule, inFlight(coins, participations));
+      // User mode: a receive code handed out lately is read for every few seconds, so a
+      // payment to it shows at once.
+      if (!DevMode.instance.on && freshRequestWaits(s, DateTime.now()) && wait > fastAsk) wait = fastAsk;
     } catch (e) {
       lastError = LeafRefusal.of(e);
     }
     _ticking = false;
     notifyListeners();
     _plan(wait);
+    unawaited(autoBoard());
   }
 
   /// Plans the scheduled job from the library's schedule, so a pass runs whether
@@ -894,3 +1067,72 @@ Map<String, BigInt> leafAtomsOf(Map? balance) {
   return out;
 }
 
+
+/// The smallest leaf of each asset the operator serves (`info`'s `assets`), in atoms;
+/// an asset with no smallest leaf published is left out (nothing of it boards now).
+Map<String, BigInt> minLeaves(Map? info) {
+  final out = <String, BigInt>{};
+  final list = info?['assets'];
+  if (list is! List) return out;
+  for (final a in list.whereType<Map>()) {
+    final v = BigInt.tryParse('${a['min_leaf'] ?? ''}');
+    if (a['asset'] is String && v != null) out[a['asset'] as String] = v;
+  }
+  return out;
+}
+
+/// A board quote's fee in atoms of the boarded asset (`{"fee": {"asset", "amount"}}`).
+BigInt? boardFee(Object? quote) {
+  final fee = quote is Map ? quote['fee'] : null;
+  if (fee is! Map) return null;
+  return BigInt.tryParse('${fee['amount'] ?? ''}');
+}
+
+/// What of each asset is on its way to the wallet: its leaves not final yet (the
+/// balance's `arca` standing `pending`), and the coins the operator announced and has not
+/// handed over yet (the schedule's `pending_coins`, each `{asset, value}`), which no
+/// figure counts until they come.
+Map<String, BigInt> arrivingAtomsOf(Map? balance, [Map? schedule]) {
+  final out = <String, BigInt>{};
+  void add(Object? asset, Object? v) {
+    final n = BigInt.tryParse('${v ?? 0}') ?? BigInt.zero;
+    if (asset == null || n <= BigInt.zero) return;
+    out['$asset'] = (out['$asset'] ?? BigInt.zero) + n;
+  }
+
+  final arca = balance?['arca'];
+  if (arca is Map) {
+    arca.forEach((asset, by) {
+      if (by is Map) add(asset, by['pending']);
+    });
+  }
+  final announced = schedule?['pending_coins'];
+  if (announced is List) {
+    for (final c in announced.whereType<Map>()) {
+      add(c['asset'], c['value']);
+    }
+  }
+  return out;
+}
+
+/// The JSON of a receive request ([text] is `<word>:<hex of its JSON>`, its `kind`
+/// "request") naming [operator] and [genesis], or null for any other text.
+Map<String, dynamic>? requestFor(String text, {required String operator, required String genesis}) {
+  final t = text.trim();
+  final colon = t.indexOf(':');
+  if (colon <= 0) return null;
+  final word = t.substring(0, colon);
+  final hex = t.substring(colon + 1);
+  if (!RegExp(r'^[A-Za-z0-9-]+$').hasMatch(word) || hex.isEmpty || hex.length.isOdd) return null;
+  if (!RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex)) return null;
+  try {
+    final bytes = [for (var i = 0; i < hex.length; i += 2) int.parse(hex.substring(i, i + 2), radix: 16)];
+    final j = jsonDecode(utf8.decode(bytes));
+    if (j is! Map) return null;
+    final isRequest = j['kind'] == 'request' || j.containsKey('arca_request');
+    if (!isRequest || j['operator'] != operator || j['genesis_hash'] != genesis) return null;
+    return Map<String, dynamic>.from(j);
+  } catch (_) {
+    return null;
+  }
+}

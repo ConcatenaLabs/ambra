@@ -37,7 +37,7 @@ void main() {
     expect(
         splitParts(AssetFigure(
             id: x, onchain: BigInt.one, leaves: BigInt.two, lightning: BigInt.from(3), staked: BigInt.from(4))),
-        [('On-chain', BigInt.one), ('Off-chain', BigInt.two), ('Lightning', BigInt.from(3)), ('Staked', BigInt.from(4))]);
+        [('On-chain', BigInt.one), ('Instant', BigInt.two), ('Lightning', BigInt.from(3)), ('Staked', BigInt.from(4))]);
   });
 
   test('the headline sums every holding at its value, every asset alike, and is null when nothing is priced', () {

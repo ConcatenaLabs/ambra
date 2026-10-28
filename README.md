@@ -28,7 +28,9 @@ Protocol documentation lives in the node repo:
   (it needs a macOS + Xcode machine).
 - Free testnet funds: the in-app faucet (More tab) dispenses tSEQ and the demo assets;
   for BTC use any public Bitcoin testnet4 faucet with the wallet's receive address. In
-  developer mode, a wallet that joined an operator can ask to be paid as a leaf instead.
+  user mode the faucet pays the wallet's receive code, so the coins arrive in seconds
+  (the address if the faucet refuses the code); in developer mode, a wallet that joined
+  an operator can ask to be paid as a leaf instead.
 
 ## What the wallet does
 
@@ -77,9 +79,8 @@ module that implements it.
   it) and, for the Sequence token, what is staked (each bonded stake under either lock,
   each unbonding output not yet returned, and the delegation record; a stake returned to
   the wallet is on-chain again and counted there once). User mode shows one figure per
-  row; a tap on the row shows its parts in plain words (On-chain, Off-chain, Lightning,
-  Staked, only those held). Developer mode shows the parts beside each row, with the
-  Lightning controls (`app/lib/src/data/portfolio.dart`, `app/lib/src/data/stakes.dart`).
+  row; a tap on the row shows what is staked, if any, and what is arriving shows under
+  it. Developer mode shows the parts beside each row, with the Lightning controls (`app/lib/src/data/portfolio.dart`, `app/lib/src/data/stakes.dart`).
   What a payment can use is the spendable part, not the figure.
 - Both chains sync against Esplora-style REST APIs; last-known balances are cached on
   disk and shown instantly on launch, with an explicit offline/stale indicator when a
@@ -206,6 +207,33 @@ module that implements it.
 - A wallet that joined a leaf operator keeps its leaf wallet syncing in either mode, since
   its coins have dates to keep; user mode shows nothing of leaves but their value, in each
   asset's figure and in the headline.
+- **User mode runs on the default node's operator by itself** (`LeafService.autoJoin`,
+  `autoBoard`, `receiveCode` in `app/lib/src/data/leaf_service.dart`), in the same words
+  and ways as the web wallet:
+  - A new or restored wallet that holds no leaf wallet joins the operator at
+    `<origin>/arca`, only when the server shows the operator key pinned in
+    `app/lib/src/data/config.dart` (`Backend.arcaOperatorKey`; a custom node pins none and
+    joins nothing by itself). The join restores this phrase's leaves. While the operator
+    cannot be reached the wallet works on the chain as before and tries again every two
+    minutes.
+  - Its words are the default-mode contract's (sequentia-web-wallet `docs/DEFAULT_MODE.md`), held in
+    `app/lib/src/data/default_words.dart` and tested against the contract's forbidden words.
+    Default mode shows no rail: a row's details show only Staked, what is arriving, and a
+    freeze; the split by rail and the fee-rate fields are developer mode's.
+  - Receive shows a **receive code** first: any asset, any amount, paid once, a new one
+    drawn when it is or on "New code"; a payment to it arrives in seconds (the wallet reads
+    for it every four seconds while a code handed out in the last hour waits). "Show
+    address" gives the shared address, "For BTC, and for senders that ask for an address."
+  - Send pays a receive code of a wallet on the same operator from the wallet's leaves;
+    anything else (an address, an invoice, an account id) takes the path it always took.
+    An address send that only the leaves could cover is refused in plain words: "This
+    amount is kept for instant payments and can't be sent to an address yet. Send it to a
+    receive code, or pay an invoice."
+  - Coins that arrive on the chain, of every asset the operator serves, are boarded by
+    the wallet itself (amount = what the chain holds less the board's fee, paid in the
+    same asset, on the fee quoted), never while something a person asked for runs or in
+    the minute after it, since the leaf wallet spends the same addresses' coins. What is
+    not final yet shows as "<amount> <ticker> arriving" under the asset's figure.
 - Leaves are coins held as leaves of an operator's covenant tree on Sequentia: paid and
   received off the chain with the operator's co-signature, and always takeable on-chain
   by the holder. The wallet is the operator's own wallet library (`bark::arca` from

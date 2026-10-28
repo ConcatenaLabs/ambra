@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../rust/api.dart' as core;
 import '../data/api_client.dart';
 import '../data/config.dart';
+import '../data/default_words.dart';
 import '../data/dev_mode.dart';
 import '../data/leaf_service.dart';
 import '../data/wallet_repository.dart';
@@ -24,6 +27,9 @@ class _FaucetScreenState extends State<FaucetScreen> {
 
   /// A leaf can be asked for only by a wallet that joined an operator, in developer mode.
   bool get _leafOffered => DevMode.instance.on && LeafService.instance.joined;
+
+  /// User mode with the leaf wallet open: the faucet pays a receive code.
+  bool get _userTree => !DevMode.instance.on && LeafService.instance.open;
 
   /// The asset id of a faucet ticker ('' = tSEQ).
   static String _hexOf(String ticker) {
@@ -56,6 +62,25 @@ class _FaucetScreenState extends State<FaucetScreen> {
       _status = 'Requesting from the faucet…';
     });
     try {
+      if (_userTree) {
+        // User mode: the faucet pays a receive code, so the coins arrive in seconds; if it
+        // refuses, the same tap is paid to the address as before.
+        try {
+          final code = await LeafService.instance.receiveCode();
+          if (code == null) throw Exception('no receive code');
+          final r = await ApiClient.faucetLeaf(code, asset: asset);
+          if (mounted) setState(() => _status = DefaultWords.received(r.amount, r.asset));
+          // The wallet takes the coin in by itself; nothing waits on it here.
+          unawaited(LeafService.instance.openingSync(by: 'faucet'));
+          return;
+        } catch (_) {
+          final r = await ApiClient.faucet(addr, asset: asset);
+          if (mounted) {
+            setState(() => _status = 'Sent ${r.amount} ${r.asset}. It will appear on Balance once it confirms (about a minute).');
+          }
+          return;
+        }
+      }
       if (_asLeaf && _leafOffered) {
         // A receive request from the leaf wallet, paid by the faucet off the chain.
         final made = await LeafService.instance.pay('receive', {'asset': _hexOf(asset)});
