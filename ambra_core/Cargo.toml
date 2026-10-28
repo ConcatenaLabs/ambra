@@ -95,3 +95,9 @@ lwk_common = { path = "../../SWK/lwk_common" }
 lwk_signer = { path = "../../SWK/lwk_signer" }
 elements   = { path = "../../SWK/rust-elements" }
 
+
+# Bark (`src/ark_btc.rs`) says what it does through `log`: on Android it goes to logcat,
+# tagged `bark`, at info and above.
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
+log = "0.4"

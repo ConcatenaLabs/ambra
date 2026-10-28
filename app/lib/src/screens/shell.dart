@@ -16,6 +16,7 @@ import '../data/dev_mode.dart';
 import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/hidden_assets.dart';
+import '../data/pay_code.dart';
 import '../data/leaf_service.dart';
 import '../data/lightning_service.dart';
 import '../data/ln_payment_limit.dart';
@@ -1595,10 +1596,12 @@ class _ReceiveTabState extends State<ReceiveTab> {
   // again once one is paid; the address one tap away, for Bitcoin and other senders.
   String? _code;
   bool _drawing = false;
-  bool _showAddress = false;
   int _paidAt = 0;
 
-  bool get _codeMode => !DevMode.instance.on && LeafService.instance.open && !_showAddress;
+  // The one receive code shows in user mode once the wallet holds coins with the operator
+  // or BTC on the ark: it carries the address, the ark address and the receive request.
+  bool get _codeMode =>
+      !DevMode.instance.on && (LeafService.instance.open || ArkBtcService.instance.open);
 
   @override
   void initState() {
@@ -1608,6 +1611,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
     _index = BtcState.instance.unifiedNext;
     BtcState.instance.addListener(_onUnified);
     LeafService.instance.addListener(_onLeaves);
+    ArkBtcService.instance.addListener(_onLeaves);
     _paidAt = LeafService.instance.arrivedCount;
     _load();
     _onLeaves();
@@ -1623,14 +1627,44 @@ class _ReceiveTabState extends State<ReceiveTab> {
   /// coin arrived (the code shown is single-use).
   void _onLeaves() {
     final l = LeafService.instance;
-    if (DevMode.instance.on || !l.open || _drawing) return;
-    if (_code != null && l.arrivedCount == _paidAt) return;
+    final ark = ArkBtcService.instance;
+    if (DevMode.instance.on || !(l.open || ark.open) || _drawing) return;
+    // A new code once the one shown was paid (its receive request is single use), or once
+    // the ark opened after the code was drawn without it.
+    final stale = _code == null || l.arrivedCount != _paidAt || (ark.open && _codeArk == null) || (l.open && _codeSeq == null);
+    if (!stale) return;
     _paidAt = l.arrivedCount;
     _drawing = true;
-    l.receiveCode().then((c) {
+    _drawCode().then((c) {
       _drawing = false;
       if (mounted) setState(() => _code = c);
     });
+  }
+
+  String? _codeArk;
+  String? _codeSeq;
+
+  /// The one receive code: the shared address at the current index, an ark address when
+  /// BTC lives on the ark, and a receive request when the wallet holds coins with the
+  /// operator. Null when it cannot be drawn.
+  Future<String?> _drawCode() async {
+    try {
+      final m = await WalletRepository.instance.readMnemonic();
+      if (m == null) return null;
+      final address = (await core.receiveAddressAt(mnemonic: m, index: _index, confidential: false)).address;
+      String? arkAddr;
+      if (ArkBtcService.instance.open) {
+        try {
+          arkAddr = await ArkBtcService.instance.address();
+        } catch (_) {}
+      }
+      final seq = LeafService.instance.open ? await LeafService.instance.receiveCode() : null;
+      _codeArk = arkAddr;
+      _codeSeq = seq;
+      return PayCode(address: address, ark: arkAddr, sequentia: seq).build();
+    } catch (_) {
+      return null;
+    }
   }
 
   void _onUnified() {
@@ -1645,6 +1679,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
   void dispose() {
     BtcState.instance.removeListener(_onUnified);
     LeafService.instance.removeListener(_onLeaves);
+    ArkBtcService.instance.removeListener(_onLeaves);
     super.dispose();
   }
 
@@ -1744,23 +1779,8 @@ class _ReceiveTabState extends State<ReceiveTab> {
               ],
             ]),
           ),
-          const SizedBox(height: 14),
-          SecondaryButton(
-            key: const Key('receive-show-address'),
-            label: DefaultWords.showAddress,
-            icon: Icons.qr_code_2,
-            onPressed: () => setState(() => _showAddress = true),
-          ),
+
         ] else ...[
-        if (!DevMode.instance.on && LeafService.instance.open) ...[
-          SecondaryButton(
-            key: const Key('receive-show-code'),
-            label: DefaultWords.showCode,
-            icon: Icons.bolt,
-            onPressed: () => setState(() => _showAddress = false),
-          ),
-          const SizedBox(height: 18),
-        ],
         if (_address != null) ...[
           Center(
             child: Container(
@@ -1789,9 +1809,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
               Text(
                 _confidential
                     ? 'Private: the amount and asset are hidden on-chain. This is NOT a Bitcoin address.'
-                    : (DevMode.instance.on
-                        ? 'Also receives Bitcoin (testnet4); one address, both chains.'
-                        : DefaultWords.addressLine),
+                    : 'Also receives Bitcoin (testnet4); one address, both chains.',
                 style: AmbraText.sub,
               ),
               const SizedBox(height: 14),

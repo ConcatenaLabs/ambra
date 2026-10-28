@@ -18,6 +18,7 @@ import '../data/leaf_service.dart';
 import '../data/lightning_service.dart';
 import '../data/ln_rail.dart';
 import '../data/openamp_service.dart';
+import '../data/pay_code.dart';
 import '../data/price_service.dart';
 import '../data/seqln_keys.dart' as lnkeys;
 import '../data/subswap_service.dart' show bolt11AmountMsat;
@@ -50,6 +51,29 @@ class _SendTabState extends State<SendTab> {
   bool _feeManual = false; // true once the user explicitly picks a fee asset
   bool _loading = true;
   bool _sendingInTree = false; // a payment to a receive code is on its way
+
+  /// The way chosen out of a receive code in the recipient field (its receive request,
+  /// its ark address or its address), for the payment being reviewed; null when the field
+  /// holds a single destination.
+  String? _route;
+
+  /// The destination of the payment being reviewed.
+  String get _to => _route ?? _addr.text.trim();
+
+  /// Picks the way a receive code ([PayCode]) is paid, without asking: an asset to its
+  /// receive request when the operator pays it, BTC to its ark address when the ark holds
+  /// the amount; anything else to its address.
+  String? _routeOf(PayCode code) {
+    if (_isBtc) {
+      final sats = parseAtoms(_amount.text, 8);
+      final ark = ArkBtcService.instance;
+      if (code.ark != null && ark.open && sats != null && sats > BigInt.zero && sats <= ark.spendable) return code.ark;
+      return code.address ?? code.ark;
+    }
+    final seq = code.sequentia;
+    if (seq != null && LeafService.instance.paysInTree(seq)) return seq;
+    return code.address;
+  }
   String? _error;
 
   /// The synthetic asset id for parent-chain Bitcoin in the picker/state.
@@ -324,6 +348,16 @@ class _SendTabState extends State<SendTab> {
   }
 
   Future<void> _review() async {
+    _route = null;
+    try {
+      final code = PayCode.read(_addr.text);
+      if (code != null) {
+        _route = _routeOf(code);
+        if (_route == null) return _snack(DefaultWords.codeTakesAssets);
+      }
+    } on FormatException catch (e) {
+      return _snack(e.message);
+    }
     // User mode: BTC the Bitcoin ark holds pays a BTC invoice, an ark address or (BTC
     // picked) a Bitcoin address, chosen without asking; what the ark cannot cover takes
     // the path it always took.
@@ -333,7 +367,7 @@ class _SendTabState extends State<SendTab> {
     }
     // A Lightning invoice in the recipient field is paid over Lightning, whatever asset is picked:
     // the invoice names its own amount, and the pay screen its asset.
-    final invoice = bolt11Of(_addr.text);
+    final invoice = bolt11Of(_to);
     if (invoice != null && LightningService.instance.configured) {
       await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LnPayScreen(invoice: invoice)));
       return;
@@ -341,7 +375,7 @@ class _SendTabState extends State<SendTab> {
     // A receive code of another wallet on this wallet's operator: paid off the chain, in
     // seconds. Anything else (an address, an invoice, an account id) takes the path it
     // always took.
-    if (LeafService.instance.paysInTree(_addr.text)) {
+    if (LeafService.instance.paysInTree(_to)) {
       if (_isBtc || _isRestricted) {
         return _snack(DefaultWords.codeTakesAssets);
       }
@@ -351,7 +385,7 @@ class _SendTabState extends State<SendTab> {
     if (_isBtc) return _reviewBtc();
     if (_isRestricted) return _reviewOpenamp();
     final label = SeqAssets.labelFor(_assetId);
-    final addr = _addr.text.trim();
+    final addr = _to;
     final atoms = parseAtoms(_amount.text, label.precision);
     if (addr.isEmpty) return _snack('Enter a recipient address');
     if (atoms == null || atoms <= BigInt.zero) return _snack('Enter a valid amount');
@@ -425,7 +459,7 @@ class _SendTabState extends State<SendTab> {
   /// in BTC (sat/vB), so there's no fee-asset market here — a different path from
   /// the Sequentia send above.
   Future<void> _reviewBtc() async {
-    final addr = _addr.text.trim();
+    final addr = _to;
     final atoms = parseAtoms(_amount.text, 8); // BTC has 8 decimals
     if (addr.isEmpty) return _snack('Enter a recipient address');
     if (atoms == null || atoms <= BigInt.zero) return _snack('Enter a valid amount');
@@ -524,7 +558,7 @@ class _SendTabState extends State<SendTab> {
   /// amount; answers whether it took the payment (or refused it in plain words).
   Future<bool> _maybeArkBtc() async {
     final ark = ArkBtcService.instance;
-    final raw = _addr.text.trim();
+    final raw = _to;
     final inv = bolt11Of(raw);
     final dest = inv ?? raw;
     final btcInvoice = inv != null && RegExp(r'^lntb[0-9]', caseSensitive: false).hasMatch(inv);
@@ -544,11 +578,9 @@ class _SendTabState extends State<SendTab> {
       return false;
     }
     if (sats > ark.spendable) {
-      if (kind == 'ark') {
-        _snack(DefaultWords.btcUpTo(formatAtoms(ark.spendable.toString(), 8)));
-        return true;
-      }
-      return false; // the chain or Lightning pays it, as before
+      if (kind == 'onchain') return false; // an address is paid as before
+      _snack(DefaultWords.btcUpTo(formatAtoms(ark.spendable.toString(), 8)));
+      return true;
     }
     final amountStr = formatAtoms(sats.toString(), 8);
     final fast = kind != 'onchain';
@@ -556,14 +588,12 @@ class _SendTabState extends State<SendTab> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: AmbraColors.panel,
-        title: const Text(DefaultWords.btcReview, style: AmbraText.title),
+        title: Text(DefaultWords.review(amountStr, 'BTC'), style: AmbraText.title),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('To  ${dest.length > 24 ? '${dest.substring(0, 12)}…${dest.substring(dest.length - 8)}' : dest}',
               style: AmbraText.muted),
           const SizedBox(height: 6),
-          Text('Amount  $amountStr BTC', style: AmbraText.muted),
-          const SizedBox(height: 6),
-          Text('Arrives  ${fast ? DefaultWords.arrivesInSeconds : DefaultWords.arrivesAfterBlock}', style: AmbraText.muted),
+          Text(fast ? DefaultWords.reviewLine : DefaultWords.arrivesAfterBlock, style: AmbraText.muted),
         ]),
         actions: [
           GhostButton(label: 'Cancel', onPressed: () => Navigator.pop(context, false)),
@@ -580,8 +610,8 @@ class _SendTabState extends State<SendTab> {
       if (!mounted) return true;
       _addr.clear();
       _amount.clear();
-      ScaffoldMessenger.of(context).showSnackBar(ambraSnack(
-          '${fast ? DefaultWords.btcSentArrived(amountStr) : DefaultWords.btcSentAfterBlock(amountStr)} (${secs.toStringAsFixed(1)} s)'));
+      ScaffoldMessenger.of(context).showSnackBar(
+          ambraSnack(fast ? DefaultWords.sent(amountStr, 'BTC', secs) : DefaultWords.btcSentAfterBlock(amountStr)));
     } catch (e) {
       debugPrint('ark send refused: $e');
       if (mounted) setState(() => _sendingInTree = false);
@@ -629,7 +659,7 @@ class _SendTabState extends State<SendTab> {
     final started = DateTime.now();
     try {
       await LeafService.instance.pay(
-          'send', {'request': _addr.text.trim(), 'amount': atoms.toString(), 'asset': _assetId}, !DevMode.instance.on);
+          'send', {'request': _to, 'amount': atoms.toString(), 'asset': _assetId}, !DevMode.instance.on);
       final secs = DateTime.now().difference(started).inMilliseconds / 1000;
       if (!mounted) return;
       _addr.clear();

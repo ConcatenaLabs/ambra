@@ -153,12 +153,14 @@ name = "ambra_core"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "android_logger 0.14.1",
  "anyhow",
  "arca-sequentia-ext",
  "arca-wallet",
  "flutter_rust_bridge",
  "getrandom 0.2.17",
  "libc",
+ "log",
  "lwk_common",
  "lwk_contracts",
  "lwk_signer",
@@ -176,6 +178,17 @@ name = "android_log-sys"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "84521a3cf562bc62942e294181d9eef17eb38ceb8c68677bc49f144e4c3d4f8d"
+
+[[package]]
+name = "android_logger"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05b07e8e73d720a1f2e4b6014766e6039fd2e96a4fa44e2a78d0e1fa2ff49826"
+dependencies = [
+ "android_log-sys",
+ "env_filter",
+ "log",
+]
 
 [[package]]
 name = "android_logger"
@@ -1353,7 +1366,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0884853aae8a6517b5b58cf36f55da487f2fe110e1686938eb29b6640aae4a5"
 dependencies = [
  "allo-isolate",
- "android_logger",
+ "android_logger 0.15.1",
  "anyhow",
  "build-target",
  "bytemuck",
@@ -3314,7 +3327,7 @@ version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9465315bc9d4566e1724f0fffcbcc446268cb522e60f9a27bcded6b19c108113"
 dependencies = [
- "bitcoin_hashes 0.13.0",
+ "bitcoin_hashes 0.14.2",
  "rand 0.8.6",
  "secp256k1-sys 0.10.1",
  "serde",
@@ -3787,7 +3800,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82a72c767771b47409d2345987fda8628641887d5466101319899796367354a0"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.1",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

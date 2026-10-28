@@ -64,18 +64,23 @@ class ArkBtcService extends ChangeNotifier {
   Future<void> start() async {
     final server = Backend.bitcoinArk;
     if (open || _opening || server == null || DevMode.instance.on) return;
-    final m = await WalletRepository.instance.readMnemonic();
-    if (m == null) return;
     _opening = true;
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m == null) {
+      _opening = false;
+      return;
+    }
     try {
       await ark.arkOpen(
           dir: await LeafService.dataDir(), mnemonic: m, network: 'testnet4', server: server, esplora: Backend.testnet4);
       open = true;
       lastError = null;
       await refresh();
+      debugPrint('[ambra-ark] open: ${jsonEncode(balance)}');
       _plan(const Duration(seconds: 1));
     } catch (e) {
       lastError = e;
+      debugPrint('[ambra-ark] open refused: $e');
       _timer?.cancel();
       _timer = Timer(retry, () => unawaited(start()));
     } finally {
@@ -118,6 +123,7 @@ class ArkBtcService extends ChangeNotifier {
       await autoBoard();
     } catch (e) {
       lastError = e;
+      debugPrint('[ambra-ark] sync refused: $e');
     }
     _ticking = false;
     _plan(tick);
@@ -130,6 +136,9 @@ class ArkBtcService extends ChangeNotifier {
   /// refusal not again for ten minutes.
   Future<void> autoBoard({BigInt? onchainSats}) async {
     if (!open || _boarding || DevMode.instance.on || LeafService.instance.personBusy) return;
+    // One board at a time: a board in progress still holds the coins it spends until it is
+    // seen on the chain, and the address's balance does not show them spent before then.
+    if (((balance?['boards_in_progress'] as num?) ?? 0) > 0) return;
     final refused = _boardRefusedAt;
     if (refused != null && DateTime.now().difference(refused) < const Duration(minutes: 10)) return;
     final m = await WalletRepository.instance.readMnemonic();
@@ -155,12 +164,20 @@ class ArkBtcService extends ChangeNotifier {
           address: '${where['address']}',
           amountSats: amount,
           feeRate: boardFeeRate);
-      await ark.arkBoardWith(
-          txHex: tx.hex, keyIndex: (where['key_index'] as num).toInt(), expiryHeight: (where['expiry_height'] as num).toInt());
+      // A board registered counts as in progress at once, whatever its broadcast does, so the
+      // next tick never boards the same coins again.
+      balance = {...?balance, 'boards_in_progress': 1};
+      final done = jsonDecode(await ark.arkBoardWith(
+          txHex: tx.hex, keyIndex: (where['key_index'] as num).toInt(), expiryHeight: (where['expiry_height'] as num).toInt())) as Map;
+      if (done['broadcast_error'] != null) debugPrint('[ambra-ark] board broadcast: ${done['broadcast_error']}');
       boardError = null;
+      debugPrint('[ambra-ark] boarded $amount sat: ${tx.txid}');
+      // A sync first, so the figure counts the board at once.
+      await ark.arkSync();
       await refresh();
     } catch (e) {
       boardError = e;
+      debugPrint('[ambra-ark] board refused: $e');
       _boardRefusedAt = DateTime.now();
     } finally {
       _boarding = false;
