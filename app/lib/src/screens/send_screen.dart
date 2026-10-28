@@ -357,8 +357,10 @@ class _SendTabState extends State<SendTab> {
     if (atoms == null || atoms <= BigInt.zero) return _snack('Enter a valid amount');
     if (atoms >= (BigInt.one << 64)) return _snack('Amount is too large.'); // u64 FFI guard
     final bal = BigInt.tryParse(_selected?.atoms ?? '0') ?? BigInt.zero;
-    if (atoms > bal && !DevMode.instance.on && atoms <= bal + _leafAtoms(_assetId)) {
-      return _snack(DefaultWords.instantOnly);
+    // User mode: what the chain cannot cover the instant part pays, out to the address.
+    if (atoms > bal && !DevMode.instance.on && LeafService.instance.open) {
+      if (atoms <= LeafService.instance.spendableAtoms(_assetId)) return _reviewOffboard(addr, atoms);
+      if (atoms <= bal + _leafAtoms(_assetId)) return _snack(DefaultWords.addressNotNow);
     }
     if (atoms > bal) return _snack('Amount exceeds your ${label.ticker} balance');
 
@@ -464,6 +466,58 @@ class _SendTabState extends State<SendTab> {
       ));
       _load();
     }
+  }
+
+  /// User mode: a payment to an address out of the leaves (the library's `offboard`),
+  /// quoted first and made only on the quote shown.
+  Future<void> _reviewOffboard(String address, BigInt atoms) async {
+    final label = SeqAssets.labelFor(_assetId);
+    final args = {'asset': _assetId, 'amount': atoms.toString(), 'address': address};
+    final Map quote;
+    try {
+      final q = await LeafService.instance.run('offboard_quote', args);
+      if (q is! Map) throw LeafRefusal('refused', 'no quote');
+      quote = q;
+    } catch (_) {
+      return _snack(DefaultWords.addressNotNow);
+    }
+    if (!mounted) return;
+    final amountStr = formatAtoms(atoms.toString(), label.precision);
+    final feeAtoms = BigInt.tryParse('${(quote['fee'] is Map) ? (quote['fee'] as Map)['amount'] : 0}') ?? BigInt.zero;
+    final arrives = DefaultWords.arrivesIn(LeafService.instance.roundMinutes());
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AmbraColors.panel,
+        title: Text(DefaultWords.review(amountStr, label.ticker), style: AmbraText.title),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(arrives, style: AmbraText.muted),
+          if (feeAtoms > BigInt.zero) ...[
+            const SizedBox(height: 8),
+            Text(DefaultWords.fee(formatAtoms(feeAtoms.toString(), label.precision), label.ticker), style: AmbraText.muted),
+          ],
+        ]),
+        actions: [
+          GhostButton(label: 'Cancel', onPressed: () => Navigator.pop(context, false)),
+          TextButton(key: const Key('send-offboard-confirm'), onPressed: () => Navigator.pop(context, true), child: const Text('Send')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _sendingInTree = true);
+    try {
+      await LeafService.instance.pay('offboard', {...args, 'shown': quote}, true);
+      if (!mounted) return;
+      _addr.clear();
+      _amount.clear();
+      ScaffoldMessenger.of(context).showSnackBar(ambraSnack(DefaultWords.sentThen(amountStr, label.ticker, arrives)));
+      await LeafService.instance.refresh();
+    } catch (e) {
+      if (mounted) _snack(LeafRefusal.of(e).message);
+    } finally {
+      if (mounted) setState(() => _sendingInTree = false);
+    }
+    _load();
   }
 
   /// Pays out of the Bitcoin ark when the destination is one it pays and it holds the

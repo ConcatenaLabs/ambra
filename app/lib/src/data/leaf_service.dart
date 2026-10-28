@@ -348,6 +348,22 @@ class LeafService extends ChangeNotifier {
   /// flight), shown under the asset's one figure until they are.
   Map<String, BigInt> arrivingAtoms() => arrivingAtomsOf(balance, schedule);
 
+  /// The operator's round interval in whole minutes (`info.fills.round_interval_seconds`),
+  /// or null when it publishes none: how long a payment to an address takes.
+  int? roundMinutes() {
+    final s = (info?['fills'] is Map) ? (info!['fills'] as Map)['round_interval_seconds'] : null;
+    return s is num && s > 0 ? (s / 60).ceil() : null;
+  }
+
+  /// What of [asset] the leaves can pay now: held, less what is still arriving and what
+  /// its issuer froze.
+  BigInt spendableAtoms(String asset) {
+    final held = leafAtoms()[asset] ?? BigInt.zero;
+    final pending = arrivingAtomsOf(balance)[asset] ?? BigInt.zero;
+    final v = held - pending - frozenAtoms(asset);
+    return v > BigInt.zero ? v : BigInt.zero;
+  }
+
   /// A fresh receive code (the library's receive request, any asset, any amount): the
   /// default Receive's QR. Null when the leaf wallet is not open or refuses one.
   Future<String?> receiveCode() async {
