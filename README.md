@@ -220,12 +220,21 @@ module that implements it.
     `app/lib/src/data/default_words.dart` and tested against the contract's forbidden words.
     Default mode shows no rail: a row's details show only Staked, what is arriving, and a
     freeze; the split by rail and the fee-rate fields are developer mode's.
-  - Receive shows a **receive code** first: any asset, any amount, paid once, a new one
-    drawn when it is or on "New code"; a payment to it arrives in seconds (the wallet reads
-    for it every four seconds while a code handed out in the last hour waits). "Show
-    address" gives the shared address, "For BTC, and for senders that ask for an address."
-  - Send pays a receive code of a wallet on the same operator from the wallet's leaves;
-    anything else (an address, an invoice, an account id) takes the path it always took.
+  - Receive shows the wallet's one **receive code** (`app/lib/src/data/pay_code.dart`, the
+    web wallet's format): a BIP321 request,
+    `bitcoin:<address>?ark=<Bitcoin ark address>&sequentia=<receive request>`. The address
+    is the shared tb1 address, `ark` is where BTC arrives in seconds, and `sequentia` is the
+    single-use receive request where an asset arrives in seconds. Neither extra part is
+    required, so any Bitcoin wallet reads it as a plain request for the address. A new code
+    is drawn when the one shown is paid, or on "New code". While a code handed out in the
+    last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
+    the address alone; so does user mode until the wallet holds coins with the operator or
+    BTC on the ark.
+  - Send reads a receive code and picks its part without asking: an asset goes to the
+    receive request when the operator pays it (from the wallet's leaves, in seconds), and
+    BTC goes to the ark address when the ark holds the amount. Anything else goes to the
+    address. A bare receive request is paid the same way. Anything that is not a code (an
+    address, an invoice, an account id) takes the path it always took.
     An address send the chain cannot cover is paid out of the leaves (the library's
     `offboard_quote`, then `offboard` on the quote shown): "Send <amt> <TICKER>?", "It
     arrives in a few minutes." (the operator's round interval), and the fee when there is
@@ -243,12 +252,15 @@ module that implements it.
   has none). BTC stays native bitcoin, which the holder can always take on the chain.
   - Confirmed BTC at the shared address moves in by itself: the kit pays it, less the
     fee, to a new board's funding address in one transaction, and the ark wallet boards
-    that transaction (`board_funding_address`, `board_psbt`). Below 20,000 sat it stays on
-    the chain. Never while something a person asked for runs, or in the minute after.
+    that transaction (`board_funding_address`, `board_psbt`) and puts it on the network.
+    Below 20,000 sat it stays on the chain. One board at a time, never while something a
+    person asked for runs, or in the minute after. Bark's own log goes to logcat, tagged
+    `bark`.
   - Send pays out of the ark, chosen without asking: an ark address in seconds, a BTC
     invoice (`lntb…`) over Lightning, a Bitcoin address on the chain after a Bitcoin
-    block. What the ark cannot cover, or a payment it refuses, goes the way it always
-    went.
+    block. An address the ark cannot cover, or one it refuses, is paid as before. A code
+    or an invoice beyond what the ark holds reads "You can send up to <amount> BTC this way
+    now."
   - BTC's one figure counts the ark; what is on its way in shows as "<amount> BTC
     arriving". Developer mode keeps BTC on the chain and in Lightning, by hand.
 - Leaves are coins held as leaves of an operator's covenant tree on Sequentia: paid and

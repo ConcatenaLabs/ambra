@@ -72,6 +72,10 @@ fn network(name: &str) -> Result<Network, Value> {
 /// already for the same phrase is kept. The answer is `{"fingerprint",
 /// "server_pubkey", "network"}`.
 pub fn open(dir: &Path, mnemonic: &str, net: &str, server: &str, esplora: &str) -> Result<Value, Value> {
+    #[cfg(target_os = "android")]
+    android_logger::init_once(
+        android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("bark"),
+    );
     let network = network(net)?;
     let m = bip39::Mnemonic::from_str(mnemonic.trim()).map_err(|e| refusal(format!("the recovery phrase: {}", e)))?;
     let seed = WalletSeed::new_from_mnemonic(network, &m);
@@ -119,11 +123,14 @@ fn sats(a: Amount) -> String {
 
 /// What the wallet holds, in sats: `spendable` (in the ark now), and what is on
 /// its way (`pending_board`, `pending_in_round`, `claimable_lightning_receive`)
-/// or leaving (`pending_lightning_send`, `pending_exit`).
+/// or leaving (`pending_lightning_send`, `pending_exit`); and how many boards are
+/// still in progress (`boards_in_progress`, those not yet broadcast included).
 pub fn balance() -> Result<Value, Value> {
     let w = wallet()?;
     let b = runtime().block_on(w.balance()).map_err(err)?;
+    let boards = runtime().block_on(w.pending_boards()).map(|v| v.len()).unwrap_or(0);
     Ok(json!({
+        "boards_in_progress": boards,
         "spendable": sats(b.spendable),
         "pending_board": sats(b.pending_board),
         "pending_in_round": sats(b.pending_in_round),
@@ -241,9 +248,25 @@ pub fn board_with(tx_hex: &str, key_index: u32, expiry_height: u32) -> Result<Va
         p.final_script_witness = Some(i.witness.clone());
     }
     runtime().block_on(async {
+        // Bark checks every input's amount: each spent output, read from the chain.
+        for (p, i) in psbt.inputs.iter_mut().zip(tx.input.iter()) {
+            let prev = w.chain().get_tx(&i.previous_output.txid).await.map_err(err)?
+                .ok_or_else(|| refusal(format!("the coin {} is not on the chain", i.previous_output)))?;
+            let out = prev.output.get(i.previous_output.vout as usize).cloned()
+                .ok_or_else(|| refusal(format!("the coin {} is not in its transaction", i.previous_output)))?;
+            p.witness_utxo = Some(out);
+        }
         let kp = w.peek_keypair(key_index).await.map_err(err)?;
         let b = w.board_psbt(psbt, kp, expiry_height as _).await.map_err(err)?;
-        Ok(json!({"amount": sats(b.amount), "funding_txid": b.funding_tx.compute_txid().to_string()}))
+        // The transaction is signed and final: put it on the network now rather than
+        // leave it to Bark's own push, which waits silently when the chain source
+        // answers anything but a clean acceptance. A transaction already there is no harm.
+        let pushed = match w.chain().broadcast_tx(&tx).await {
+            Ok(()) => Value::Null,
+            Err(e) => json!(format!("{:#}", e)),
+        };
+        w.sync().await;
+        Ok(json!({"amount": sats(b.amount), "funding_txid": b.funding_tx.compute_txid().to_string(), "broadcast_error": pushed}))
     })
 }
 
