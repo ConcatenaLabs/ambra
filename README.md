@@ -226,9 +226,11 @@ module that implements it.
     address" gives the shared address, "For BTC, and for senders that ask for an address."
   - Send pays a receive code of a wallet on the same operator from the wallet's leaves;
     anything else (an address, an invoice, an account id) takes the path it always took.
-    An address send that only the leaves could cover is refused in plain words: "This
-    amount is kept for instant payments and can't be sent to an address yet. Send it to a
-    receive code, or pay an invoice."
+    An address send the chain cannot cover is paid out of the leaves (the library's
+    `offboard_quote`, then `offboard` on the quote shown): "Send <amt> <TICKER>?", "It
+    arrives in a few minutes." (the operator's round interval), and the fee when there is
+    one. A quote the library refuses reads "This amount can't be sent to an address right
+    now. Send it to a receive code, or pay an invoice."
   - Coins that arrive on the chain, of every asset the operator serves, are boarded by
     the wallet itself (amount = what the chain holds less the board's fee, paid in the
     same asset, on the fee quoted), never while something a person asked for runs or in

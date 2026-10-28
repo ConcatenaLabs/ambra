@@ -17,8 +17,16 @@ class DefaultWords {
   static String sent(String amount, String ticker, double secs) => 'Sent $amount $ticker (${secs.toStringAsFixed(1)} s).';
   static String stillArriving(String ticker) => 'Part of this $ticker is still arriving: try again in a moment.';
   static const codeTakesAssets = 'A receive code takes Sequentia assets. For BTC, use an address or an invoice.';
-  static const instantOnly = "This amount is kept for instant payments and can't be sent to an address yet. "
+  static const addressNotNow = "This amount can't be sent to an address right now. "
       'Send it to a receive code, or pay an invoice.';
+
+  /// When a payment to an address from the instant part arrives: [minutes] is the
+  /// operator's round interval in whole minutes, null when it publishes none.
+  static String arrivesIn(int? minutes) => minutes == null
+      ? 'It arrives shortly.'
+      : (minutes <= 5 ? 'It arrives in a few minutes.' : 'It arrives in about $minutes minutes.');
+  static String sentThen(String amount, String ticker, String arrives) => 'Sent $amount $ticker. $arrives';
+  static String fee(String amount, String ticker) => 'Fee $amount $ticker';
   static String arriving(String amount, String ticker) => '$amount $ticker arriving';
   static String received(String amount, String ticker) => 'Received $amount $ticker.';
   static const btcFee = 'The fee is paid in BTC.';
@@ -44,7 +52,8 @@ class DefaultWords {
   static List<String> all() => [
         receiveCode, receiveCodeLine, copyCode, codeCopied, newCode, showAddress, showCode, addressLine,
         recipient, recipientHint, review('5', 'USDX'), reviewLine, sent('5', 'USDX', 1.2), stillArriving('USDX'),
-        codeTakesAssets, instantOnly, arriving('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
+        codeTakesAssets, addressNotNow, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)),
+        fee('5', 'USDX'), arriving('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
         btcReview, arrivesInSeconds, arrivesAfterBlock, btcSentArrived('0.001'), btcSentAfterBlock('0.001'),
         btcUpTo('0.001'), couldNotSend,
       ];
