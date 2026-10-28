@@ -9,6 +9,7 @@ import '../data/asset_picker.dart';
 import '../data/btc_state.dart';
 import '../data/channel_move_service.dart';
 import '../data/config.dart';
+import '../data/default_words.dart';
 import '../data/descriptor.dart';
 import '../data/dev_mode.dart';
 import '../data/fee_asset_rule.dart';
@@ -344,6 +345,9 @@ class _BalanceTabState extends State<BalanceTab> {
     // keeps the Lightning controls.
     final dev = DevMode.instance.on;
     final leafAtoms = LeafService.instance.joined ? LeafService.instance.leafAtoms() : const <String, BigInt>{};
+    // What is on its way (user mode shows "<amount> <TICKER> arriving" under the figure): an
+    // asset with nothing yet but something arriving still gets its row.
+    final arriving = LeafService.instance.joined ? LeafService.instance.arrivingAtoms() : const <String, BigInt>{};
     final onchainOf = {
       for (final b in onchainBalances ?? const <core.AssetBalance>[]) b.assetId: BigInt.tryParse(b.atoms) ?? BigInt.zero
     };
@@ -360,7 +364,7 @@ class _BalanceTabState extends State<BalanceTab> {
         : assetFigures(
             onchain: onchainOf,
             leaves: leafAtoms,
-            lightning: {for (final id in {...onchainOf.keys, ...leafAtoms.keys, ...lnAssets}) id: lnOf(id)},
+            lightning: {for (final id in {...onchainOf.keys, ...leafAtoms.keys, ...arriving.keys, ...lnAssets}) id: lnOf(id)},
             staked: staked,
           );
     final figureOf = {for (final f in figures ?? const <AssetFigure>[]) f.id: f};
@@ -372,7 +376,8 @@ class _BalanceTabState extends State<BalanceTab> {
     final held = balances == null
         ? _openamp.toList()
         : [
-            ...balances.where((b) => (BigInt.tryParse(b.atoms) ?? BigInt.zero) > BigInt.zero),
+            ...balances.where((b) =>
+                (BigInt.tryParse(b.atoms) ?? BigInt.zero) > BigInt.zero || (!dev && arriving.containsKey(b.assetId))),
             ..._openamp,
           ];
     // Bitcoin is first-class: on-chain (the last-known balance if a fresh testnet4
@@ -468,6 +473,7 @@ class _BalanceTabState extends State<BalanceTab> {
                     dev: dev,
                     leavesJoined: LeafService.instance.joined,
                     frozen: LeafService.instance.joined ? LeafService.instance.frozenAtoms(h) : BigInt.zero,
+                    arriving: arriving[h],
                     channels: _lnChannels,
                     onChanged: _refresh,
                     onHide: () async {
@@ -501,6 +507,7 @@ class _AssetRow extends StatefulWidget {
       this.dev = false,
       this.leavesJoined = false,
       this.frozen,
+      this.arriving,
       this.channels = const [],
       this.onChanged,
       this.onHide});
@@ -515,6 +522,9 @@ class _AssetRow extends StatefulWidget {
   // What of the asset its issuer has frozen for this wallet: one plain sentence under
   // the figure, in both modes, never hidden.
   final BigInt? frozen;
+
+  /// User mode: what of the asset is arriving (counted in the figure, not final yet).
+  final BigInt? arriving;
   final List<Map<dynamic, dynamic>> channels;
   final VoidCallback? onChanged;
   // Per-asset Hide control (quiet trailing icon). null = no control — the BTC row
@@ -538,7 +548,7 @@ class _AssetRowState extends State<_AssetRow> {
     // restriction-disclosure detail sheet on tap.
     final restricted = OpenAmpService.instance.isRestricted(balance.assetId);
     final movable = !restricted;
-    final parts = figure == null ? const <(String, BigInt)>[] : splitParts(figure);
+    final parts = figure == null ? const <(String, BigInt)>[] : splitParts(figure, dev: widget.dev);
     final VoidCallback? onTap = restricted
         ? () => showRestrictedAssetDetail(context, balance.assetId)
         : (!widget.dev && parts.isNotEmpty ? () => setState(() => _open = !_open) : null);
@@ -596,6 +606,15 @@ class _AssetRowState extends State<_AssetRow> {
             alignment: Alignment.centerLeft,
             child: Text(frozenSentence(formatAtoms(widget.frozen.toString(), label.precision), label.ticker),
                 key: Key('frozen-${label.ticker}'), style: const TextStyle(color: AmbraColors.amber2, fontSize: 12)),
+          ),
+        ),
+      if (!widget.dev && (widget.arriving ?? BigInt.zero) > BigInt.zero)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(DefaultWords.arriving(formatAtoms(widget.arriving.toString(), label.precision), label.ticker),
+                key: Key('arriving-${label.ticker}'), style: AmbraText.sub),
           ),
         ),
       if (!widget.dev && _open && parts.isNotEmpty)
@@ -1547,6 +1566,14 @@ class _ReceiveTabState extends State<ReceiveTab> {
   String? _error;
   String? _ampAid; // OpenAMP account id (how senders address restricted assets)
   String? _ampAddress; // an enclave deposit address for a restricted asset
+  // User mode: the receive code shown first (a payment to it arrives in seconds), drawn
+  // again once one is paid; the address one tap away, for Bitcoin and other senders.
+  String? _code;
+  bool _drawing = false;
+  bool _showAddress = false;
+  int _paidAt = 0;
+
+  bool get _codeMode => !DevMode.instance.on && LeafService.instance.open && !_showAddress;
 
   @override
   void initState() {
@@ -1555,7 +1582,30 @@ class _ReceiveTabState extends State<ReceiveTab> {
     // either chain's scan advances it (the shared address discourages reuse).
     _index = BtcState.instance.unifiedNext;
     BtcState.instance.addListener(_onUnified);
+    LeafService.instance.addListener(_onLeaves);
+    _paidAt = LeafService.instance.arrivedCount;
     _load();
+    _onLeaves();
+  }
+
+  /// A new code on request, the one shown given up.
+  void _newCode() {
+    setState(() => _code = null);
+    _onLeaves();
+  }
+
+  /// Draws a code when the wallet can take one and shows none, and a new one once a
+  /// coin arrived (the code shown is single-use).
+  void _onLeaves() {
+    final l = LeafService.instance;
+    if (DevMode.instance.on || !l.open || _drawing) return;
+    if (_code != null && l.arrivedCount == _paidAt) return;
+    _paidAt = l.arrivedCount;
+    _drawing = true;
+    l.receiveCode().then((c) {
+      _drawing = false;
+      if (mounted) setState(() => _code = c);
+    });
   }
 
   void _onUnified() {
@@ -1569,6 +1619,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
   @override
   void dispose() {
     BtcState.instance.removeListener(_onUnified);
+    LeafService.instance.removeListener(_onLeaves);
     super.dispose();
   }
 
@@ -1624,6 +1675,67 @@ class _ReceiveTabState extends State<ReceiveTab> {
       children: [
         const Text('Receive', style: AmbraText.h1),
         const SizedBox(height: 20),
+        if (_codeMode) ...[
+          if (_code != null) ...[
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+                child: QrImageView(
+                    key: const Key('receive-code-qr'),
+                    data: _code!,
+                    version: QrVersions.auto,
+                    size: 264,
+                    backgroundColor: Colors.white),
+              ),
+            ),
+            const SizedBox(height: 18),
+          ],
+          AmbraCard(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              const SectionLabel(DefaultWords.receiveCode),
+              const SizedBox(height: 12),
+              if (_code == null)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 18),
+                  child: Center(child: CircularProgressIndicator(color: AmbraColors.amber)),
+                )
+              else ...[
+                const Text(DefaultWords.receiveCodeLine, style: AmbraText.sub),
+                const SizedBox(height: 14),
+                SecondaryButton(
+                  key: const Key('receive-code-copy'),
+                  label: DefaultWords.copyCode,
+                  icon: Icons.copy,
+                  onPressed: () => _copy(_code!, DefaultWords.codeCopied),
+                ),
+                const SizedBox(height: 10),
+                SecondaryButton(
+                  key: const Key('receive-code-new'),
+                  label: DefaultWords.newCode,
+                  icon: Icons.refresh,
+                  onPressed: _drawing ? null : _newCode,
+                ),
+              ],
+            ]),
+          ),
+          const SizedBox(height: 14),
+          SecondaryButton(
+            key: const Key('receive-show-address'),
+            label: DefaultWords.showAddress,
+            icon: Icons.qr_code_2,
+            onPressed: () => setState(() => _showAddress = true),
+          ),
+        ] else ...[
+        if (!DevMode.instance.on && LeafService.instance.open) ...[
+          SecondaryButton(
+            key: const Key('receive-show-code'),
+            label: DefaultWords.showCode,
+            icon: Icons.bolt,
+            onPressed: () => setState(() => _showAddress = false),
+          ),
+          const SizedBox(height: 18),
+        ],
         if (_address != null) ...[
           Center(
             child: Container(
@@ -1652,7 +1764,9 @@ class _ReceiveTabState extends State<ReceiveTab> {
               Text(
                 _confidential
                     ? 'Private: the amount and asset are hidden on-chain. This is NOT a Bitcoin address.'
-                    : 'Also receives Bitcoin (testnet4); one address, both chains.',
+                    : (DevMode.instance.on
+                        ? 'Also receives Bitcoin (testnet4); one address, both chains.'
+                        : DefaultWords.addressLine),
                 style: AmbraText.sub,
               ),
               const SizedBox(height: 14),
@@ -1756,6 +1870,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
               ],
             ]),
           ),
+        ],
         ],
       ],
     );

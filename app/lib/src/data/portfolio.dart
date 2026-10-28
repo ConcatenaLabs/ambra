@@ -38,13 +38,15 @@ List<AssetFigure> assetFigures({
 }
 
 /// The parts of a figure in the plain words user mode shows one tap away, only the
-/// parts held: On-chain, Off-chain (leaves), Lightning, Staked.
-List<(String, BigInt)> splitParts(AssetFigure f) => [
+/// parts held: On-chain, Instant (leaves: paid in seconds), Lightning, Staked. User mode
+/// ([dev] false) shows Staked alone: the split by rail is developer mode's (the default-mode
+/// contract, sequentia-web-wallet `docs/DEFAULT_MODE.md`).
+List<(String, BigInt)> splitParts(AssetFigure f, {bool dev = true}) => [
       ('On-chain', f.onchain),
-      ('Off-chain', f.leaves),
+      ('Instant', f.leaves),
       ('Lightning', f.lightning),
       ('Staked', f.staked),
-    ].where((p) => p.$2 > BigInt.zero).toList();
+    ].where((p) => p.$2 > BigInt.zero && (dev || p.$1 == 'Staked')).toList();
 
 /// The headline: every holding valued in the reference unit and summed, every asset
 /// on equal terms. [value] answers a holding's value, or null when it has no price;

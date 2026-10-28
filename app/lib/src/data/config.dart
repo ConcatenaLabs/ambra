@@ -35,6 +35,12 @@ class Backend {
   static String get faucet => '$_origin/faucet';
   static String get arcaOperator => '$_origin/arca'; // the node's leaf operator (Leaves > Join)
   static String get nodeRpc => '$_origin/node-rpc'; // the node's read-only RPC for the leaf wallet
+
+  /// The key of the default node's operator, which user mode joins by itself: the wallet
+  /// joins only a server that shows this key (the web wallet pins the same one). Null for
+  /// any other node, whose operator only developer mode's join form joins.
+  static String? get arcaOperatorKey =>
+      isDefault ? 'b6f4c5924ad81947658cf85bb93d9267efc54c7fcb2e4577e8c954c68fa087bb' : null;
   static String get leafMaker => '$_origin/leafmaker'; // the live leaf maker user mode's Swap tab trades with
   static String get leafMakerBtc => '$_origin/leafmaker-btc'; // the leaf maker that trades BTC for an asset over Lightning
   /// The pairs user mode's Swap tab offers per chain: the list the web wallet's reliability

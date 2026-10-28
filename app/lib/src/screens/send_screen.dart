@@ -8,6 +8,8 @@ import '../data/api_client.dart';
 import '../data/asset_picker.dart';
 import '../data/btc_state.dart';
 import '../data/config.dart';
+import '../data/default_words.dart';
+import '../data/dev_mode.dart';
 import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/hidden_assets.dart';
@@ -45,6 +47,7 @@ class _SendTabState extends State<SendTab> {
   String? _feeAsset; // the fee asset's id; null = the wallet holds nothing the node accepts
   bool _feeManual = false; // true once the user explicitly picks a fee asset
   bool _loading = true;
+  bool _sendingInTree = false; // a payment to a receive code is on its way
   String? _error;
 
   /// The synthetic asset id for parent-chain Bitcoin in the picker/state.
@@ -326,6 +329,16 @@ class _SendTabState extends State<SendTab> {
       await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LnPayScreen(invoice: invoice)));
       return;
     }
+    // A receive code of another wallet on this wallet's operator: paid off the chain, in
+    // seconds. Anything else (an address, an invoice, an account id) takes the path it
+    // always took.
+    if (LeafService.instance.paysInTree(_addr.text)) {
+      if (_isBtc || _isRestricted) {
+        return _snack(DefaultWords.codeTakesAssets);
+      }
+      return _reviewInTree();
+    }
+    LeafService.instance.personActed(); // the wallet's own upkeep keeps off the coins this send spends
     if (_isBtc) return _reviewBtc();
     if (_isRestricted) return _reviewOpenamp();
     final label = SeqAssets.labelFor(_assetId);
@@ -335,6 +348,9 @@ class _SendTabState extends State<SendTab> {
     if (atoms == null || atoms <= BigInt.zero) return _snack('Enter a valid amount');
     if (atoms >= (BigInt.one << 64)) return _snack('Amount is too large.'); // u64 FFI guard
     final bal = BigInt.tryParse(_selected?.atoms ?? '0') ?? BigInt.zero;
+    if (atoms > bal && !DevMode.instance.on && atoms <= bal + _leafAtoms(_assetId)) {
+      return _snack(DefaultWords.instantOnly);
+    }
     if (atoms > bal) return _snack('Amount exceeds your ${label.ticker} balance');
 
     // Fund checks (fees are multi-asset — another asset's balance can't cover a
@@ -441,6 +457,55 @@ class _SendTabState extends State<SendTab> {
     }
   }
 
+  /// A payment to a receive code ([LeafService.paysInTree]): off the chain, from this
+  /// wallet's leaves, as the library's `send`. User mode says a refusal in its plain words.
+  Future<void> _reviewInTree() async {
+    final label = SeqAssets.labelFor(_assetId);
+    final atoms = parseAtoms(_amount.text, label.precision);
+    if (atoms == null || atoms <= BigInt.zero) return _snack('Enter a valid amount');
+    if (atoms >= (BigInt.one << 64)) return _snack('Amount is too large.');
+    final instant = _leafAtoms(_assetId) - LeafService.instance.frozenAtoms(_assetId);
+    final amountStr = formatAtoms(atoms.toString(), label.precision);
+    if (atoms > instant) {
+      final arriving = LeafService.instance.arrivingAtoms()[_assetId] ?? BigInt.zero;
+      if (atoms <= instant + arriving) {
+        return _snack(DefaultWords.stillArriving(label.ticker));
+      }
+      return _snack('Amount exceeds your ${label.ticker} balance');
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AmbraColors.panel,
+        title: Text(DefaultWords.review(amountStr, label.ticker), style: AmbraText.title),
+        content: const Text(DefaultWords.reviewLine, style: AmbraText.muted),
+        actions: [
+          GhostButton(label: 'Cancel', onPressed: () => Navigator.pop(context, false)),
+          TextButton(key: const Key('send-code-confirm'), onPressed: () => Navigator.pop(context, true), child: const Text('Send')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _sendingInTree = true);
+    final started = DateTime.now();
+    try {
+      await LeafService.instance.pay(
+          'send', {'request': _addr.text.trim(), 'amount': atoms.toString(), 'asset': _assetId}, !DevMode.instance.on);
+      final secs = DateTime.now().difference(started).inMilliseconds / 1000;
+      if (!mounted) return;
+      _addr.clear();
+      _amount.clear();
+      ScaffoldMessenger.of(context)
+          .showSnackBar(ambraSnack(DefaultWords.sent(amountStr, label.ticker, secs)));
+      await LeafService.instance.refresh();
+    } catch (e) {
+      if (mounted) _snack(LeafRefusal.of(e).message);
+    } finally {
+      if (mounted) setState(() => _sendingInTree = false);
+    }
+    _load();
+  }
+
   /// Review + send a restricted (OpenAMP) asset. The enclave holds the funds; the
   /// recipient is addressed by their OpenAMP account id (AID), not an address, and
   /// the fee is taken by conversion inside the enclave (no any-asset fee market).
@@ -526,16 +591,22 @@ class _SendTabState extends State<SendTab> {
               _PickerField(
                 key: const ValueKey('send-asset-picker'),
                 label: _isBtc ? 'BTC' : label.ticker,
-                trailing: elsewhere ? '$balStr on-chain' : 'balance $balStr',
+                trailing: !DevMode.instance.on
+                    ? 'balance ${formatAtoms(_totalOf(_assetId).toString(), prec)}'
+                    : (elsewhere ? '$balStr on-chain' : 'balance $balStr'),
                 onTap: _pickAsset,
               ),
               const SizedBox(height: 18),
               AmbraField(
-                label: _isRestricted ? 'Recipient account id (AID)' : 'Recipient address',
+                label: _isRestricted
+                    ? 'Recipient account id (AID)'
+                    : (LeafService.instance.open && !DevMode.instance.on ? DefaultWords.recipient : 'Recipient address'),
                 controller: _addr,
                 hint: _isRestricted
                     ? 'their OpenAMP account id'
-                    : (LightningService.instance.configured ? 'tb1…, tsqb1… or a Lightning invoice' : 'tb1… or tsqb1…'),
+                    : (LeafService.instance.open && !DevMode.instance.on
+                        ? DefaultWords.recipientHint
+                        : (LightningService.instance.configured ? 'tb1…, tsqb1… or a Lightning invoice' : 'tb1… or tsqb1…')),
                 mono: true,
                 suffix: _isRestricted
                     ? null
@@ -557,9 +628,12 @@ class _SendTabState extends State<SendTab> {
               ] else if (_isBtc) ...[
                 // Parent-chain Bitcoin pays its own fee in BTC (sat/vB is a Bitcoin
                 // unit and only correct here); there's no any-asset fee market.
-                const Text('Bitcoin (testnet4): the fee is paid in BTC at the rate below.', style: AmbraText.sub),
-                const SizedBox(height: 16),
-                AmbraField(label: 'Fee rate (sat/vB, optional)', controller: _feeRateCtl, hint: 'default 2'),
+                if (DevMode.instance.on) ...[
+                  const Text('Bitcoin (testnet4): the fee is paid in BTC at the rate below.', style: AmbraText.sub),
+                  const SizedBox(height: 16),
+                  AmbraField(label: 'Fee rate (sat/vB, optional)', controller: _feeRateCtl, hint: 'default 2'),
+                ] else
+                  const Text(DefaultWords.btcFee, style: AmbraText.sub),
               ] else ...[
                 const SectionLabel('Pay fee in'),
                 const SizedBox(height: 8),
@@ -573,21 +647,31 @@ class _SendTabState extends State<SendTab> {
                   const WarnCallout(noFeeAssetMessage)
                 else
                   Text(
-                    'Fee paid in $_feeLabel at the node\'s published rate. '
-                    'Confirmation depends on producers accepting it.',
+                    DevMode.instance.on
+                        ? 'Fee paid in $_feeLabel at the node\'s published rate. '
+                            'Confirmation depends on producers accepting it.'
+                        : DefaultWords.feeIn(_feeLabel),
                     style: AmbraText.sub,
                   ),
-                const SizedBox(height: 16),
                 // The fee rate in the chosen asset's own units per vByte (e.g. OILX/vB, tSEQ/vB);
                 // the actual fee is shown, estimated, on the review screen. Blank = network default.
-                AmbraField(label: 'Fee rate ($_feeLabel/vB, optional)', controller: _feeRateCtl, hint: ''),
+                // Developer mode only: default mode has no fee-rate field.
+                if (DevMode.instance.on) ...[
+                  const SizedBox(height: 16),
+                  AmbraField(label: 'Fee rate ($_feeLabel/vB, optional)', controller: _feeRateCtl, hint: ''),
+                ],
               ],
             ],
           ]),
         ),
         if (canSend)
           BottomActionBar(children: [
-            PrimaryButton(label: 'Review & send', icon: Icons.north_east, onPressed: _review),
+            PrimaryButton(
+                key: const Key('send-review'),
+                label: 'Review & send',
+                icon: Icons.north_east,
+                busy: _sendingInTree,
+                onPressed: _sendingInTree ? null : _review),
           ]),
       ],
     );

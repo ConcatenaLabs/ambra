@@ -95,11 +95,14 @@ returned, the delegation record; `app/lib/src/data/stakes.dart`, read from the e
 at most every five minutes and at once on the stake screen). What a payment may use is
 still `spendable_units`. More > Mode is one setting, kept for each wallet
 (`ambra.mode.<fingerprint>`), user mode by default. User mode shows one figure per row
-and no rail and no Lightning control; a tap on a row shows its parts in plain words,
-only those held: "On-chain · Off-chain · Lightning · Staked". Developer mode shows the
+and no rail and no Lightning control; a tap on a row shows what is staked, if any, and
+what is not final yet shows under it as "<amount> <TICKER> arriving". Developer mode shows the
 split beneath each row, "X on-chain · Y in leaves · Z on Lightning · W staked", with the
 Move to Lightning / Move to chain card. BTC's line says it has no leaves (a tree on
-Sequentia holds no BTC). A wallet that joined a leaf operator keeps
+Sequentia holds no BTC). User mode joins the default node's operator by itself (its key
+pinned), shows a receive code first on Receive, pays a receive code from leaves, boards
+on-chain arrivals, and shows what is not final yet as "arriving" (README, "The mode, and
+leaves"). A wallet that joined a leaf operator keeps
 its leaf wallet syncing in either mode, and its leaves count in the figures and the
 headline in both. More > Leaves shows the leaf wallet's own view: per asset, each state
 the library names (`live`, `operator-confirmed`, `pending`, …), and the leaf wallet's
