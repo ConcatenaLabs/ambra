@@ -234,6 +234,21 @@ module that implements it.
     same asset, on the fee quoted), never while something a person asked for runs or in
     the minute after it, since the leaf wallet spends the same addresses' coins. What is
     not final yet shows as "<amount> <ticker> arriving" under the asset's figure.
+- **User mode keeps BTC on the Bitcoin ark** (`app/lib/src/data/ark_btc_service.dart`,
+  `ambra_core/src/ark_btc.rs`): Second's Bark client, from arca's `arca-wallet` crate,
+  opened from the same recovery phrase against the ark server the default node serves
+  (`Backend.bitcoinArk`, gRPC on the node's own address; testnet4 here; a custom node
+  has none). BTC stays native bitcoin, which the holder can always take on the chain.
+  - Confirmed BTC at the shared address moves in by itself: the kit pays it, less the
+    fee, to a new board's funding address in one transaction, and the ark wallet boards
+    that transaction (`board_funding_address`, `board_psbt`). Below 20,000 sat it stays on
+    the chain. Never while something a person asked for runs, or in the minute after.
+  - Send pays out of the ark, chosen without asking: an ark address in seconds, a BTC
+    invoice (`lntb…`) over Lightning, a Bitcoin address on the chain after a Bitcoin
+    block. What the ark cannot cover, or a payment it refuses, goes the way it always
+    went.
+  - BTC's one figure counts the ark; what is on its way in shows as "<amount> BTC
+    arriving". Developer mode keeps BTC on the chain and in Lightning, by hand.
 - Leaves are coins held as leaves of an operator's covenant tree on Sequentia: paid and
   received off the chain with the operator's co-signature, and always takeable on-chain
   by the holder. The wallet is the operator's own wallet library (`bark::arca` from

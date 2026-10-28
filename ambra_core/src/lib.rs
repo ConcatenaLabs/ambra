@@ -33,6 +33,7 @@ pub mod contracts;
 /// Leaves of an operator's covenant trees: the operator's wallet library
 /// (`bark::arca`) with the phone's HTTP and store, and the scheduled job's pass.
 pub mod leaves;
+pub mod ark_btc;
 /// SeqOB passive-CLOB covenant DERIVATION (port of covenant.js: leaves, taptree,
 /// planFill, ceilPrice, rate math) — pinned to SWK's golden vectors.
 pub mod seqob_covenant_derive;

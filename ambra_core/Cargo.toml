@@ -62,12 +62,18 @@ serde_json = "1"
 # there is one TLS stack. Its store is SQLite through rusqlite 0.31, built from
 # source for Android (`bundled`). Building it needs `protoc`, as every build
 # of the library does.
-arca-wallet = { git = "https://github.com/ConcatenaLabs/arca", rev = "db23d31cfc8ac1af1a8c8520e054f5561b9352af", default-features = false, features = ["arca-core"] }
-arca-sequentia-ext = { git = "https://github.com/ConcatenaLabs/arca", rev = "db23d31cfc8ac1af1a8c8520e054f5561b9352af", default-features = false }
+# The same crate carries Second's Bark client for the Bitcoin ark
+# (`src/ark_btc.rs`): `native` and `tls-webpki-roots` give it its gRPC
+# transport to the ark server, `sqlite` and `onchain-bdk` its store (Bark's
+# SQLite schema pulls in `bdk_wallet`, which needs bitcoin 0.32.8: SWK pins it).
+arca-wallet = { git = "https://github.com/ConcatenaLabs/arca", rev = "52a7f6e25ded23a13ddf5322565add4ad2a58607", default-features = false, features = ["arca-core", "native", "tls-webpki-roots", "onchain-bdk", "sqlite"] }
+arca-sequentia-ext = { git = "https://github.com/ConcatenaLabs/arca", rev = "52a7f6e25ded23a13ddf5322565add4ad2a58607", default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 # The store's lock is flock(2): the standard library's `File::try_lock` is not
 # supported on Android.
 libc = "0.2"
+# The Bitcoin ark client (`src/ark_btc.rs`) is async: one runtime of its own.
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 
 # The lwk_* crates are the unpublished SWK fork and depend on each other (and on
 # `elements`) BY VERSION; these path patches redirect those to the local SWK
