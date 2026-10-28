@@ -2004,17 +2004,22 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     }
     // Leaf balances are read when the pickers draw, so a trade's coins show at once.
     Map<String, BigInt> leaves() => LeafService.instance.leafAtoms();
+    BigInt held(String h) => heldFigure(
+        onchain: BigInt.tryParse(_bal(h)) ?? BigInt.zero,
+        leaves: leaves()[h] ?? BigInt.zero,
+        channels: _lnChannels,
+        target: h == kBtcSentinel ? RailTarget.btc() : RailTarget.asset(hex: h, ticker: SeqAssets.labelFor(h).ticker));
     return UserComposer(
       key: ValueKey('userComposer-$tag'),
       engine: _userEngine!,
-      assets: () => <String>{kBtcSentinel, ..._payableAssets(), ...leaves().keys}.toList(),
+      // What the person can pay with: BTC always, and every other asset only once the wallet
+      // holds it (a brand-new wallet lists BTC alone).
+      assets: () => <String>{kBtcSentinel, ..._payableAssets(), ...leaves().keys}
+          .where((h) => h == kBtcSentinel || held(h) > BigInt.zero)
+          .toList(),
       // Each asset's one figure, as the balance row counts it: on-chain, leaves and Lightning
       // (BTC in the wallet's own Bitcoin node's channels included).
-      held: (h) => heldFigure(
-          onchain: BigInt.tryParse(_bal(h)) ?? BigInt.zero,
-          leaves: leaves()[h] ?? BigInt.zero,
-          channels: _lnChannels,
-          target: h == kBtcSentinel ? RailTarget.btc() : RailTarget.asset(hex: h, ticker: SeqAssets.labelFor(h).ticker)),
+      held: held,
       onMoved: () => LeafService.instance.refresh(),
       ticker: (h) => h == kBtcSentinel ? 'BTC' : SeqAssets.labelFor(h).ticker,
       precision: (h) => h == kBtcSentinel ? 8 : SeqAssets.labelFor(h).precision,

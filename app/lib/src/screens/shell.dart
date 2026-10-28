@@ -2069,6 +2069,11 @@ class MoreTab extends StatelessWidget {
       ),
     );
     if (confirm == true) {
+      // The leaf wallet and the Bitcoin ark wallet of this phrase close, and what was read
+      // of them is forgotten, before the phrase goes: the next wallet shows and spends only
+      // its own.
+      await LeafService.instance.forget();
+      ArkBtcService.instance.stop();
       await WalletRepository.instance.removeWallet();
       await WalletCache.clear();
       StakeHoldings.instance.clear();
