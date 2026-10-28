@@ -137,8 +137,14 @@ class _SendTabState extends State<SendTab> {
   BigInt _leafAtoms(String id) =>
       LeafService.instance.joined ? (LeafService.instance.leafAtoms()[id] ?? BigInt.zero) : BigInt.zero;
 
-  /// What the wallet holds of [id] on every rail: on-chain, Lightning and leaves.
-  BigInt _totalOf(String id) => (BigInt.tryParse(_balanceOf(id)) ?? BigInt.zero) + _lnAtoms(id) + _leafAtoms(id);
+  /// BTC the Bitcoin ark holds (user mode keeps BTC there).
+  BigInt _arkSats(String id) =>
+      id == _btcId && !DevMode.instance.on && ArkBtcService.instance.open ? ArkBtcService.instance.held : BigInt.zero;
+
+  /// What the wallet holds of [id] on every rail: on-chain, Lightning, leaves and, for BTC in
+  /// user mode, the Bitcoin ark.
+  BigInt _totalOf(String id) =>
+      (BigInt.tryParse(_balanceOf(id)) ?? BigInt.zero) + _lnAtoms(id) + _leafAtoms(id) + _arkSats(id);
 
   /// The picker's rows in the wallet's order: BTC first (listed even at 0), then every
   /// asset held on any rail, then every other asset the wallet can name, for the search.
@@ -729,7 +735,10 @@ class _SendTabState extends State<SendTab> {
     // The form spends on-chain coins; when part of the holding sits in Lightning or
     // leaves, the field says which part it can send.
     final elsewhere = _lnAtoms(_assetId) + _leafAtoms(_assetId) > BigInt.zero;
-    final nothingHeld = held.isEmpty && (BigInt.tryParse(_balanceOf(_btcId)) ?? BigInt.zero) == BigInt.zero;
+    // Nothing anywhere: no asset on any rail, and no BTC on the chain, in Lightning or on the ark.
+    final nothingHeld = !{...held, if (LeafService.instance.joined) ...LeafService.instance.leafAtoms().keys}
+            .any((id) => _totalOf(id) > BigInt.zero) &&
+        _totalOf(_btcId) == BigInt.zero;
     return Column(
       children: [
         Expanded(

@@ -1631,7 +1631,13 @@ class _ReceiveTabState extends State<ReceiveTab> {
     if (DevMode.instance.on || !(l.open || ark.open) || _drawing) return;
     // A new code once the one shown was paid (its receive request is single use), or once
     // the ark opened after the code was drawn without it.
-    final stale = _code == null || l.arrivedCount != _paidAt || (ark.open && _codeArk == null) || (l.open && _codeSeq == null);
+    // A code carrying an invoice is spent once BTC arrived on the ark: a new one then.
+    final invoicePaid = _codeAmount.isNotEmpty && ark.open && ark.spendable + ark.arriving > _arkSeen;
+    final stale = _code == null ||
+        l.arrivedCount != _paidAt ||
+        (ark.open && _codeArk == null) ||
+        (l.open && _codeSeq == null) ||
+        invoicePaid;
     if (!stale) return;
     _paidAt = l.arrivedCount;
     _drawing = true;
@@ -1643,6 +1649,30 @@ class _ReceiveTabState extends State<ReceiveTab> {
 
   String? _codeArk;
   String? _codeSeq;
+
+  // The optional BTC amount: with one, the code also names it and carries an invoice from
+  // the Bitcoin ark for exactly that amount, which the wallet claims while it is open.
+  final _btcAmount = TextEditingController();
+  Timer? _amountDebounce;
+  String _codeAmount = '';
+  BigInt _arkSeen = BigInt.zero;
+
+  void _onAmount(String _) {
+    _amountDebounce?.cancel();
+    _amountDebounce = Timer(const Duration(milliseconds: 800), () {
+      if (_btcAmount.text.trim() != _codeAmount) _newCode();
+    });
+  }
+
+  /// The amount field's BTC as a BIP321 decimal (trailing zeros dropped) and in sats, or
+  /// null when it is empty or not an amount.
+  (String, BigInt)? _amountOf(String text) {
+    final sats = parseAtoms(text.trim(), 8);
+    if (sats == null || sats <= BigInt.zero) return null;
+    var dec = formatAtoms(sats.toString(), 8).replaceAll(',', '');
+    if (dec.contains('.')) dec = dec.replaceFirst(RegExp(r'\.?0+$'), '');
+    return (dec, sats);
+  }
 
   /// The one receive code: the shared address at the current index, an ark address when
   /// BTC lives on the ark, and a receive request when the wallet holds coins with the
@@ -1661,7 +1691,22 @@ class _ReceiveTabState extends State<ReceiveTab> {
       final seq = LeafService.instance.open ? await LeafService.instance.receiveCode() : null;
       _codeArk = arkAddr;
       _codeSeq = seq;
-      return PayCode(address: address, ark: arkAddr, sequentia: seq).build();
+      _codeAmount = _btcAmount.text.trim();
+      _arkSeen = ArkBtcService.instance.spendable + ArkBtcService.instance.arriving;
+      final amount = _amountOf(_codeAmount);
+      String? invoice;
+      if (amount != null && ArkBtcService.instance.open) {
+        try {
+          invoice = await ArkBtcService.instance.invoice(amount.$2);
+        } catch (_) {}
+      }
+      return PayCode(
+              address: address,
+              amount: amount?.$1,
+              lightning: invoice,
+              ark: arkAddr,
+              sequentia: seq)
+          .build();
     } catch (_) {
       return null;
     }
@@ -1680,6 +1725,8 @@ class _ReceiveTabState extends State<ReceiveTab> {
     BtcState.instance.removeListener(_onUnified);
     LeafService.instance.removeListener(_onLeaves);
     ArkBtcService.instance.removeListener(_onLeaves);
+    _amountDebounce?.cancel();
+    _btcAmount.dispose();
     super.dispose();
   }
 
@@ -1776,6 +1823,15 @@ class _ReceiveTabState extends State<ReceiveTab> {
                   icon: Icons.refresh,
                   onPressed: _drawing ? null : _newCode,
                 ),
+                if (ArkBtcService.instance.open) ...[
+                  const SizedBox(height: 14),
+                  AmbraField(
+                      key: const Key('receive-btc-amount'),
+                      label: DefaultWords.amountInBtc,
+                      controller: _btcAmount,
+                      hint: '0.0',
+                      onChanged: _onAmount),
+                ],
               ],
             ]),
           ),

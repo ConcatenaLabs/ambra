@@ -7,6 +7,7 @@ class DefaultWords {
   static const copyCode = 'Copy receive code';
   static const codeCopied = 'Receive code copied';
   static const newCode = 'New code';
+  static const amountInBtc = 'Amount in BTC (optional)';
   static const recipient = 'Recipient';
   static const recipientHint = 'a receive code, an address or an invoice';
   static String review(String amount, String ticker) => 'Send $amount $ticker?';
@@ -45,7 +46,7 @@ class DefaultWords {
 
   /// Every sentence above, filled with sample values: what the test reads.
   static List<String> all() => [
-        receiveCode, receiveCodeLine, copyCode, codeCopied, newCode,
+        receiveCode, receiveCodeLine, copyCode, codeCopied, newCode, amountInBtc,
         recipient, recipientHint, review('5', 'USDX'), reviewLine, sent('5', 'USDX', 1.2), stillArriving('USDX'),
         codeTakesAssets, addressNotNow, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)),
         fee('5', 'USDX'), arriving('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
