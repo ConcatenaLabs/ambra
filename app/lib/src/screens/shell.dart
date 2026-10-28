@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../rust/api.dart' as core;
+import '../data/ark_btc_service.dart';
 import '../data/asset_picker.dart';
 import '../data/btc_state.dart';
 import '../data/channel_move_service.dart';
@@ -90,6 +91,12 @@ class _ShellState extends State<Shell> {
   void _onMode() {
     // Opens only a leaf wallet this phone holds for the mnemonic (`start` checks).
     if (!LeafService.instance.open) unawaited(LeafService.instance.start());
+    // User mode keeps BTC on the Bitcoin ark; developer mode keeps it where it is.
+    if (DevMode.instance.on) {
+      ArkBtcService.instance.stop();
+    } else {
+      unawaited(ArkBtcService.instance.start());
+    }
   }
 
   Future<void> _initLightning() async {
@@ -198,6 +205,7 @@ class _BalanceTabState extends State<BalanceTab> {
     PriceService.instance.addListener(_onPrice);
     DevMode.instance.addListener(_onPrice);
     LeafService.instance.addListener(_onPrice);
+    ArkBtcService.instance.addListener(_onPrice);
     StakeHoldings.instance.addListener(_onPrice);
     // Asset labels can arrive after first paint (network registry); rebuild so
     // rows show the real ticker/precision instead of a hex placeholder.
@@ -234,6 +242,7 @@ class _BalanceTabState extends State<BalanceTab> {
     PriceService.instance.removeListener(_onPrice);
     DevMode.instance.removeListener(_onPrice);
     LeafService.instance.removeListener(_onPrice);
+    ArkBtcService.instance.removeListener(_onPrice);
     StakeHoldings.instance.removeListener(_onPrice);
     RegistryService.instance.removeListener(_onPrice);
     super.dispose();
@@ -385,7 +394,9 @@ class _BalanceTabState extends State<BalanceTab> {
     final btcSatsStr = _btc?.balanceSats ?? _btcCachedSats;
     final btcOnchain = BigInt.tryParse(btcSatsStr ?? '0') ?? BigInt.zero;
     final btcLn = legLiquidity(chans, RailTarget.btc()).balance;
-    final btcTotal = btcOnchain + btcLn;
+    // User mode: what the Bitcoin ark holds and has on its way counts in BTC's one figure.
+    final btcArk = dev ? BigInt.zero : ArkBtcService.instance.held;
+    final btcTotal = btcOnchain + btcLn + btcArk;
     final hasBtc = btcTotal > BigInt.zero;
     // Headline total: computed over EVERY asset and every rail, hidden assets
     // included (see below) — hiding is visual decluttering, not accounting, so the
@@ -394,7 +405,7 @@ class _BalanceTabState extends State<BalanceTab> {
         ? null
         : headlineTotal([
             for (final b in [...balances, ..._openamp]) (key: b.assetId, atoms: BigInt.tryParse(b.atoms) ?? BigInt.zero),
-            if (btcSatsStr != null || btcLn > BigInt.zero) (key: 'BTC', atoms: btcTotal),
+            if (btcSatsStr != null || btcLn > BigInt.zero || btcArk > BigInt.zero) (key: 'BTC', atoms: btcTotal),
           ], (key, atoms) {
             if (key == 'BTC') return PriceService.instance.refValue('BTC', atoms.toString(), 8);
             final label = SeqAssets.labelFor(key);
@@ -462,6 +473,7 @@ class _BalanceTabState extends State<BalanceTab> {
                       sats: btcTotal.toString(),
                       onchainSats: btcOnchain,
                       lightningSats: btcLn,
+                      arrivingSats: dev ? null : ArkBtcService.instance.arriving,
                       stale: _btcStale,
                       channels: _lnChannels,
                       onChanged: _refresh,
@@ -755,13 +767,17 @@ class _BtcRow extends StatefulWidget {
       this.stale = false,
       this.channels = const [],
       this.onChanged,
-      this.dev = false});
+      this.dev = false,
+      this.arrivingSats});
   // Developer mode: the parts beside the row and the Lightning controls.
   final bool dev;
   // The row's figure: on-chain and Lightning together.
   final String sats;
   final BigInt onchainSats;
   final BigInt lightningSats;
+
+  /// User mode: BTC on its way into the ark, shown under the figure.
+  final BigInt? arrivingSats;
   final bool stale; // showing the last-known balance because the latest scan failed
   final List<Map<dynamic, dynamic>> channels;
   final VoidCallback? onChanged;
@@ -808,7 +824,16 @@ class _BtcRowState extends State<_BtcRow> {
           ]),
         ),
       ),
-      if (!widget.dev && _open && parts.isNotEmpty) _SplitLine(ticker: 'BTC', precision: 8, parts: parts),
+      if (!widget.dev && (widget.arrivingSats ?? BigInt.zero) > BigInt.zero)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(DefaultWords.arriving(formatAtoms(widget.arrivingSats.toString(), 8), 'BTC'),
+                key: const Key('arriving-BTC'), style: AmbraText.sub),
+          ),
+        ),
+      if (widget.dev && _open && parts.isNotEmpty) _SplitLine(ticker: 'BTC', precision: 8, parts: parts),
       if (widget.dev)
         _RailLine(
           ticker: 'BTC',

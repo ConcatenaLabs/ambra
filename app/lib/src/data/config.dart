@@ -39,6 +39,11 @@ class Backend {
   /// The key of the default node's operator, which user mode joins by itself: the wallet
   /// joins only a server that shows this key (the web wallet pins the same one). Null for
   /// any other node, whose operator only developer mode's join form joins.
+  /// The Bitcoin ark user mode keeps BTC in (Second's ark server on testnet4, reached
+  /// over gRPC on the default node's own address). Null for any other node: BTC stays on
+  /// the chain and in Lightning there.
+  static String? get bitcoinArk => isDefault ? _origin : null;
+
   static String? get arcaOperatorKey =>
       isDefault ? 'b6f4c5924ad81947658cf85bb93d9267efc54c7fcb2e4577e8c954c68fa087bb' : null;
   static String get leafMaker => '$_origin/leafmaker'; // the live leaf maker user mode's Swap tab trades with

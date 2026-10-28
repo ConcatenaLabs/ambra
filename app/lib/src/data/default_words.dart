@@ -24,6 +24,15 @@ class DefaultWords {
   static const btcFee = 'The fee is paid in BTC.';
   static String feeIn(String ticker) => 'Fee paid in $ticker.';
 
+  // BTC, held on the Bitcoin ark (the web wallet's words for it).
+  static const btcReview = 'Confirm BTC payment';
+  static const arrivesInSeconds = 'in seconds';
+  static const arrivesAfterBlock = 'after a Bitcoin block';
+  static String btcSentArrived(String amount) => 'Sent $amount BTC. It arrived.';
+  static String btcSentAfterBlock(String amount) => 'Sent $amount BTC. It arrives after a Bitcoin block.';
+  static String btcUpTo(String amount) => 'You can send up to $amount BTC this way now.';
+  static const couldNotSend = 'This payment could not be made. Nothing was sent.';
+
   /// The words no default-mode screen says (the contract's list).
   static const forbidden = [
     'rail', 'round', 'leaf', 'operator', 'tree', 'board', 'covenant', 'expiry', 'atom', 'sat', 'forfeit',
@@ -36,5 +45,7 @@ class DefaultWords {
         receiveCode, receiveCodeLine, copyCode, codeCopied, newCode, showAddress, showCode, addressLine,
         recipient, recipientHint, review('5', 'USDX'), reviewLine, sent('5', 'USDX', 1.2), stillArriving('USDX'),
         codeTakesAssets, instantOnly, arriving('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
+        btcReview, arrivesInSeconds, arrivesAfterBlock, btcSentArrived('0.001'), btcSentAfterBlock('0.001'),
+        btcUpTo('0.001'), couldNotSend,
       ];
 }

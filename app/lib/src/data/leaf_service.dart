@@ -245,6 +245,13 @@ class LeafService extends ChangeNotifier {
   /// wallet's own upkeep keeps off the coins for [boardQuiet].
   void personActed() => _personAt = DateTime.now();
 
+  /// Whether something a person asked for runs now or ran within [boardQuiet]: the
+  /// wallet's own upkeep (a board, here or on the Bitcoin side) waits.
+  bool get personBusy {
+    final at = _personAt;
+    return _asking > 0 || (at != null && DateTime.now().difference(at) < boardQuiet);
+  }
+
   /// User mode: a wallet that holds no leaf wallet joins the default node's operator by
   /// itself. The server must show the pinned key ([Backend.arcaOperatorKey]) before
   /// anything is made, and the wallet made must name it; the join restores whatever the
@@ -294,9 +301,7 @@ class LeafService extends ChangeNotifier {
   /// left for [boardBackoff]. Whatever is boarded shows as arriving until its board is
   /// final, then in the figure as before.
   Future<void> autoBoard() async {
-    if (!open || DevMode.instance.on || _boarding || _asking > 0) return;
-    final at = _personAt;
-    if (at != null && DateTime.now().difference(at) < boardQuiet) return;
+    if (!open || DevMode.instance.on || _boarding || personBusy) return;
     final served = minLeaves(info);
     final on = balance?['sequentia_onchain'];
     if (on is! Map || served.isEmpty) return;

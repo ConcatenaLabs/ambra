@@ -18,6 +18,11 @@ pub mod rewards;
 /// job that syncs while the app is closed.
 pub mod leaves;
 
+/// BTC on the Bitcoin ark: open the ark wallet of the phrase, its balance,
+/// payments in the ark, over Lightning and on the chain, and boards funded by
+/// the kit's own BTC.
+pub mod ark_btc;
+
 /// Contract spends under the five-point rule: a drip, a Pignus loan's spends, any
 /// spend of a template the kit carries, checked and signed by the kit's engine.
 pub mod contracts;

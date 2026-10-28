@@ -1,0 +1,308 @@
+//! BTC on the Bitcoin ark: Second's Bark client (`bark::Wallet`, from the
+//! arca repository's `arca-wallet` crate) against an ark server on Bitcoin
+//! (testnet4 here), from the same recovery phrase as the rest of the wallet.
+//! BTC stays native bitcoin: the ark holds it in Bitcoin transactions the
+//! holder can always take on the chain.
+//!
+//! One wallet is open at a time, driven on a runtime of its own. Every call
+//! answers JSON as text, and fails with `{"error": {"kind": "ark", "message"}}`.
+//!
+//! Boarding spends the kit's own BTC: the kit builds and signs an ordinary
+//! payment from the shared address to the board's funding address
+//! ([`bark::Wallet::board_funding_address`]), and Bark takes it as a finished
+//! PSBT ([`bark::Wallet::board_psbt`]), so a board is one transaction and the
+//! wallet keeps no second on-chain wallet.
+
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::{Mutex, OnceLock};
+
+use bark::ark::bitcoin::{self, consensus, Address, Amount, Network};
+use bark::ark::Address as ArkAddress;
+use bark::bip39;
+use bark::{Config, OpenWalletArgs, Wallet, WalletSeed};
+use serde_json::{json, Value};
+
+fn runtime() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("a runtime")
+    })
+}
+
+static WALLET: Mutex<Option<std::sync::Arc<Wallet>>> = Mutex::new(None);
+
+/// A refusal as the app reads it.
+pub fn refusal(msg: impl std::fmt::Display) -> Value {
+    json!({"error": {"kind": "ark", "message": format!("{:#}", msg)}})
+}
+
+fn err(e: anyhow::Error) -> Value {
+    refusal(e)
+}
+
+fn wallet() -> Result<std::sync::Arc<Wallet>, Value> {
+    WALLET.lock().expect("lock").clone().ok_or_else(|| refusal("the Bitcoin wallet is not open"))
+}
+
+/// The directory of the ark wallet of `mnemonic` under the app's `dir`: one per
+/// recovery phrase, named by its fingerprint, so two phrases never share a store.
+pub fn datadir(dir: &Path, network: Network, mnemonic: &bip39::Mnemonic) -> PathBuf {
+    let fp = WalletSeed::new_from_mnemonic(network, mnemonic).fingerprint();
+    dir.join(format!("ark-{}", fp))
+}
+
+fn network(name: &str) -> Result<Network, Value> {
+    match name {
+        "testnet4" => Ok(Network::Testnet4),
+        "signet" => Ok(Network::Signet),
+        "regtest" => Ok(Network::Regtest),
+        "bitcoin" | "mainnet" => Ok(Network::Bitcoin),
+        o => Err(refusal(format!("unknown Bitcoin network {:?}", o))),
+    }
+}
+
+/// Opens (creating when there is none, and then recovering what the server
+/// holds for this phrase) the ark wallet of `mnemonic` against the server at
+/// `server` with the chain read from the esplora at `esplora`. A wallet open
+/// already for the same phrase is kept. The answer is `{"fingerprint",
+/// "server_pubkey", "network"}`.
+pub fn open(dir: &Path, mnemonic: &str, net: &str, server: &str, esplora: &str) -> Result<Value, Value> {
+    let network = network(net)?;
+    let m = bip39::Mnemonic::from_str(mnemonic.trim()).map_err(|e| refusal(format!("the recovery phrase: {}", e)))?;
+    let seed = WalletSeed::new_from_mnemonic(network, &m);
+    if let Some(w) = WALLET.lock().expect("lock").clone() {
+        if w.fingerprint() == seed.fingerprint() {
+            return Ok(json!({"fingerprint": w.fingerprint().to_string(), "network": net, "kept": true}));
+        }
+    }
+    let dd = datadir(dir, network, &m);
+    let mut config = Config::network_default(network);
+    config.server_address = server.to_string();
+    config.esplora_address = Some(esplora.to_string());
+    config.bitcoind_address = None;
+    let w = runtime()
+        .block_on(Wallet::open(
+            network,
+            seed,
+            config,
+            OpenWalletArgs {
+                datadir: Some(dd),
+                create_if_not_exists: true,
+                run_daemon: false,
+                ..Default::default()
+            },
+        ))
+        .map_err(err)?;
+    let props = runtime().block_on(w.properties()).map_err(err)?;
+    let out = json!({
+        "fingerprint": props.fingerprint.to_string(),
+        "network": net,
+        "server_pubkey": props.server_pubkey.map(|k| k.to_string()),
+    });
+    *WALLET.lock().expect("lock") = Some(std::sync::Arc::new(w));
+    Ok(out)
+}
+
+/// Closes the open wallet.
+pub fn close() {
+    WALLET.lock().expect("lock").take();
+}
+
+fn sats(a: Amount) -> String {
+    a.to_sat().to_string()
+}
+
+/// What the wallet holds, in sats: `spendable` (in the ark now), and what is on
+/// its way (`pending_board`, `pending_in_round`, `claimable_lightning_receive`)
+/// or leaving (`pending_lightning_send`, `pending_exit`).
+pub fn balance() -> Result<Value, Value> {
+    let w = wallet()?;
+    let b = runtime().block_on(w.balance()).map_err(err)?;
+    Ok(json!({
+        "spendable": sats(b.spendable),
+        "pending_board": sats(b.pending_board),
+        "pending_in_round": sats(b.pending_in_round),
+        "claimable_lightning_receive": sats(b.claimable_lightning_receive),
+        "pending_lightning_send": sats(b.pending_lightning_send),
+        "pending_exit": b.pending_exit.map(sats),
+    }))
+}
+
+/// One pass of what the wallet does by itself: the server's news (payments
+/// received, boards confirmed, rounds), every pending Lightning receive driven
+/// on, and the maintenance that refreshes coins close to their expiry.
+pub fn sync() -> Result<Value, Value> {
+    let w = wallet()?;
+    runtime().block_on(async {
+        w.sync().await;
+        let claimed = w.try_claim_all_lightning_receives(false).await.map(|v| v.len()).unwrap_or(0);
+        let maintained = w.maintenance().await.map(|_| true).unwrap_or(false);
+        Ok(json!({"lightning_receives": claimed, "maintained": maintained}))
+    })
+}
+
+/// A new ark address of the wallet's: what another wallet of the same ark pays
+/// in seconds.
+pub fn address() -> Result<Value, Value> {
+    let w = wallet()?;
+    let a = runtime().block_on(w.new_address()).map_err(err)?;
+    Ok(json!({"address": a.to_string()}))
+}
+
+/// What `destination` is, as the wallet would pay it: `ark` (an address of an
+/// ark), `lightning` (a BOLT11 invoice) or `onchain` (a Bitcoin address), or
+/// `none`.
+pub fn kind_of(destination: &str) -> &'static str {
+    let d = destination.trim();
+    if ArkAddress::from_str(d).is_ok() {
+        "ark"
+    } else if bark::lightning_invoice::Bolt11Invoice::from_str(d).is_ok() {
+        "lightning"
+    } else if Address::from_str(d).is_ok() {
+        "onchain"
+    } else {
+        "none"
+    }
+}
+
+/// Pays `sats` to `destination` out of the ark: an ark address in the ark
+/// (seconds), an invoice over Lightning (its own amount unless it names
+/// none), a Bitcoin address on the chain (after a Bitcoin block). The answer
+/// is `{"kind", "txid"?}`.
+pub fn send(destination: &str, sats_amount: Option<u64>) -> Result<Value, Value> {
+    let w = wallet()?;
+    let d = destination.trim();
+    let amount = sats_amount.map(Amount::from_sat);
+    match kind_of(d) {
+        "ark" => {
+            let a = ArkAddress::from_str(d).map_err(|e| refusal(format!("the address: {}", e)))?;
+            let amount = amount.ok_or_else(|| refusal("the amount is missing"))?;
+            runtime().block_on(w.send_arkoor_payment(&a, amount)).map_err(err)?;
+            Ok(json!({"kind": "ark"}))
+        },
+        "lightning" => {
+            let inv = bark::lightning_invoice::Bolt11Invoice::from_str(d).map_err(|e| refusal(format!("the invoice: {}", e)))?;
+            runtime().block_on(w.pay_lightning_invoice(inv, amount, true)).map_err(err)?;
+            Ok(json!({"kind": "lightning"}))
+        },
+        "onchain" => {
+            let a = Address::from_str(d)
+                .map_err(|e| refusal(format!("the address: {}", e)))?
+                .require_network(runtime().block_on(w.network()).map_err(err)?)
+                .map_err(|e| refusal(format!("the address: {}", e)))?;
+            let amount = amount.ok_or_else(|| refusal("the amount is missing"))?;
+            let txid = runtime().block_on(w.send_onchain(a, amount)).map_err(err)?;
+            Ok(json!({"kind": "onchain", "txid": txid.to_string()}))
+        },
+        _ => Err(refusal("not an ark address, an invoice or a Bitcoin address")),
+    }
+}
+
+/// An invoice of `sats` paid into the ark: claimed by [`sync`] while the app
+/// runs.
+pub fn invoice(sats_amount: u64, description: Option<String>) -> Result<Value, Value> {
+    let w = wallet()?;
+    let inv = runtime()
+        .block_on(w.bolt11_invoice(Amount::from_sat(sats_amount), description, None))
+        .map_err(err)?;
+    Ok(json!({"invoice": inv.to_string()}))
+}
+
+/// The funding address of a new board and the key and height it is made for:
+/// the kit pays it from the shared address, then [`board_with`] boards it.
+pub fn board_address() -> Result<Value, Value> {
+    let w = wallet()?;
+    runtime().block_on(async {
+        let (kp, idx) = w.derive_store_next_keypair().await.map_err(err)?;
+        let (addr, expiry) = w.board_funding_address(&kp).await.map_err(err)?;
+        Ok(json!({"address": addr.to_string(), "key_index": idx, "expiry_height": expiry}))
+    })
+}
+
+/// Boards the signed transaction `tx_hex` (the kit's payment to the funding
+/// address [`board_address`] gave for `key_index` and `expiry_height`): Bark
+/// broadcasts it and registers the board with the server.
+pub fn board_with(tx_hex: &str, key_index: u32, expiry_height: u32) -> Result<Value, Value> {
+    let w = wallet()?;
+    let bytes = hex_decode(tx_hex)?;
+    let tx: bitcoin::Transaction = consensus::deserialize(&bytes).map_err(|e| refusal(format!("the transaction: {}", e)))?;
+    let mut unsigned = tx.clone();
+    for i in unsigned.input.iter_mut() {
+        i.witness = bitcoin::Witness::new();
+        i.script_sig = bitcoin::ScriptBuf::new();
+    }
+    let mut psbt = bitcoin::Psbt::from_unsigned_tx(unsigned).map_err(|e| refusal(format!("the transaction: {}", e)))?;
+    for (p, i) in psbt.inputs.iter_mut().zip(tx.input.iter()) {
+        p.final_script_witness = Some(i.witness.clone());
+    }
+    runtime().block_on(async {
+        let kp = w.peek_keypair(key_index).await.map_err(err)?;
+        let b = w.board_psbt(psbt, kp, expiry_height as _).await.map_err(err)?;
+        Ok(json!({"amount": sats(b.amount), "funding_txid": b.funding_tx.compute_txid().to_string()}))
+    })
+}
+
+fn hex_decode(s: &str) -> Result<Vec<u8>, Value> {
+    let s = s.trim();
+    if s.len() % 2 != 0 {
+        return Err(refusal("the transaction: odd hex"));
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| refusal(format!("the transaction: {}", e))))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kinds() {
+        assert_eq!(kind_of("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"), "onchain");
+        assert_eq!(kind_of("hello"), "none");
+        assert_eq!(kind_of(""), "none");
+    }
+
+    /// Against a live ark: `ARK_SMOKE_SERVER`, `ARK_SMOKE_ESPLORA`, and a fresh
+    /// phrase. Opens (creates) the wallet, reads its balance, draws an ark
+    /// address, an invoice and a board address. Skipped without the variables.
+    #[test]
+    fn live_smoke() {
+        let (Ok(server), Ok(esplora)) = (std::env::var("ARK_SMOKE_SERVER"), std::env::var("ARK_SMOKE_ESPLORA")) else {
+            return;
+        };
+        let dir = std::env::var("ARK_SMOKE_DIR").expect("ARK_SMOKE_DIR");
+        let phrase = std::env::var("ARK_SMOKE_PHRASE")
+            .unwrap_or_else(|_| bip39::Mnemonic::generate(12).expect("12 words").to_string());
+        let t = std::time::Instant::now();
+        let o = open(Path::new(&dir), &phrase, "testnet4", &server, &esplora).expect("open");
+        println!("open {:?} in {:?}", o, t.elapsed());
+        println!("balance {}", balance().expect("balance"));
+        let a = address().expect("address");
+        println!("address {}", a);
+        assert_eq!(kind_of(a["address"].as_str().unwrap()), "ark");
+        let t = std::time::Instant::now();
+        println!("sync {} in {:?}", sync().expect("sync"), t.elapsed());
+        match invoice(20_000, Some("smoke".into())) {
+            Ok(i) => {
+                println!("invoice {}", i);
+                assert_eq!(kind_of(i["invoice"].as_str().unwrap()), "lightning");
+            },
+            Err(e) => println!("invoice refused {}", e),
+        }
+        println!("board address {}", board_address().expect("board address"));
+        close();
+    }
+
+    #[test]
+    fn hex() {
+        assert_eq!(hex_decode("00ff10").unwrap(), vec![0, 255, 16]);
+        assert!(hex_decode("abc").is_err());
+    }
+}

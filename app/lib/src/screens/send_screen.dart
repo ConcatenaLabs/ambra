@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../rust/api.dart' as core;
 import '../data/api_client.dart';
+import '../data/ark_btc_service.dart';
 import '../data/asset_picker.dart';
 import '../data/btc_state.dart';
 import '../data/config.dart';
@@ -19,6 +20,7 @@ import '../data/ln_rail.dart';
 import '../data/openamp_service.dart';
 import '../data/price_service.dart';
 import '../data/seqln_keys.dart' as lnkeys;
+import '../data/subswap_service.dart' show bolt11AmountMsat;
 import '../data/wallet_cache.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
@@ -322,6 +324,13 @@ class _SendTabState extends State<SendTab> {
   }
 
   Future<void> _review() async {
+    // User mode: BTC the Bitcoin ark holds pays a BTC invoice, an ark address or (BTC
+    // picked) a Bitcoin address, chosen without asking; what the ark cannot cover takes
+    // the path it always took.
+    if (!DevMode.instance.on && ArkBtcService.instance.open) {
+      final routed = await _maybeArkBtc();
+      if (routed || !mounted) return;
+    }
     // A Lightning invoice in the recipient field is paid over Lightning, whatever asset is picked:
     // the invoice names its own amount, and the pay screen its asset.
     final invoice = bolt11Of(_addr.text);
@@ -455,6 +464,82 @@ class _SendTabState extends State<SendTab> {
       ));
       _load();
     }
+  }
+
+  /// Pays out of the Bitcoin ark when the destination is one it pays and it holds the
+  /// amount; answers whether it took the payment (or refused it in plain words).
+  Future<bool> _maybeArkBtc() async {
+    final ark = ArkBtcService.instance;
+    final raw = _addr.text.trim();
+    final inv = bolt11Of(raw);
+    final dest = inv ?? raw;
+    final btcInvoice = inv != null && RegExp(r'^lntb[0-9]', caseSensitive: false).hasMatch(inv);
+    final kind = ark.kindOf(dest);
+    BigInt? sats;
+    if (kind == 'lightning' && btcInvoice) {
+      final msat = bolt11AmountMsat(inv);
+      if (msat == null) return false; // an invoice naming no amount: the old path asks for one
+      sats = msat ~/ BigInt.from(1000);
+    } else if (kind == 'ark' || (kind == 'onchain' && _isBtc)) {
+      sats = parseAtoms(_amount.text, 8);
+      if (sats == null || sats <= BigInt.zero) {
+        _snack('Enter a valid amount');
+        return true;
+      }
+    } else {
+      return false;
+    }
+    if (sats > ark.spendable) {
+      if (kind == 'ark') {
+        _snack(DefaultWords.btcUpTo(formatAtoms(ark.spendable.toString(), 8)));
+        return true;
+      }
+      return false; // the chain or Lightning pays it, as before
+    }
+    final amountStr = formatAtoms(sats.toString(), 8);
+    final fast = kind != 'onchain';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AmbraColors.panel,
+        title: const Text(DefaultWords.btcReview, style: AmbraText.title),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('To  ${dest.length > 24 ? '${dest.substring(0, 12)}…${dest.substring(dest.length - 8)}' : dest}',
+              style: AmbraText.muted),
+          const SizedBox(height: 6),
+          Text('Amount  $amountStr BTC', style: AmbraText.muted),
+          const SizedBox(height: 6),
+          Text('Arrives  ${fast ? DefaultWords.arrivesInSeconds : DefaultWords.arrivesAfterBlock}', style: AmbraText.muted),
+        ]),
+        actions: [
+          GhostButton(label: 'Cancel', onPressed: () => Navigator.pop(context, false)),
+          TextButton(key: const Key('send-btc-confirm'), onPressed: () => Navigator.pop(context, true), child: const Text('Send')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return true;
+    setState(() => _sendingInTree = true);
+    final started = DateTime.now();
+    try {
+      await ark.send(dest, kind == 'lightning' ? null : sats);
+      final secs = DateTime.now().difference(started).inMilliseconds / 1000;
+      if (!mounted) return true;
+      _addr.clear();
+      _amount.clear();
+      ScaffoldMessenger.of(context).showSnackBar(ambraSnack(
+          '${fast ? DefaultWords.btcSentArrived(amountStr) : DefaultWords.btcSentAfterBlock(amountStr)} (${secs.toStringAsFixed(1)} s)'));
+    } catch (e) {
+      debugPrint('ark send refused: $e');
+      if (mounted) setState(() => _sendingInTree = false);
+      // Never worse than before: an invoice or an address the ark could not pay goes the
+      // way it always went; an ark address has no other way.
+      if (kind != 'ark') return false;
+      if (mounted) _snack(DefaultWords.couldNotSend);
+    } finally {
+      if (mounted) setState(() => _sendingInTree = false);
+    }
+    _load();
+    return true;
   }
 
   /// A payment to a receive code ([LeafService.paysInTree]): off the chain, from this
