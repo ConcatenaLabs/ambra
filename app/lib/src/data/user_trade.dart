@@ -94,8 +94,12 @@ class UserWords {
   static const priceMoved = 'The price moved. Here is the new one.';
   static const sent = 'Sent';
   static const settled = 'Settled';
+  static const waitingOther = 'Waiting for the other side. Nothing has left your wallet yet.';
+  static const receivedSettling = 'Received. Settled after the next Bitcoin blocks.';
+  static String minutes(String word, int n) => '$word ($n min)';
   static const returned = 'Returned: nothing traded.';
   static String returnedFees(String fees) => 'Returned: nothing traded. Fees of $fees were paid.';
+  static const returnedLapsed = 'Returned: nothing traded. The other side\'s offer ran out while the trade waited.';
   static const working = 'Working…';
   static const failed = 'This trade could not be made. Nothing moved.';
   static const recent = 'Your trades';
@@ -121,12 +125,45 @@ class UserWords {
     priceMoved,
     sent,
     settled,
+    waitingOther,
+    receivedSettling,
+    minutes(sent, 3),
     returned,
     returnedFees('1 XT'),
+    returnedLapsed,
     working,
     failed,
     recent,
   ];
+}
+
+/// Whether what the trade buys is already the wallet's, only its settling left.
+bool heldAlready(Map r) {
+  if (r['source'] == 'btc-gateway') return r['dir'] == 'sell' ? r['btcPaid'] == true : (r['preimage'] != null && r['receiveState'] == 'received');
+  if (r['source'] == 'leaf-maker') return r['swapState'] == 'done';
+  if (r['source'] == 'covenant-round') return r['takeState'] == 'released';
+  return false;
+}
+
+/// What the list of trades says of one: Sent, then Settled; a trade waiting on the other side or
+/// on its settling says so, with the minutes it has waited once it has waited one. Null for a
+/// trade returned with fees paid (the row names the fees). The web wallet's tradeStateWord().
+String? tradeStateWord(Map r, int nowMs) {
+  final st = r['state'];
+  if (st == 'settled') return UserWords.settled;
+  if (st == 'returned' && ((r['feesPaid'] as List?) ?? const []).isNotEmpty) return null;
+  if (st == 'returned' && r['whyKind'] == 'lapsed') return UserWords.returnedLapsed;
+  if (st == 'returned' || st == 'failed') return UserWords.returned;
+  if (st == 'confirming') return UserWords.working;
+  int since(Object? t) => ((nowMs - ((t as num?)?.toInt() ?? (r['at'] as num?)?.toInt() ?? nowMs)) / 60000).floor();
+  // Buying with BTC: nothing has left the wallet until its asset is held for it.
+  if (st == 'waiting') {
+    final m = since(r['waitingSince']);
+    return m >= 1 ? UserWords.minutes(UserWords.waitingOther, m) : UserWords.waitingOther;
+  }
+  final m = since(r['sentAt']);
+  final word = heldAlready(r) ? UserWords.receivedSettling : UserWords.sent;
+  return m >= 1 ? UserWords.minutes(word, m) : word;
 }
 
 BigInt _big(Object? v) => BigInt.tryParse('${v ?? 0}') ?? BigInt.zero;

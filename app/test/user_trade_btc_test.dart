@@ -23,8 +23,9 @@ class FakeBtc implements BtcLightning {
   }
 
   @override
-  Future<Map<String, dynamic>> decode(String invoice) async =>
-      {'sats': s.makerSats ?? s.lastWant, 'payment_hash': h, 'expires_at': 4000000000, 'min_final_cltv': 18};
+  Future<Map<String, dynamic>> decode(String invoice) async => invoice == 'lnbcrt-maker-2'
+      ? {'sats': s.makerSats ?? s.lastWant, 'payment_hash': s.renew == 'other-hash' ? 'ab' * 32 : h, 'expires_at': 4000000000, 'min_final_cltv': 18}
+      : {'sats': s.makerSats ?? s.lastWant, 'payment_hash': h, 'expires_at': s.expired ? DateTime.now().millisecondsSinceEpoch ~/ 1000 - 60 : 4000000000, 'min_final_cltv': 18};
   @override
   Future<Map<String, dynamic>> invoiceStatus(String hash) async =>
       s.invoices[hash]?['status'] == 'paid' ? {'status': 'paid', 'preimage': p} : {'status': 'unpaid'};
@@ -59,6 +60,8 @@ class StandIn {
   int? maxDelay, needAsked;
   ({BigInt fee, int delay})? route;
   bool refuseLock = false;
+  bool expired = false;
+  String? renew;
   int locks = 0;
 
   Future<dynamic> run(String cmd, Map<String, dynamic> a) async {
@@ -124,6 +127,10 @@ class StandIn {
       };
     }
     posts.add([url.split('/v1/btc/').last, post]);
+    if (url.endsWith('/v1/btc/invoice')) {
+      if (renew == null) throw Exception('404 no such path');
+      return {'swap': post!['swap'], 'invoice': 'lnbcrt-maker-2'};
+    }
     if (url.endsWith('/v1/btc/lock')) {
       locks++;
       if (refuseLock) {
@@ -389,5 +396,55 @@ void main() {
     s.ready = true;
     await r0.eng.advance(rec);
     expect(r0.paidOn, ['lightning']);
+  });
+
+  // A purchase whose asset became final only after the maker's invoice ran out (a parent-chain
+  // split held finality for hours): the maker renews it under the same hash, or the trade returns.
+  Future<(StandIn, Map<String, dynamic>)> boughtPastTheInvoice(String? renew) async {
+    final s = StandIn()
+      ..makerSats = BigInt.from(50000)
+      ..claimed = '${100000 - 616}'
+      ..renew = renew;
+    final eng = engine(s, 'BTC', x);
+    final q = await eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
+    expect(q.ok, isTrue, reason: q.why);
+    await eng.confirm(q.choice!, q.ticket!);
+    s.receives[h]!['state'] = 'issuing';
+    s.expired = true;
+    s.ready = true;
+    final r = await eng.advance((await eng.records()).first);
+    return (s, r);
+  }
+
+  test('buying with BTC: an invoice that ran out while the asset became final is renewed under the same hash and paid', () async {
+    final (s, r) = await boughtPastTheInvoice('same');
+    expect(s.posts.firstWhere((e) => e[0] == 'invoice')[1], {'swap': 's2'});
+    expect(s.btcPaid, ['lnbcrt-maker-2'], reason: 'the renewed invoice is paid, never the one that ran out');
+    expect(r['preimage'], p);
+  });
+
+  test('buying with BTC: a maker that renews no invoice leaves the trade returned, nothing paid, and the row says why', () async {
+    final (s, r) = await boughtPastTheInvoice(null);
+    expect(r['state'], 'returned');
+    expect(r['whyKind'], 'lapsed');
+    expect(s.btcPaid, isEmpty);
+    expect(tradeStateWord(r, DateTime.now().millisecondsSinceEpoch), UserWords.returnedLapsed);
+  });
+
+  test('buying with BTC: a renewed invoice under another hash is not paid', () async {
+    final (s, r) = await boughtPastTheInvoice('other-hash');
+    expect(r['state'], 'returned');
+    expect(s.btcPaid, isEmpty);
+  });
+
+  test('the rows say what is already true, with the minutes waited', () {
+    const t = 10 * 60000;
+    expect(tradeStateWord({'state': 'waiting', 'source': 'btc-gateway', 'waitingSince': t - 30000}, t), UserWords.waitingOther);
+    expect(tradeStateWord({'state': 'waiting', 'source': 'btc-gateway', 'waitingSince': 0}, t), '${UserWords.waitingOther} (10 min)');
+    expect(tradeStateWord({'state': 'sent', 'source': 'btc-gateway', 'dir': 'buy', 'preimage': p, 'receiveState': 'received', 'sentAt': t - 120000}, t),
+        '${UserWords.receivedSettling} (2 min)');
+    expect(tradeStateWord({'state': 'sent', 'source': 'leaf-maker', 'sentAt': t}, t), UserWords.sent);
+    expect(tradeStateWord({'state': 'returned', 'feesPaid': [{'asset': x, 'atoms': '1'}]}, t), isNull);
+    expect(tradeStateWord({'state': 'settled'}, t), UserWords.settled);
   });
 }
