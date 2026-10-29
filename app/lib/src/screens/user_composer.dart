@@ -339,8 +339,7 @@ class _UserComposerState extends State<UserComposer> {
     if (r['state'] == 'returned' && fees.isNotEmpty) {
       return UserWords.returnedFees([for (final f in fees) _amt('${(f as Map)['asset']}', BigInt.parse('${f['atoms']}'))].join(' and '));
     }
-    if (r['state'] == 'returned' || r['state'] == 'failed') return UserWords.returned;
-    return UserWords.sent;
+    return tradeStateWord(r, DateTime.now().millisecondsSinceEpoch) ?? UserWords.returned;
   }
 
   Widget _picker(String key, List<String> list, String? value, void Function(String) onChanged) => DropdownButton<String>(

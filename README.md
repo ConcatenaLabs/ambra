@@ -148,7 +148,13 @@ module that implements it.
   hides none of them. Review shows what you pay, what you get and one line of fees, each in
   the asset it is paid in, before anything is signed; **Trade** confirms it, and the trade then
   reads **Sent**, **Settled** once final, or **Returned: nothing traded.**, with nothing to do
-  either way. It trades only what settles in one step from the wallet's coins in a leaf
+  either way. Settling waits for Bitcoin blocks, so while it waits the row says what is already
+  true, with the minutes waited: "Waiting for the other side. Nothing has left your wallet yet."
+  (buying with BTC, until the asset is held for the wallet) or "Received. Settled after the next
+  Bitcoin blocks." A purchase with BTC whose maker's invoice runs out while it waits asks the
+  maker for a new one under the same hash, amount, lock and fee, and never pays one that ran
+  out; when there is none, it reads "Returned: nothing traded. The other side's offer ran out
+  while the trade waited." It trades only what settles in one step from the wallet's coins in a leaf
   operator's tree: an in-tree swap with a live leaf maker, a transparent covenant order
   taken in the operator's round, or an order resting in the operator's tree filled in one
   transfer the operator co-signs, choosing the one that gives the most, then the one with the

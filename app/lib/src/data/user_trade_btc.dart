@@ -349,6 +349,7 @@ class BtcTrades {
     // the trade is under way whatever the maker answers now: a lock it refused is asked for again
     // as the trade is followed, and a receive it never pays lapses and the trade comes back.
     rec['state'] = 'waiting';
+    rec['waitingSince'] = now();
     await put(rec);
     try {
       await fetchJson('$maker/v1/btc/lock', post: {'swap': rec['swap'], 'invoice': r['invoice']});
@@ -475,6 +476,18 @@ class BtcTrades {
       } catch (_) {
         st = {'state': 'none'};
       }
+      // The asset is final only after Bitcoin blocks, which can outlast the maker's invoice: one
+      // that runs out soon is renewed by the maker under the same hash, for the same amount, on no
+      // longer a lock or a higher fee, or the trade comes back with nothing paid. An invoice that
+      // ran out is never paid.
+      if (st['state'] == 'none' && !await _freshInvoice(rec, b, lock)) {
+        release('${rec['maker']}', '${rec['swap']}');
+        rec['state'] = 'returned';
+        rec['returnedAt'] = now();
+        rec['why'] = 'the maker\'s invoice ran out while the trade waited';
+        rec['whyKind'] = 'lapsed';
+        return put(rec);
+      }
       if (st['state'] == 'none') {
         st = await b.pay(invoice: '${rec['invoiceBtc']}', maxFeeSats: _big(rec['routeFee']), maxDelay: lock + kExtraBlocks);
       }
@@ -506,6 +519,58 @@ class BtcTrades {
       }
     }
     return put(rec);
+  }
+}
+
+extension on BtcTrades {
+  /// The maker's invoice for a purchase, renewed when it runs out within [kInvoiceLeftSeconds]:
+  /// the same hash and amount, a final delta, fee and lock no greater than the trade allowed.
+  /// True when it can be paid now; false when it cannot (the maker gives no new one, or not one
+  /// like it). The web wallet's freshInvoice().
+  Future<bool> _freshInvoice(Map<String, dynamic> rec, BtcLightning b, int lock) async {
+    double left(Map d) => (d['expires_at'] as num).toDouble() - now() / 1000;
+    Map<String, dynamic> cur;
+    try {
+      cur = await b.decode('${rec['invoiceBtc']}');
+    } catch (_) {
+      return false;
+    }
+    if (left(cur) >= kInvoiceLeftSeconds) return true;
+    Map<String, dynamic> o;
+    try {
+      o = await fetchJson('${rec['maker']}/v1/btc/invoice', post: {'swap': rec['swap']});
+    } catch (e) {
+      log('[user trade] the maker gave no new invoice: $e');
+      return false;
+    }
+    Map<String, dynamic> n;
+    try {
+      n = await b.decode('${o['invoice']}');
+    } catch (_) {
+      return false;
+    }
+    final cltv = (rec['minFinalCltv'] as num?)?.toInt() ?? 18;
+    if (n['payment_hash'] != rec['hash'] ||
+        _big(n['sats']) != _big(rec['sats']) ||
+        left(n) < kInvoiceLeftSeconds ||
+        ((n['min_final_cltv'] as num?)?.toInt() ?? 18) > cltv) {
+      log('[user trade] the maker\'s new invoice is not the trade\'s');
+      return false;
+    }
+    ({BigInt fee, int delay})? rt;
+    try {
+      rt = await b.payRoute('${o['invoice']}');
+    } catch (_) {
+      rt = null;
+    }
+    if (rt != null && (rt.fee > _big(rec['routeFee']) || rt.delay > lock)) {
+      log('[user trade] the new invoice\'s route costs more than the trade allowed');
+      return false;
+    }
+    rec['invoiceBtc'] = o['invoice'];
+    await put(rec);
+    log('[user trade] the maker renewed its invoice for ${rec['swap']}');
+    return true;
   }
 }
 
