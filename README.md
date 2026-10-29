@@ -157,14 +157,18 @@ module that implements it.
   and says "Not offered right now" in plain words for one nobody fills in one step; no screen
   of it names a rail, a round, a leaf, the operator, a covenant, an expiry or an atom. BTC
   trades against an asset the same way, in one hash-lock: the asset moves in the operator's
-  tree and the BTC over the wallet's own hosted Bitcoin Lightning node, under the hash of
-  whoever receives the BTC (`app/lib/src/data/user_trade_btc.dart`), with the leaf maker that
-  quotes BTC at the node's origin (`/leafmaker-btc`, beside the in-tree maker at `/leafmaker`). When the wallet sells
-  for BTC its invoice is a hold under a hash it makes itself, its preimage kept on the phone
-  and handed to the node only to settle a payment held there for the whole amount; when it
-  buys with BTC it pays the maker's invoice only once the asset it receives is held for good,
-  its routing fee and lock capped at the route the ticket showed
-  (`app/lib/src/data/btc_lightning.dart`). The screens below are developer mode's.
+  tree and the BTC over Lightning, under the hash of whoever receives the BTC
+  (`app/lib/src/data/user_trade_btc.dart`), with the leaf maker that quotes BTC at the node's
+  origin (`/leafmaker-btc`, beside the in-tree maker at `/leafmaker`). In user mode the BTC is
+  the wallet's BTC on the Bitcoin ark (`app/lib/src/data/ark_btc_lightning.dart`): buying with
+  BTC pays the maker's invoice out of the ark, and selling for BTC is an invoice of the ark's,
+  claimed into it, so no channel room is needed. When the ark is not open, and always in
+  developer mode, it is the wallet's own hosted Bitcoin Lightning node
+  (`app/lib/src/data/btc_lightning.dart`): selling makes a hold under a hash the wallet makes
+  itself, its preimage kept on the phone and handed to the node only to settle a payment held
+  there for the whole amount. A trade is finished on the rail it was priced on. Either way the
+  wallet pays the maker's invoice only once the asset it receives is held for good, its fee
+  and lock capped at the ones the ticket showed. The screens below are developer mode's.
 - **Same-chain atomic swap**: pay one Sequentia asset, receive another, settled in a
   single atomic transaction against the SeqDEX daemon's order book
   (`app/lib/src/screens/swap_screen.dart`). The review sheet states finality honestly:

@@ -169,6 +169,52 @@ UserTradeEngine engine(StandIn s, String pay, String receive, {bool btc = true})
   ));
 }
 
+/// A [FakeBtc] that notes which rail paid.
+class RailBtc extends FakeBtc {
+  RailBtc(super.s, this.name, this.paidOn);
+  final String name;
+  final List<String> paidOn;
+  @override
+  Future<Map<String, dynamic>> pay({required String invoice, BigInt? maxFeeSats, int? maxDelay}) {
+    paidOn.add(name);
+    return super.pay(invoice: invoice, maxFeeSats: maxFeeSats, maxDelay: maxDelay);
+  }
+}
+
+/// An engine whose BTC has two rails, `ark` and `lightning`: [now] picks the one new trades take,
+/// and [arkOpen] whether the ark is there.
+({UserTradeEngine eng, List<String> paidOn, void Function(String) use, void Function(bool) ark}) railEngine(StandIn s, String pay, String receive) {
+  final paidOn = <String>[];
+  final rails = {'ark': RailBtc(s, 'ark', paidOn), 'lightning': RailBtc(s, 'lightning', paidOn)};
+  var now = 'ark';
+  var arkOpen = true;
+  BtcLightning? on(String r) => r == 'ark' && !arkOpen ? null : rails[r];
+  final eng = UserTradeEngine(UserTradeDeps(
+    run: s.run,
+    fetchJson: s.fetchJson,
+    makers: () => ['http://m'],
+    relayBook: (_, _) async => const [],
+    admitted: () async => (
+      pairs: {
+        'chains': {
+          'g': {
+            'pairs': [
+              {'pay': pay, 'receive': receive, 'sources': ['btc-gateway']}
+            ]
+          }
+        }
+      },
+      genesis: 'g',
+    ),
+    read: () async => s.stored,
+    write: (v) async => s.stored = v,
+    btc: () => on(now),
+    btcRail: () => now,
+    btcOf: on,
+  ));
+  return (eng: eng, paidOn: paidOn, use: (r) => now = r, ark: (o) => arkOpen = o);
+}
+
 void main() {
   test('selling for BTC: the wallet\'s hash, its leaf pays first, and the preimage goes to the operator once the BTC came', () async {
     final s = StandIn();
@@ -286,5 +332,62 @@ void main() {
     await eng.advance((await eng.records()).first);
     expect(s.locks, 2, reason: 'the lock is asked for again as the trade is followed');
     expect(jsonDecode(s.stored!), isA<List>());
+  });
+
+  test('a BTC trade is finished on the rail it was priced on, whatever new trades take by then', () async {
+    final s = StandIn()
+      ..makerSats = BigInt.from(50000)
+      ..claimed = '${100000 - 616}';
+    final r0 = railEngine(s, 'BTC', x);
+    final q = await r0.eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
+    expect(q.ok, isTrue, reason: q.why);
+    var r = await r0.eng.confirm(q.choice!, q.ticket!);
+    expect(r['btcRail'], 'ark');
+    // Developer mode turned on: new trades take the hosted node; this one stays on the ark.
+    r0.use('lightning');
+    s.receives[h]!['state'] = 'issuing';
+    s.ready = true;
+    // The ark not open yet (the app just started): the trade waits, nothing is paid elsewhere.
+    r0.ark(false);
+    r = await r0.eng.advance((await r0.eng.records()).first);
+    expect(r['state'], 'waiting');
+    expect(r0.paidOn, isEmpty);
+    r0.ark(true);
+    r = await r0.eng.advance((await r0.eng.records()).first);
+    expect(r0.paidOn, ['ark']);
+    expect(r['preimage'], p);
+  });
+
+  test('selling for BTC on the ark: the ark\'s invoice is the one the maker pays, and its claim settles it', () async {
+    final s = StandIn();
+    final r0 = railEngine(s, x, 'BTC');
+    final q = await r0.eng.quote(pay: x, receive: 'BTC', amount: BigInt.from(200680));
+    expect(q.ok, isTrue, reason: q.why);
+    var r = await r0.eng.confirm(q.choice!, q.ticket!);
+    expect(r['btcRail'], 'ark');
+    expect(r['state'], 'sent');
+    r0.use('lightning');
+    s.invoices[h]!['status'] = 'paid';
+    r = await r0.eng.advance((await r0.eng.records()).first);
+    expect(s.posted, p);
+    s.pays[h]!['state'] = 'paid';
+    r = await r0.eng.advance((await r0.eng.records()).first);
+    expect(r['state'], 'settled');
+    expect(r0.paidOn, isEmpty, reason: 'a sale pays no BTC');
+  });
+
+  test('a trade priced before the wallet named rails is followed on the rail of the moment', () async {
+    final s = StandIn()
+      ..makerSats = BigInt.from(50000)
+      ..claimed = '${100000 - 616}';
+    final r0 = railEngine(s, 'BTC', x);
+    r0.use('lightning');
+    final q = await r0.eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
+    await r0.eng.confirm(q.choice!, q.ticket!);
+    final rec = (await r0.eng.records()).first..remove('btcRail');
+    s.receives[h]!['state'] = 'issuing';
+    s.ready = true;
+    await r0.eng.advance(rec);
+    expect(r0.paidOn, ['lightning']);
   });
 }

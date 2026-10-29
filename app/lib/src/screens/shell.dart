@@ -7,6 +7,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../rust/api.dart' as core;
 import '../data/ark_btc_service.dart';
 import '../data/asset_picker.dart';
+import '../data/btc_lightning.dart' show decodeBtcInvoice;
 import '../data/btc_state.dart';
 import '../data/channel_move_service.dart';
 import '../data/config.dart';
@@ -1635,7 +1636,17 @@ class _ReceiveTabState extends State<ReceiveTab> {
     // A new code once the one shown was paid (its receive request is single use), or once
     // the ark opened after the code was drawn without it.
     // A code carrying an invoice is spent once BTC arrived on the ark: a new one then.
-    final invoicePaid = _codeAmount.isNotEmpty && ark.open && ark.spendable + ark.arriving > _arkSeen;
+    final paid = ark.received;
+    final invoicePaid = (paid != null && paid.hash == _codeInvoiceHash) ||
+        (_codeAmount.isNotEmpty && ark.open && ark.spendable + ark.arriving > _arkSeen);
+    if (paid != null && paid.hash == _codeInvoiceHash && _toldPaid != paid.hash) {
+      _toldPaid = paid.hash;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+            .showSnackBar(ambraSnack(DefaultWords.received(formatAtoms(paid.sats.toString(), 8), 'BTC')));
+      });
+    }
     final stale = _code == null ||
         l.arrivedCount != _paidAt ||
         (ark.open && _codeArk == null) ||
@@ -1652,6 +1663,8 @@ class _ReceiveTabState extends State<ReceiveTab> {
 
   String? _codeArk;
   String? _codeSeq;
+  String? _codeInvoiceHash; // the payment hash of the code's lightning= invoice
+  String? _toldPaid;
 
   // The optional BTC amount: with one, the code also names it and carries an invoice from
   // the Bitcoin ark for exactly that amount, which the wallet claims while it is open.
@@ -1698,9 +1711,11 @@ class _ReceiveTabState extends State<ReceiveTab> {
       _arkSeen = ArkBtcService.instance.spendable + ArkBtcService.instance.arriving;
       final amount = _amountOf(_codeAmount);
       String? invoice;
+      _codeInvoiceHash = null;
       if (amount != null && ArkBtcService.instance.open) {
         try {
           invoice = await ArkBtcService.instance.invoice(amount.$2);
+          _codeInvoiceHash = '${decodeBtcInvoice(invoice)['payment_hash']}';
         } catch (_) {}
       }
       return PayCode(

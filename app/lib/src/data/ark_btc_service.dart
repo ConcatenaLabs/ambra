@@ -92,6 +92,8 @@ class ArkBtcService extends ChangeNotifier {
   void stop() {
     _timer?.cancel();
     _timer = null;
+    _watching = null;
+    received = null;
     if (open) ark.arkClose();
     open = false;
     balance = null;
@@ -196,11 +198,44 @@ class ArkBtcService extends ChangeNotifier {
     return out;
   }
 
-  /// An invoice of [sats] paid into the ark; the wallet claims it while it runs.
+  /// An invoice of [sats] paid into the ark. While it runs the wallet looks for its payment
+  /// every [watchEvery] and claims it at once ([received] then names it); a newer invoice
+  /// takes the watch over.
   Future<String> invoice(BigInt sats) async {
     final out = jsonDecode(await ark.arkInvoice(sats: sats)) as Map;
-    _plan(const Duration(seconds: 3));
+    final hash = '${out['payment_hash']}';
+    final until = ((out['expires_at'] as num?)?.toInt() ?? 0) * 1000;
+    _watching = hash;
+    unawaited(_watch(hash, sats, until));
     return '${out['invoice']}';
+  }
+
+  /// How often an open invoice's payment is looked for.
+  static const watchEvery = Duration(seconds: 3);
+
+  String? _watching;
+
+  /// The last invoice of the ark's that was paid and claimed: its hash and amount.
+  ({String hash, BigInt sats})? received;
+
+  Future<void> _watch(String hash, BigInt sats, int untilMs) async {
+    while (open && _watching == hash && DateTime.now().millisecondsSinceEpoch < untilMs) {
+      await Future.delayed(watchEvery);
+      if (!open || _watching != hash) return;
+      try {
+        final st = jsonDecode(await ark.arkReceiveStatus(hash: hash, claim: true)) as Map;
+        if (st['state'] == 'paid') {
+          _watching = null;
+          received = (hash: hash, sats: BigInt.tryParse('${st['amount']}') ?? sats);
+          debugPrint('[ambra-ark] invoice paid and claimed: $hash');
+          await refresh();
+          return;
+        }
+        if (st['state'] == 'unknown') return;
+      } catch (e) {
+        debugPrint('[ambra-ark] invoice watch: $e');
+      }
+    }
   }
 
   /// A new address of the ark: another wallet of the same ark pays it in seconds.

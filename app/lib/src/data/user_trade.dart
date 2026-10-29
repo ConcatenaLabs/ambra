@@ -414,6 +414,8 @@ class UserTradeDeps {
     required this.write,
     this.relayFills,
     this.btc,
+    this.btcRail,
+    this.btcOf,
     int Function()? now,
     void Function(String)? log,
     Future<void> Function(int ms)? sleep,
@@ -433,6 +435,11 @@ class UserTradeDeps {
   /// The wallet's Bitcoin Lightning, read at each use (null, or answering null: then nothing is
   /// traded for or with BTC).
   final BtcLightning? Function()? btc;
+
+  /// The rail [btc] answers for now (`ark` or `lightning`), and the wallet's Bitcoin Lightning on
+  /// a named rail: a BTC trade is finished on the rail it was priced on. Both null: one rail.
+  final String? Function()? btcRail;
+  final BtcLightning? Function(String rail)? btcOf;
   final Future<String?> Function() read;
   final Future<void> Function(String value) write;
   final int Function() now;
@@ -452,6 +459,8 @@ class UserTradeEngine {
       settleStep: _settleStep,
       maxFeePpm: kMaxFeePpm,
       firmMarginMs: kFirmMarginMs,
+      railNow: d.btcRail,
+      railOf: d.btcOf,
     );
   }
   final UserTradeDeps d;

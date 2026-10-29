@@ -58,7 +58,7 @@ pub fn ark_send(destination: String, sats: Option<u64>) -> Result<String> {
     text(ark_btc::send(&destination, sats))
 }
 
-/// An invoice of `sats` paid into the ark.
+/// An invoice of `sats` paid into the ark: `{invoice, payment_hash, expires_at}`.
 pub fn ark_invoice(sats: u64, description: Option<String>) -> Result<String> {
     text(ark_btc::invoice(sats, description))
 }
@@ -72,4 +72,29 @@ pub fn ark_board_address() -> Result<String> {
 /// [`ark_board_address`] gave.
 pub fn ark_board_with(tx_hex: String, key_index: u32, expiry_height: u32) -> Result<String> {
     text(ark_btc::board_with(&tx_hex, key_index, expiry_height))
+}
+
+/// The fee of paying `sats` over Lightning out of the ark, and the longest lock
+/// the payment may take in blocks: `{fee, gross, max_route_delay}`.
+pub fn ark_pay_fee(sats: u64) -> Result<String> {
+    text(ark_btc::pay_fee(sats))
+}
+
+/// Pays `invoice` out of the ark, refused when its fee would pass `max_fee_sats`
+/// or its lock `max_delay` blocks; a payment already made under the invoice's
+/// hash is not made again. `{state: complete|pending|failed, preimage?, reason?}`.
+pub fn ark_pay(invoice: String, max_fee_sats: Option<u64>, max_delay: Option<u32>, wait: bool) -> Result<String> {
+    text(ark_btc::pay(&invoice, max_fee_sats, max_delay, wait))
+}
+
+/// A payment's state under `hash` (`drive`: asked of the server first):
+/// `{state: none|pending|complete, preimage?}`.
+pub fn ark_pay_status(hash: String, drive: bool) -> Result<String> {
+    text(ark_btc::pay_status(&hash, drive))
+}
+
+/// A receive's state under `hash` (`claim`: a held payment claimed first):
+/// `{state: paid|waiting|unknown, preimage?, amount?}`.
+pub fn ark_receive_status(hash: String, claim: bool) -> Result<String> {
+    text(ark_btc::receive_status(&hash, claim))
 }

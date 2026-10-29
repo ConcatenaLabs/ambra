@@ -4,8 +4,8 @@
 /// The asset moves inside the operator's tree under a payment hash (the leaf library's
 /// `lightning_pay` and `lightning_receive` under a hash, the operator settling it between its own
 /// two wallets); the BTC moves over Bitcoin Lightning under the same hash, between the person's
-/// Bitcoin Lightning wallet ([BtcLightning]) and the maker's node. BTC is never a leaf and never
-/// pegged.
+/// Bitcoin Lightning wallet ([BtcLightning]: the Bitcoin ark in user mode, else the wallet's own
+/// hosted node) and the maker's node. BTC is never a leaf and never pegged.
 ///
 /// The hash is always the one whoever receives the BTC makes, and whoever gives the asset locks
 /// first; the BTC is paid only once the leaf received under the hash is held for good:
@@ -64,6 +64,7 @@ class BtcTerms {
     this.settle,
     this.routeFee,
     this.routeDelay,
+    this.rail,
   });
   final String dir; // 'sell' | 'buy'
   final BigInt receive, give;
@@ -72,6 +73,10 @@ class BtcTerms {
   final Map<String, dynamic>? invoice, quote, decoded, receiveQuote, settle;
   final BigInt? routeFee;
   final int? routeDelay;
+
+  /// The wallet's BTC rail the terms were priced on (`ark`, `lightning`, or null when the app
+  /// names none): the trade is finished on it, whatever the wallet uses for new trades by then.
+  final String? rail;
 }
 
 class BtcTrades {
@@ -85,6 +90,8 @@ class BtcTrades {
     required this.settleStep,
     required this.maxFeePpm,
     required this.firmMarginMs,
+    this.railNow,
+    this.railOf,
   });
 
   final Future<dynamic> Function(String command, [Map<String, dynamic> args]) run;
@@ -98,7 +105,19 @@ class BtcTrades {
   final Future<bool> Function(Map<String, dynamic> rec) settleStep;
   final int maxFeePpm, firmMarginMs;
 
-  BtcLightning get _b => btc()!;
+  /// The rail [btc] answers for now, and the wallet's Bitcoin Lightning on a named rail (null while
+  /// that rail is not there): a trade records the rail it was priced on and is followed on it.
+  final String? Function()? railNow;
+  final BtcLightning? Function(String rail)? railOf;
+
+  /// The Bitcoin Lightning a trade's record is followed on: its own rail when it names one.
+  BtcLightning? _forRec(Map<String, dynamic> rec) {
+    final r = rec['btcRail'];
+    if (r is String && railOf != null) return railOf!(r);
+    return btc();
+  }
+
+  BtcLightning? _forTerms(BtcTerms t) => t.rail != null && railOf != null ? railOf!(t.rail!) : btc();
 
   void release(String? maker, String? swap) {
     if (maker == null || swap == null) return;
@@ -114,9 +133,9 @@ class BtcTrades {
     } catch (_) {}
   }
 
-  void _cancel(String? hash) {
-    if (hash == null || btc() == null) return;
-    _b.cancelInvoice(hash).catchError((_) {});
+  void _cancel(BtcLightning? b, String? hash) {
+    if (hash == null || b == null) return;
+    b.cancelInvoice(hash).catchError((_) {});
   }
 
   /// Firm terms of one entry for `pay` of the pay asset: the entry's maker, rate and minimum, and
@@ -132,7 +151,10 @@ class BtcTrades {
     required BigInt have,
     required BigInt first,
   }) async {
-    if (btc() == null) return null;
+    // The rail and its wallet read once: every step of these terms is on the same one.
+    final rail = railNow?.call();
+    final b = btc();
+    if (b == null) return null;
     final limit = pay < have ? pay : have;
     if (receiveAsset == 'BTC') {
       // Selling an asset for BTC: the wallet's invoice first, so the maker's receive is under the
@@ -141,7 +163,7 @@ class BtcTrades {
       for (var i = 0; i < 4; i++) {
         Map<String, dynamic> inv, o, q;
         try {
-          inv = await _b.invoice(sats: sats, description: 'trade');
+          inv = await b.invoice(sats: sats, description: 'trade');
         } catch (e) {
           log('[user trade] btc invoice: $e');
           return null;
@@ -150,12 +172,12 @@ class BtcTrades {
           o = await fetchJson('$maker/v1/btc/firm', post: {'give_asset': 'BTC', 'want_asset': payAsset, 'give': '$sats', 'invoice': inv['invoice']});
         } catch (e) {
           log('[user trade] maker btc firm: $e');
-          _cancel('${inv['payment_hash']}');
+          _cancel(b, '${inv['payment_hash']}');
           return null;
         }
         void drop() {
           release(maker, '${o['swap']}');
-          _cancel('${inv['payment_hash']}');
+          _cancel(b, '${inv['payment_hash']}');
         }
 
         try {
@@ -174,7 +196,7 @@ class BtcTrades {
         }
         final spends = _big(q['spends']);
         if (spends > limit) {
-          _cancel('${inv['payment_hash']}');
+          _cancel(b, '${inv['payment_hash']}');
           await _releaseNow(maker, '${o['swap']}');
           sats = sats - ((spends - limit) * rateDen + rateNum - BigInt.one) ~/ rateNum - BigInt.one;
           if (sats < minReceive) return null;
@@ -190,6 +212,7 @@ class BtcTrades {
           offer: o,
           invoice: inv,
           quote: q,
+          rail: rail,
         );
       }
       return null;
@@ -205,7 +228,7 @@ class BtcTrades {
         return null;
       }
       try {
-        d = await _b.decode('${o['invoice']}');
+        d = await b.decode('${o['invoice']}');
       } catch (e) {
         log('[user trade] btc decode: $e');
         release(maker, '${o['swap']}');
@@ -223,7 +246,7 @@ class BtcTrades {
       // node through another takes the hops' deltas as well as the invoice's).
       ({BigInt fee, int delay})? rt;
       try {
-        rt = await _b.payRoute('${o['invoice']}');
+        rt = await b.payRoute('${o['invoice']}');
       } catch (_) {
         rt = null;
       }
@@ -261,6 +284,7 @@ class BtcTrades {
         settle: sq,
         routeFee: fee,
         routeDelay: routeDelay,
+        rail: rail,
       );
     }
     return null;
@@ -269,7 +293,7 @@ class BtcTrades {
   /// Lets go of priced terms that are not taken: the maker's offer and the wallet's own invoice.
   void drop(String? maker, BtcTerms t) {
     release(maker, '${t.offer['swap']}');
-    if (t.invoice != null) _cancel('${t.invoice!['payment_hash']}');
+    if (t.invoice != null) _cancel(_forTerms(t), '${t.invoice!['payment_hash']}');
   }
 
   /// Takes the one step of a confirmed BTC trade; the record is written before anything is signed.
@@ -281,10 +305,11 @@ class BtcTrades {
       rec['error'] = 'the firm offer lapsed before it was confirmed';
       await put(rec);
       release(maker, '${o['swap']}');
-      if (t.invoice != null) _cancel('${t.invoice!['payment_hash']}');
+      if (t.invoice != null) _cancel(_forTerms(t), '${t.invoice!['payment_hash']}');
       throw const BtcLapsed();
     }
     rec['maker'] = maker;
+    if (t.rail != null) rec['btcRail'] = t.rail;
     rec['swap'] = o['swap'];
     rec['dir'] = t.dir;
     rec['before'] = [for (final c in ((await run('coins')) as List? ?? const [])) '${(c as Map)['leaf_id']}'];
@@ -353,18 +378,21 @@ class BtcTrades {
     } catch (e) {
       log('[user trade] sync: $e');
     }
-    return rec['dir'] == 'sell' ? _advanceSell(rec) : _advanceBuy(rec);
+    // A trade's rail that is not there yet (the ark still opening) is followed on the next pass.
+    final b = _forRec(rec);
+    if (b == null) return put(rec);
+    return rec['dir'] == 'sell' ? _advanceSell(rec, b) : _advanceBuy(rec, b);
   }
 
   /// Selling: the BTC comes to the wallet's invoice; its payment of the asset is settled with the
   /// preimage, which the wallet hands the operator too.
-  Future<Map<String, dynamic>> _advanceSell(Map<String, dynamic> rec) async {
+  Future<Map<String, dynamic>> _advanceSell(Map<String, dynamic> rec, BtcLightning b) async {
     final hash = '${rec['hash']}';
     final p = (((await run('lightning_payments')) as Map?)?[hash] as Map?) ?? const {};
     rec['payState'] = p['state'];
     Map<String, dynamic> inv;
     try {
-      inv = await _b.invoiceStatus(hash);
+      inv = await b.invoiceStatus(hash);
     } catch (_) {
       inv = {'status': 'unknown'};
     }
@@ -388,7 +416,7 @@ class BtcTrades {
       // The maker never paid: the payment failed back and its leaf came back, less its margins.
       rec['state'] = 'returned';
       rec['returnedAt'] = now();
-      _cancel(hash);
+      _cancel(b, hash);
       final before = {...((rec['before'] as List?) ?? const []).map((e) => '$e')};
       final pay = (rec['ticket'] as Map)['payAsset'];
       final back =
@@ -409,7 +437,7 @@ class BtcTrades {
   }
 
   /// Buying: wait for the leaf, then pay the BTC, then claim and settle the leaf.
-  Future<Map<String, dynamic>> _advanceBuy(Map<String, dynamic> rec) async {
+  Future<Map<String, dynamic>> _advanceBuy(Map<String, dynamic> rec, BtcLightning b) async {
     final hash = '${rec['hash']}';
     final lock = (rec['routeDelay'] as num?)?.toInt() ?? (rec['minFinalCltv'] as num?)?.toInt() ?? 18;
     final rcv = (((await run('lightning_receives')) as Map?)?[hash] as Map?) ?? const {};
@@ -443,12 +471,12 @@ class BtcTrades {
     if (rec['state'] == 'sent' && rec['preimage'] == null) {
       Map<String, dynamic> st;
       try {
-        st = await _b.payStatus(hash);
+        st = await b.payStatus(hash);
       } catch (_) {
         st = {'state': 'none'};
       }
       if (st['state'] == 'none') {
-        st = await _b.pay(invoice: '${rec['invoiceBtc']}', maxFeeSats: _big(rec['routeFee']), maxDelay: lock + kExtraBlocks);
+        st = await b.pay(invoice: '${rec['invoiceBtc']}', maxFeeSats: _big(rec['routeFee']), maxDelay: lock + kExtraBlocks);
       }
       if (st['state'] == 'failed') {
         // Nothing was paid: the leaf stays unclaimed and goes back to the maker.

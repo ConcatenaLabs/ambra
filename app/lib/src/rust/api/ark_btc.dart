@@ -49,7 +49,7 @@ Future<String> arkSend({required String destination, BigInt? sats}) => RustLib
     .api
     .crateApiArkBtcArkSend(destination: destination, sats: sats);
 
-/// An invoice of `sats` paid into the ark.
+/// An invoice of `sats` paid into the ark: `{invoice, payment_hash, expires_at}`.
 Future<String> arkInvoice({required BigInt sats, String? description}) =>
     RustLib.instance.api.crateApiArkBtcArkInvoice(
       sats: sats,
@@ -71,3 +71,36 @@ Future<String> arkBoardWith({
   keyIndex: keyIndex,
   expiryHeight: expiryHeight,
 );
+
+/// The fee of paying `sats` over Lightning out of the ark, and the longest lock
+/// the payment may take in blocks: `{fee, gross, max_route_delay}`.
+Future<String> arkPayFee({required BigInt sats}) =>
+    RustLib.instance.api.crateApiArkBtcArkPayFee(sats: sats);
+
+/// Pays `invoice` out of the ark, refused when its fee would pass `max_fee_sats`
+/// or its lock `max_delay` blocks; a payment already made under the invoice's
+/// hash is not made again. `{state: complete|pending|failed, preimage?, reason?}`.
+Future<String> arkPay({
+  required String invoice,
+  BigInt? maxFeeSats,
+  int? maxDelay,
+  required bool wait,
+}) => RustLib.instance.api.crateApiArkBtcArkPay(
+  invoice: invoice,
+  maxFeeSats: maxFeeSats,
+  maxDelay: maxDelay,
+  wait: wait,
+);
+
+/// A payment's state under `hash` (`drive`: asked of the server first):
+/// `{state: none|pending|complete, preimage?}`.
+Future<String> arkPayStatus({required String hash, required bool drive}) =>
+    RustLib.instance.api.crateApiArkBtcArkPayStatus(hash: hash, drive: drive);
+
+/// A receive's state under `hash` (`claim`: a held payment claimed first):
+/// `{state: paid|waiting|unknown, preimage?, amount?}`.
+Future<String> arkReceiveStatus({required String hash, required bool claim}) =>
+    RustLib.instance.api.crateApiArkBtcArkReceiveStatus(
+      hash: hash,
+      claim: claim,
+    );
