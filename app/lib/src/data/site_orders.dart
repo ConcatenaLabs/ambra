@@ -226,6 +226,7 @@ class SiteOrders {
         'not-listed' => UserWords.notListed(_tick(get), _tick(pay)),
         'not-offered' => UserWords.notOffered(_tick(get), _tick(pay)),
         'no-funds' => UserWords.noFunds(_tick(pay)),
+        'not-ready' => UserWords.notReady(_tick(pay)),
         _ => UserWords.tooSmall,
       };
 
@@ -316,7 +317,7 @@ class SiteOrders {
       (SiteWords.price, _priceText(o.price!, o.base, o.quote)),
       (SiteWords.smallest, _fmt(args['sell'] as String, rq['min_lot'] ?? args['min_lot'])),
       // Paid from the wallet besides what the order sells: not "included above".
-      (UserWords.fees, _big(fee['amount']) > BigInt.zero ? _fmt(feeAsset, fee['amount']) : UserWords.noFees),
+      (UserWords.fees, _big(fee['amount']) > BigInt.zero ? '${_fmt(feeAsset, fee['amount'])}, on top' : UserWords.noFees),
       (SiteWords.takeBack, when(_big(rq['expiry_locktime'] ?? args['expiry']).toInt())),
       asked,
     ]);

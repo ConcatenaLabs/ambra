@@ -333,6 +333,12 @@ class LeafService extends ChangeNotifier {
   /// final, then in the figure as before.
   Future<void> autoBoard() async {
     if (!open || DevMode.instance.on || _boarding || personBusy) return;
+    // The library must read every key the balance may show a coin at, first.
+    if (await _coverReceiveKeys() > 0) {
+      try {
+        balance = await run('balance') as Map<String, dynamic>?;
+      } catch (_) {}
+    }
     final served = minLeaves(info);
     final on = balance?['sequentia_onchain'];
     if (on is! Map || served.isEmpty) return;
@@ -373,6 +379,31 @@ class LeafService extends ChangeNotifier {
       _boarding = false;
     }
     if (boarded) await refresh();
+  }
+
+  /// Hands the leaf wallet the keys the main wallet handed out, so its on-chain window covers
+  /// them ([coverReceiveKeys]); how many keys were handed now.
+  Future<int> _coverReceiveKeys() async {
+    final key = '$_kWindow.${DevMode.instance.tag ?? 'default'}';
+    final p = await SharedPreferences.getInstance();
+    return coverReceiveKeys(
+      want: await scanNext(),
+      had: p.getInt(key) ?? 0,
+      handOne: () async => run('address'),
+      remember: (n) async => p.setInt(key, n),
+      stop: () => _asking > 0,
+      log: (m) => debugPrint(m),
+    );
+  }
+
+  static const _kWindow = 'ambra.leaves.window';
+  Timer? _boardSoon;
+
+  /// A trade found an asset held but not payable yet: board it once the person's action is
+  /// [boardQuiet] behind, instead of at the next scheduled pass.
+  void boardSoon() {
+    _boardSoon?.cancel();
+    _boardSoon = Timer(boardQuiet + const Duration(seconds: 2), () => unawaited(autoBoard()));
   }
 
   /// What of each asset is arriving: leaves not final yet (a board, a payment in
@@ -1191,4 +1222,39 @@ Map<String, dynamic>? requestFor(String text, {required String operator, require
   } catch (_) {
     return null;
   }
+}
+
+
+/// The leaf library finds its on-chain coins by a gap of 20 unused keys past the last key it
+/// handed out or saw holding an UNSPENT coin (its node's scantxoutset), where the main wallet
+/// finds them by a gap past the last key with any history. Keys used and spent before the leaf
+/// wallet looked, or skipped by the address shared with Bitcoin, leave a coin the balance shows at
+/// a key the library never reads: default mode never boards it, and a trade finds nothing to pay
+/// from. So the library is handed keys (its `address` command, each call the next key) until it
+/// has handed out [want] (the main wallet's next receive index), once per key: [had] is how many
+/// it was handed before, and [remember] keeps the count. Stops at the first refusal, or when
+/// [stop] says a person's action waits. -> how many keys were handed now.
+Future<int> coverReceiveKeys({
+  required int want,
+  required int had,
+  required Future<void> Function() handOne,
+  required Future<void> Function(int handed) remember,
+  bool Function()? stop,
+  void Function(String)? log,
+}) async {
+  if (want <= had) return 0;
+  var n = 0;
+  for (var i = had; i < want; i++) {
+    if (stop != null && stop()) break;
+    try {
+      await handOne();
+    } catch (e) {
+      log?.call('[leaves] handing the leaf wallet its keys: $e');
+      break;
+    }
+    n++;
+    await remember(i + 1);
+  }
+  if (n > 0) log?.call('[leaves] the leaf wallet reads its on-chain coins up to key ${had + n + 20} now ($n key(s) handed to it)');
+  return n;
 }

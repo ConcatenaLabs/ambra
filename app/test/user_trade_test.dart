@@ -105,7 +105,8 @@ class StandIn {
     return {};
   }
 
-  UserTradeEngine engine({List<String> sources = const ['leaf-maker'], List<String> makers = const ['http://m'], required int Function() now}) =>
+  UserTradeEngine engine({List<String> sources = const ['leaf-maker'], List<String> makers = const ['http://m'], required int Function() now,
+          Future<BigInt> Function(String)? held, void Function(String)? prepare}) =>
       UserTradeEngine(UserTradeDeps(
         run: run,
         fetchJson: fetchJson,
@@ -127,6 +128,8 @@ class StandIn {
         write: (v) async => stored = v,
         now: now,
         sleep: (_) async {},
+        held: held,
+        prepare: prepare,
       ));
 }
 
@@ -234,6 +237,16 @@ void main() {
     expect((await s.engine(makers: const [], now: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'not-offered');
     s.coins.first['state'] = 'spent';
     expect((await s.engine(now: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'no-funds');
+    // Held (the balance shows it) but no coin can pay now: not ready, and the wallet is asked to
+    // make it ready; held nowhere: none.
+    final prepared = <String>[];
+    final e = s.engine(now: () => 0, held: (a) async => a == x ? BigInt.from(500) : BigInt.zero, prepare: prepared.add);
+    expect((await e.quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'not-ready');
+    expect(prepared, [x]);
+    final none = s.engine(now: () => 0, held: (_) async => BigInt.zero, prepare: prepared.add);
+    expect((await none.quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'no-funds');
+    expect(prepared, [x]);
+    expect(UserWords.notReady('USDX'), 'Your USDX is not ready to trade yet. It will be in a few minutes; nothing has moved.');
   });
 
   test('engine: a maker quoting levels of one pair is asked for one firm offer, at the level that gives the most', () async {

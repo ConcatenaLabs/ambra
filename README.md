@@ -264,7 +264,13 @@ module that implements it.
     the wallet itself (amount = what the chain holds less the board's fee, paid in the
     same asset, on the fee quoted), never while something a person asked for runs or in
     the minute after it, since the leaf wallet spends the same addresses' coins. What is
-    not final yet shows as "<amount> <ticker> arriving" under the asset's figure.
+    not final yet shows as "<amount> <ticker> arriving" under the asset's figure. Before
+    boarding, the leaf wallet is handed keys (its `address` command) until it has handed
+    out as many as the main wallet, so it reads every key the balance can show a coin at:
+    it finds its on-chain coins by a gap past the last key holding an unspent coin, the
+    main wallet by a gap past the last key with any history. A trade whose asset is held
+    but not payable yet says "Your <ticker> is not ready to trade yet. It will be in a few
+    minutes; nothing has moved." and asks for that board at once.
 - **User mode keeps BTC on the Bitcoin ark** (`app/lib/src/data/ark_btc_service.dart`,
   `ambra_core/src/ark_btc.rs`): Second's Bark client, from arca's `arca-wallet` crate,
   opened from the same recovery phrase against the ark server the default node serves
@@ -435,7 +441,8 @@ module that implements it.
 - The site's methods are the provider protocol's (the extension's `doc/PROVIDER.md`):
   `getCapabilities`, `getWalletMode`, `connect`, `getAccounts` (the shared `tb1` address),
   `getBalances` (`assets` on the chain, `btc` on testnet4, and apart from them `leaves`
-  and `btc_ark`, what is held as leaves and in the Bitcoin ark), `placeOrder`,
+  and `btc_ark`, what is held as leaves and in the Bitcoin ark, and `spendable`, what a trade
+  can pay from now), `placeOrder`,
   `getOrders` and `cancelOrder` (`app/lib/src/data/site_service.dart`).
 - A market order is one trade of the Swap tab's own engine; a limit order is that trade
   when the book meets its price, and otherwise rests on the book at its price, placed

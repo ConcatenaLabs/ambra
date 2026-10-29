@@ -28,6 +28,7 @@ import '../data/ln_rail.dart';
 import '../data/lsp_client.dart';
 import '../data/seqln_keys.dart' as lnkeys;
 import '../data/user_trade.dart';
+import '../data/wallet_cache.dart';
 import '../data/wallet_repository.dart';
 import '../rust/api.dart' as core;
 
@@ -189,6 +190,16 @@ UserTradeEngine _newTradeEngine(String walletTag) {
     btc: () => appBtcOn(appBtcRail(), walletTag),
     btcRail: appBtcRail,
     btcOf: (rail) => appBtcOn(rail, walletTag),
+    // What the balance shows of an asset (on the chain and as leaves): one held but not payable
+    // yet reads as not ready, and default mode is asked to board it.
+    held: (a) async {
+      var chain = BigInt.zero;
+      for (final b in await WalletCache.loadBalances() ?? const []) {
+        if (b.assetId == a) chain = BigInt.tryParse(b.atoms) ?? BigInt.zero;
+      }
+      return chain + (LeafService.instance.leafAtoms()[a] ?? BigInt.zero);
+    },
+    prepare: (_) => LeafService.instance.boardSoon(),
     log: (m) => debugPrint(m),
   ));
 }
@@ -292,6 +303,7 @@ class _UserComposerState extends State<UserComposer> {
           final p = widget.ticker(_pay!), g = widget.ticker(_get!);
           _error = switch (q.why) {
             'no-funds' => UserWords.noFunds(p),
+            'not-ready' => UserWords.notReady(p),
             'too-small' => UserWords.tooSmall,
             'not-listed' => UserWords.notListed(g, p),
             _ => UserWords.notOffered(g, p),
