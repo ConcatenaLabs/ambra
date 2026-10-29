@@ -447,4 +447,14 @@ void main() {
     expect(tradeStateWord({'state': 'returned', 'feesPaid': [{'asset': x, 'atoms': '1'}]}, t), isNull);
     expect(tradeStateWord({'state': 'settled'}, t), UserWords.settled);
   });
+
+  test('the engine\'s following of a trade is reads and syncs only: nothing that moves a coin counts as following', () {
+    for (final moves in const ['lightning_pay', 'lightning_receive', 'lightning_receive_preimage', 'lightning_post_preimage', 'participate',
+        'swap_accept', 'take', 'order_fill_resting', 'send']) {
+      expect(kFollowCommands.contains(moves), isFalse, reason: moves);
+    }
+    for (final reads in const ['sync', 'coins', 'lightning_receives', 'lightning_receive_ready', 'lightning_payments', 'participations', 'info']) {
+      expect(kFollowCommands.contains(reads), isTrue, reason: reads);
+    }
+  });
 }

@@ -141,7 +141,9 @@ UserTradeEngine appTradeEngine({required String walletTag}) {
   return UserTradeEngine(UserTradeDeps(
     // A trade that needs a planned coin is made through the next round, by itself; a
     // refusal user mode has plain words for is said in them.
-    run: (cmd, args) => LeafService.instance.pay(cmd, args, true),
+    // The engine's own following of a trade (its syncs and reads) is not a person's action: it
+    // keeps no board waiting, so coins arriving while a trade waits still move in.
+    run: (cmd, args) => LeafService.instance.pay(cmd, args, true, !kFollowCommands.contains(cmd)),
     fetchJson: fetchJson,
     makers: () => [Backend.leafMaker, Backend.leafMakerBtc],
     relayBook: (pay, receive) async => [...await one(receive, pay), ...await one(pay, receive)],

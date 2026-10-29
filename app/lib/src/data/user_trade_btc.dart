@@ -375,7 +375,7 @@ class BtcTrades {
 
   Future<Map<String, dynamic>> advance(Map<String, dynamic> rec) async {
     try {
-      await run('sync');
+      _logSync(await run('sync'));
     } catch (e) {
       log('[user trade] sync: $e');
     }
@@ -463,7 +463,11 @@ class BtcTrades {
         rec['why'] = '$e';
         return put(rec);
       }
-      if (r['ready'] != true) return put(rec);
+      if (r['ready'] != true) {
+        if (r['why'] != rec['readyWhy']) log('[user trade] not yet: ${r['why']}');
+        rec['readyWhy'] = r['why'];
+        return put(rec);
+      }
       rec['state'] = 'sent';
       rec['sentAt'] = now();
       rec['paying'] = true;
@@ -523,6 +527,22 @@ class BtcTrades {
 }
 
 extension on BtcTrades {
+  /// What a sync said of the trade's steps that did not go: a participation or Lightning step's
+  /// error or refusal, or a witness that did not succeed (then the wallet moves nothing on).
+  void _logSync(Object? v) {
+    if (v is! Map) return;
+    for (final k in ['participations', 'lightning']) {
+      final x = v[k];
+      if (x is Map && x['error'] != null) log('[user trade] sync $k: ${x['error']}');
+      if (x is Map && x['note'] != null) log('[user trade] sync $k: ${x['note']}');
+      if (x is List) {
+        for (final s in x) {
+          if (s is Map && (s['error'] != null || s['refused'] != null)) log('[user trade] sync $k: $s');
+        }
+      }
+    }
+  }
+
   /// The maker's invoice for a purchase, renewed when it runs out within [kInvoiceLeftSeconds]:
   /// the same hash and amount, a final delta, fee and lock no greater than the trade allowed.
   /// True when it can be paid now; false when it cannot (the maker gives no new one, or not one

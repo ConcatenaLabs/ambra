@@ -477,8 +477,10 @@ class LeafService extends ChangeNotifier {
   ///
   /// With [plain] (user mode), a refusal user mode has plain words for is said in them
   /// ([plainRefusal]); every other refusal is the library's.
-  Future<dynamic> pay(String command, [Map<String, dynamic> args = const {}, bool plain = false]) async {
-    _asking++;
+  /// [person]: false for the wallet's own following of what was asked before (a trade's
+  /// syncs and reads), which keeps no upkeep waiting.
+  Future<dynamic> pay(String command, [Map<String, dynamic> args = const {}, bool plain = false, bool person = true]) async {
+    if (person) _asking++;
     try {
       return await payThroughRelease(
         command,
@@ -499,8 +501,10 @@ class LeafService extends ChangeNotifier {
     } on LeafRefusal catch (e) {
       throw plain ? plainRefusal(e) : e;
     } finally {
-      _asking--;
-      personActed();
+      if (person) {
+        _asking--;
+        personActed();
+      }
       if (releasing != null) {
         releasing = null;
         notifyListeners();
