@@ -91,6 +91,9 @@ class UserWords {
   static const enter = 'Enter how much you pay.';
   static const tooSmall = 'That amount is too small to trade.';
   static String noFunds(String pay) => 'You have no $pay to trade.';
+  // Held, and shown in the balance, but not where a trade can pay it from yet (just arrived, or
+  // still being moved in by the wallet): never "you have none".
+  static String notReady(String pay) => 'Your $pay is not ready to trade yet. It will be in a few minutes; nothing has moved.';
   static const pricing = 'Finding the best price…';
   static const priceMoved = 'The price moved. Here is the new one.';
   static const sent = 'Sent';
@@ -122,6 +125,7 @@ class UserWords {
     enter,
     tooSmall,
     noFunds('XT'),
+    notReady('XT'),
     pricing,
     priceMoved,
     sent,
@@ -440,7 +444,7 @@ class QuoteResult {
   QuoteResult.no(this.why) : ticket = null, choice = null;
   final Ticket? ticket;
   final Candidate? choice;
-  final String? why; // not-listed | not-offered | no-funds | too-small
+  final String? why; // not-listed | not-offered | no-funds | not-ready | too-small
   bool get ok => ticket != null;
 }
 
@@ -463,6 +467,8 @@ class UserTradeDeps {
     this.btc,
     this.btcRail,
     this.btcOf,
+    this.held,
+    this.prepare,
     int Function()? now,
     void Function(String)? log,
     Future<void> Function(int ms)? sleep,
@@ -487,6 +493,12 @@ class UserTradeDeps {
   /// a named rail: a BTC trade is finished on the rail it was priced on. Both null: one rail.
   final String? Function()? btcRail;
   final BtcLightning? Function(String rail)? btcOf;
+
+  /// What the wallet shows it holds of an asset, wherever it is: with it, a pay asset held but not
+  /// payable now is 'not-ready', never 'no-funds'. And a way to make such an asset ready (default
+  /// mode boards on-chain coins). Both optional.
+  final Future<BigInt> Function(String asset)? held;
+  final void Function(String asset)? prepare;
   final Future<String?> Function() read;
   final Future<void> Function(String value) write;
   final int Function() now;
@@ -883,7 +895,23 @@ class UserTradeEngine {
     } else {
       have = (await spendable())[pay] ?? BigInt.zero;
     }
-    if (have <= BigInt.zero) return QuoteResult.no('no-funds');
+    if (have <= BigInt.zero) {
+      // What the wallet shows it holds, though no trade can pay from it now: the wallet is asked to
+      // make it ready (default mode boards coins on the chain by itself).
+      BigInt held = BigInt.zero;
+      if (pay != kUserBtc && d.held != null) {
+        try {
+          held = await d.held!(pay);
+        } catch (_) {}
+      }
+      if (held > BigInt.zero) {
+        try {
+          d.prepare?.call(pay);
+        } catch (_) {}
+        return QuoteResult.no('not-ready');
+      }
+      return QuoteResult.no('no-funds');
+    }
     final es = await _entries(pay, receive, sources);
     final limit = amount < have ? amount : have;
     final ind = [

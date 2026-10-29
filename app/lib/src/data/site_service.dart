@@ -169,7 +169,8 @@ class AmbraSites {
   }
 
   /// `getBalances`: on-chain Sequentia assets, testnet4 BTC, and apart from them what is held as
-  /// leaves and BTC in the Bitcoin ark (the wallet's one figure per asset is their sum).
+  /// leaves and BTC in the Bitcoin ark (the wallet's one figure per asset is their sum), and
+  /// `spendable`: what a trade can pay from now.
   Future<Map<String, dynamic>> _balances() async {
     final m = await WalletRepository.instance.readMnemonic();
     if (m == null) throw StateError('the wallet is locked');
@@ -193,11 +194,20 @@ class AmbraSites {
     }
     final l = LeafService.instance;
     final ark = ArkBtcService.instance;
+    // What a trade can pay from now, per asset (the trade engine's own figure), and BTC in the ark.
+    final spendable = <String, String>{};
+    try {
+      for (final e in (await appTradeEngine(walletTag: DevMode.instance.tag ?? 'default').spendable()).entries) {
+        if (e.value > BigInt.zero) spendable[e.key] = '${e.value}';
+      }
+    } catch (_) {}
+    if (ark.open && ark.spendable > BigInt.zero) spendable['BTC'] = '${ark.spendable}';
     return {
       'assets': {for (final b in chain) if ((BigInt.tryParse(b.atoms) ?? BigInt.zero) > BigInt.zero) b.assetId: b.atoms},
       'btc': btc,
       'leaves': {for (final e in (l.joined ? l.leafAtoms() : const <String, BigInt>{}).entries) if (e.value > BigInt.zero) e.key: '${e.value}'},
       'btc_ark': ark.open ? '${ark.held}' : '0',
+      'spendable': spendable,
     };
   }
 

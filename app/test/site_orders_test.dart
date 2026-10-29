@@ -202,7 +202,7 @@ void main() {
         [b, q, '$u', '4200', '1', '87400', '${u ~/ BigInt.from(10)}']);
     expect(words(r), contains('Price 4,200 USDX per GOLD'));
     expect(words(r), contains('What is left can be taken back from 1970-01-02 00:16 UTC'));
-    expect(words(r), contains('Fees 0.00000025 GOLD\n'));
+    expect(words(r), contains('Fees 0.00000025 GOLD, on top\n'));
     final a = await s.confirm(r.id);
     expect([a['order'], a['filled'], a['trade']], ['o1', 0, null]);
     expect((l.calls.firstWhere((c) => c.$1 == 'order_place').$2['shown'] as Map)['full_price'], '999');
