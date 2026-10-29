@@ -192,6 +192,9 @@ class BookEntry {
   final Map<String, dynamic> raw;
 }
 
+/// How long the operator's `info` is read from the last reading.
+const int kInfoMs = 5000;
+
 const Map<String, int> kSourceParties = {'onchain-fill': 0, 'covenant-round': 1, 'leaf-resting': 1, 'leaf-maker': 2, 'btc-gateway': 2};
 
 /// A live maker's quotes for the pair. A quote with BTC on one side (in satoshis) is a
@@ -552,6 +555,30 @@ class UserTradeEngine {
     return out;
   }
 
+  Map? _info;
+  int _infoAt = 0;
+
+  /// What the operator's round can pay of `asset` now (its `info`'s `fundable`, read at most every
+  /// [kInfoMs]), or null when the operator does not say.
+  Future<BigInt?> operatorRoom(String asset) async {
+    if (_info == null || d.now() - _infoAt > kInfoMs) {
+      try {
+        _info = (await _run('info')) as Map;
+        _infoAt = d.now();
+      } catch (e) {
+        d.log('[user trade] info: $e');
+        return null;
+      }
+    }
+    final si = _info?['server_info'];
+    final assets = si is Map ? si['assets'] : null;
+    if (assets is! List) return null;
+    for (final a in assets) {
+      if (a is Map && a['asset'] == asset && a['fundable'] != null) return BigInt.tryParse('${a['fundable']}');
+    }
+    return null;
+  }
+
   void release(String? maker, String? swap) {
     if (maker == null || swap == null) return;
     d.fetchJson('$maker/v1/release', post: {'swap': swap}).catchError((_) => <String, dynamic>{});
@@ -644,6 +671,18 @@ class UserTradeEngine {
     final limit = amount < have ? amount : have;
     if (e.source == 'covenant-round') {
       var r = size.receive;
+      // The round pays the order's maker the asset paid out of the operator's own coins: a take
+      // larger than the operator can fund now is made smaller, and one with no lot that fits is
+      // not offered (it would wait in the round and come back).
+      final room = await operatorRoom(pay);
+      if (room != null && size.pay > room) {
+        final s0 = sizeEntry(e, room);
+        if (s0 == null) {
+          d.log('[user trade] the operator can fund $room of the asset now: the order is passed over');
+          return null;
+        }
+        r = s0.receive;
+      }
       for (var i = 0; i < 4; i++) {
         Map q;
         try {
