@@ -139,7 +139,7 @@ class _SendTabState extends State<SendTab> {
 
   /// BTC the Bitcoin ark holds (user mode keeps BTC there).
   BigInt _arkSats(String id) =>
-      id == _btcId && !DevMode.instance.on && ArkBtcService.instance.open ? ArkBtcService.instance.held : BigInt.zero;
+      id == _btcId && ArkBtcService.instance.open ? ArkBtcService.instance.held : BigInt.zero;
 
   /// What the wallet holds of [id] on every rail: on-chain, Lightning, leaves and, for BTC in
   /// user mode, the Bitcoin ark.

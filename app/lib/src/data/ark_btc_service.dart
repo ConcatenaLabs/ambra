@@ -14,8 +14,8 @@ import 'wallet_repository.dart';
 /// native bitcoin the holder can always take on the chain. Confirmed BTC at the
 /// shared address is moved in by the wallet (one transaction from the address to a
 /// board), invoices and other wallets of the ark are paid from it in seconds, and an
-/// address is paid out of it on the chain. Developer mode keeps BTC where it was:
-/// on the chain and in Lightning, by hand.
+/// address is paid out of it on the chain. Developer mode opens it too, so what it holds
+/// is counted in BTC's figure, but moves nothing into it or out of it by itself.
 ///
 /// The ark wallet is Second's Bark client in the Rust core (`ambra_core/src/ark_btc.rs`),
 /// opened from the same recovery phrase against the default node's ark
@@ -63,7 +63,7 @@ class ArkBtcService extends ChangeNotifier {
   /// (BTC stays on the chain and in Lightning) and is tried again after [retry].
   Future<void> start() async {
     final server = Backend.bitcoinArk;
-    if (open || _opening || server == null || DevMode.instance.on) return;
+    if (open || _opening || server == null) return;
     _opening = true;
     final m = await WalletRepository.instance.readMnemonic();
     if (m == null) {
