@@ -7,6 +7,7 @@ import 'api.dart';
 import 'api/ark_btc.dart';
 import 'api/contracts.dart';
 import 'api/leaves.dart';
+import 'api/nostr.dart';
 import 'api/rewards.dart';
 import 'api/signer.dart';
 import 'dart:async';
@@ -233,6 +234,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   OwnershipProof dco_decode_ownership_proof(dynamic raw);
+
+  @protected
+  PairingKeys dco_decode_pairing_keys(dynamic raw);
+
+  @protected
+  PairingMessage dco_decode_pairing_message(dynamic raw);
 
   @protected
   PsetFee dco_decode_pset_fee(dynamic raw);
@@ -514,6 +521,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   OwnershipProof sse_decode_ownership_proof(SseDeserializer deserializer);
+
+  @protected
+  PairingKeys sse_decode_pairing_keys(SseDeserializer deserializer);
+
+  @protected
+  PairingMessage sse_decode_pairing_message(SseDeserializer deserializer);
 
   @protected
   PsetFee sse_decode_pset_fee(SseDeserializer deserializer);
@@ -861,6 +874,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_ownership_proof(
     OwnershipProof self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_pairing_keys(PairingKeys self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_pairing_message(
+    PairingMessage self,
     SseSerializer serializer,
   );
 

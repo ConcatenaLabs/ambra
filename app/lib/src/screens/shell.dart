@@ -29,6 +29,8 @@ import '../data/openamp_service.dart';
 import '../data/price_service.dart';
 import '../data/registry_service.dart';
 import '../data/seqln_keys.dart' as lnkeys;
+import '../data/site_link.dart' show SiteLinkWords;
+import '../data/site_service.dart';
 import '../data/stakes.dart';
 import '../data/subasset_buy_service.dart';
 import '../data/subasset_sell_service.dart';
@@ -47,6 +49,7 @@ import 'history_screen.dart';
 import 'node_screen.dart';
 import 'send_screen.dart';
 import 'mix_screen.dart';
+import 'sites_screen.dart';
 import 'stake_screen.dart';
 import 'swap_screen.dart';
 
@@ -82,11 +85,14 @@ class _ShellState extends State<Shell> {
     final m = await WalletRepository.instance.readMnemonic();
     if (m != null) await DevMode.instance.loadFor(m);
     _onMode();
+    // The sites this wallet is connected to reach it while the wallet is open.
+    unawaited(AmbraSites.instance.start());
   }
 
   @override
   void dispose() {
     DevMode.instance.removeListener(_onMode);
+    unawaited(AmbraSites.instance.stop());
     super.dispose();
   }
 
@@ -2149,6 +2155,19 @@ class MoreTab extends StatelessWidget {
               ),
             ]),
           ),
+        ),
+        const SizedBox(height: 14),
+        AmbraCard(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const SectionLabel('Sites'),
+            const SizedBox(height: 12),
+            SecondaryButton(
+              key: const Key('open-sites'),
+              label: SiteLinkWords.entry,
+              icon: Icons.link,
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SitesScreen())),
+            ),
+          ]),
         ),
         const SizedBox(height: 14),
         AmbraCard(

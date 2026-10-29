@@ -13,6 +13,7 @@
 /// library decides.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'btc_lightning.dart';
@@ -549,8 +550,15 @@ class UserTradeEngine {
       l.add(rec);
     }
     await d.write(jsonEncode(l));
+    _changes.add(null);
     return rec;
   }
+
+  final _changes = StreamController<void>.broadcast(sync: false);
+
+  /// Fires whenever a trade record is written: a trade a connected site made shows in the Swap
+  /// tab's list at once.
+  Stream<void> get changes => _changes.stream;
 
   Future<Map<String, BigInt>> spendable() async {
     List coins;
@@ -898,12 +906,7 @@ class UserTradeEngine {
     }
     final best = chooseCandidate(cands);
     for (final c in cands) {
-      if (c == best) continue;
-      if (c.btc != null) {
-        _btcT.drop(c.entry.maker, c.btc!);
-      } else if (c.offer != null) {
-        release(c.entry.maker, '${c.offer!['swap']}');
-      }
+      if (c != best) drop(c);
     }
     if (best == null) return QuoteResult.no(es.isEmpty ? 'not-offered' : 'too-small');
     return QuoteResult.ok(
@@ -918,6 +921,17 @@ class UserTradeEngine {
       ),
       best,
     );
+  }
+
+  /// Lets go of a priced candidate nobody takes (a review declined or lapsed): a maker's firm
+  /// offer and a BTC desk's quote stop holding coins for it.
+  void drop(Candidate? c) {
+    if (c == null) return;
+    if (c.btc != null) {
+      _btcT.drop(c.entry.maker, c.btc!);
+    } else if (c.offer != null) {
+      release(c.entry.maker, '${c.offer!['swap']}');
+    }
   }
 
   Future<Map<String, dynamic>> confirm(Candidate c, Ticket t) async {
@@ -1046,7 +1060,19 @@ class UserTradeEngine {
   bool _releasedLive(Map? p) =>
       p != null && p['state'] == 'released' && ((p['new_leaves'] as List?) ?? const []).every((n) => (n as Map)['state'] == 'live');
 
-  Future<Map<String, dynamic>> advance(Map<String, dynamic> rec) async {
+  final _advancing = <String, Future<Map<String, dynamic>>>{};
+
+  /// Moves one trade on. A trade already being moved on (the Swap tab and a connected site both
+  /// follow trades) is not moved twice at once: the second call waits for the first.
+  Future<Map<String, dynamic>> advance(Map<String, dynamic> rec) {
+    final id = '${rec['id']}';
+    // The callback returns nothing: returning the removed future would wait on itself.
+    return _advancing[id] ??= _advance(rec).whenComplete(() {
+      _advancing.remove(id);
+    });
+  }
+
+  Future<Map<String, dynamic>> _advance(Map<String, dynamic> rec) async {
     if (['settled', 'returned', 'failed'].contains(rec['state'])) return rec;
     if (rec['state'] == 'confirming' && rec['source'] == 'btc-gateway') {
       if (rec['hash'] == null) {

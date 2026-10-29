@@ -32,6 +32,9 @@
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues
                  to determine the Window background behind the Flutter UI. -->
+            <!-- Links are read by app_links (main.dart), not by Flutter's router, which has no
+                 route for them and logs a null-check failure on each one. -->
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="false" />
             <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
@@ -50,6 +53,13 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="ambra" android:host="oamp-sign"/>
                 <data android:scheme="ambra" android:host="oamp-send"/>
+            </intent-filter>
+            <!-- A site's pairing code opened as a link on the same phone (doc: README, "Connect to a site"). -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="nostrconnect"/>
             </intent-filter>
         </activity>
         <!-- Keeps the app's process, and with it the leaf wallet's schedule, alive while

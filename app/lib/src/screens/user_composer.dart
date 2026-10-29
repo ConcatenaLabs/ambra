@@ -91,8 +91,12 @@ BtcLightning? appBtcOn(String rail, String walletTag) =>
 
 /// The engine as the app runs it: the leaf library through [LeafService], the maker and the
 /// relay at the app's backend, the pairs list the drill keeps (the web wallet's
-/// `user-mode/pairs.json`, served at [Backend.userModePairs]).
-UserTradeEngine appTradeEngine({required String walletTag}) {
+/// `user-mode/pairs.json`, served at [Backend.userModePairs]). One per wallet: the Swap tab and
+/// a connected site's orders share it, and with it one list of trades.
+final _engines = <String, UserTradeEngine>{};
+UserTradeEngine appTradeEngine({required String walletTag}) => _engines[walletTag] ??= _newTradeEngine(walletTag);
+
+UserTradeEngine _newTradeEngine(String walletTag) {
   Future<Map<String, dynamic>> fetchJson(String url, {Map<String, dynamic>? post}) async {
     final r = post == null
         ? await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30))
@@ -229,14 +233,23 @@ class _UserComposerState extends State<UserComposer> {
     }.toList();
   }
 
+  StreamSubscription<void>? _changed;
+  bool _following = false;
+
   @override
   void initState() {
     super.initState();
     _loadTrades().then((_) => _follow());
+    // A trade made elsewhere (a connected site's) shows at once, and is followed.
+    _changed = widget.engine.changes.listen((_) async {
+      await _loadTrades();
+      if (!_following && !(_timer?.isActive ?? false)) _timer = Timer(const Duration(seconds: 4), _follow);
+    });
   }
 
   @override
   void dispose() {
+    _changed?.cancel();
     _timer?.cancel();
     _amount.dispose();
     super.dispose();
@@ -324,12 +337,15 @@ class _UserComposerState extends State<UserComposer> {
   Future<void> _follow() async {
     _timer?.cancel();
     final open = _trades.any((r) => !['settled', 'returned', 'failed'].contains(r['state']));
-    if (!open || !mounted) return;
+    if (!open || !mounted || _following) return;
+    _following = true;
     try {
       await widget.engine.resume();
       await widget.onMoved?.call();
     } catch (e) {
       debugPrint('[user composer] resume: $e');
+    } finally {
+      _following = false;
     }
     await _loadTrades();
     if (mounted) _timer = Timer(const Duration(seconds: 4), _follow);
@@ -420,8 +436,7 @@ class _UserComposerState extends State<UserComposer> {
               onPressed: _busy
                   ? null
                   : () {
-                      final c = _choice;
-                      if (c?.offer != null) widget.engine.release(c!.entry.maker, '${c.offer!['swap']}');
+                      widget.engine.drop(_choice);
                       setState(_reset);
                     },
               child: const Text(UserWords.cancel)),

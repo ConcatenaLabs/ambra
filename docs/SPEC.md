@@ -120,7 +120,8 @@ on-chain coins used for boards and exit fees.
   ticket's three lines and Trade; the trades below it as Sent, Settled or Returned). In
   developer mode, the same-chain SeqDEX composer, plus entries to "Buy with Bitcoin
   (cross-chain)" and, when a hosted LSP is configured, "Instant (Lightning)".
-- More hub: Node (view/change backend), Testnet faucet, Mode (user or developer mode,
+- More hub: Node (view/change backend), Sites (connect to a site by its code, the sites
+  connected, Forget), Testnet faucet, Mode (user or developer mode,
   and in developer mode Leaves and Contracts), Security (app lock),
   Wallet (reveal phrase / remove wallet), Assets & staking (issue/manage assets,
   stake tSEQ).
@@ -178,7 +179,7 @@ shadows).
 ## ambra_core API surface (implemented)
 
 Generated bindings live in `app/lib/src/rust/`; the Rust source of truth is
-`ambra_core/src/api/mod.rs` and `ambra_core/src/api/signer.rs`.
+`ambra_core/src/api/mod.rs` and the modules beside it in `ambra_core/src/api/`.
 
 - Keys/addresses: `network_name`, `generate_mnemonic`, `validate_mnemonic`,
   `descriptor_from_mnemonic`, `receive_address`, `confidential_receive_address`,
@@ -229,6 +230,10 @@ Generated bindings live in `app/lib/src/rust/`; the Rust source of truth is
   (the engine's summary of a spend asked as `{templateHash, instance, request | drip,
   fund?}`, kept under its digest), `contract_sign` (signs and broadcasts only the spend
   prepared under the digest the screen showed, once) and `contract_discard`.
+- Site pairing (`api/nostr.rs`, logic in `ambra_core/src/nostr.rs`): `pairing_new_keys`
+  (a key pair for one pairing, not derived from the phrase), `pairing_seal` (a signed
+  kind-24133 event, its content NIP-44 v2 encrypted to the site's key) and `pairing_open`
+  (an event's id, signature, kind and `p` tag checked, its content decrypted).
 - Lightning device signer (`api/signer.rs`): `SeqlnSigner` (from mnemonic or
   hsm_secret, `process_frame`, enforce/permissive policy), `NoiseSession`
   (Noise_XK initiator: handshake, encrypt/decrypt), `device_pubkey`,
