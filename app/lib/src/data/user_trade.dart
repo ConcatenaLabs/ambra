@@ -229,6 +229,12 @@ class BookEntry {
   final Map<String, dynamic> raw;
 }
 
+/// The library commands the engine runs to follow a trade, never to make one: reads and syncs.
+const Set<String> kFollowCommands = {
+  'sync', 'coins', 'plans', 'info', 'participations', 'swaps', 'lightning_payments', 'lightning_receives',
+  'lightning_receive_ready',
+};
+
 /// How long the operator's `info` is read from the last reading.
 const int kInfoMs = 5000;
 
