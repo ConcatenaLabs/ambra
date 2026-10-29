@@ -1972,7 +1972,8 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
   int _quoteRank(String hex) {
     final t = SeqAssets.labelFor(hex).ticker.toUpperCase();
     if (t == 'BTC') return 1000;
-    const r = {'USDX': 900, 'EURX': 890, 'FEEUSD': 880, 'USDT': 870, 'USDC': 865, 'USD': 860};
+    // The web wallet's canonicalPair and SeqDEX rank the same, the bridged stablecoins included.
+    const r = {'USDX': 900, 'EURX': 890, 'EURC.E': 885, 'FEEUSD': 880, 'USDT': 870, 'USDC': 865, 'USDC.E': 864, 'USD': 860};
     return r[t] ?? 400; // unknown issued asset (incl. tSEQ/SEQ/GOLD/SILVR/OILX): generic base tier
   }
 
