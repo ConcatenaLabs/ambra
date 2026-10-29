@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/ark_btc_service.dart';
 import '../data/api_client.dart';
 import '../data/asset_picker.dart';
 import '../data/book_levels.dart';
@@ -2008,6 +2009,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
         onchain: BigInt.tryParse(_bal(h)) ?? BigInt.zero,
         leaves: leaves()[h] ?? BigInt.zero,
         channels: _lnChannels,
+        ark: ArkBtcService.instance.open ? ArkBtcService.instance.held : null,
         target: h == kBtcSentinel ? RailTarget.btc() : RailTarget.asset(hex: h, ticker: SeqAssets.labelFor(h).ticker));
     return UserComposer(
       key: ValueKey('userComposer-$tag'),
@@ -2018,7 +2020,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
           .where((h) => h == kBtcSentinel || held(h) > BigInt.zero)
           .toList(),
       // Each asset's one figure, as the balance row counts it: on-chain, leaves and Lightning
-      // (BTC in the wallet's own Bitcoin node's channels included).
+      // (BTC in the wallet's own Bitcoin node's channels and on the Bitcoin ark included).
       held: held,
       onMoved: () => LeafService.instance.refresh(),
       ticker: (h) => h == kBtcSentinel ? 'BTC' : SeqAssets.labelFor(h).ticker,
