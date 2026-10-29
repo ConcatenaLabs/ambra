@@ -270,7 +270,8 @@ module that implements it.
     or an invoice beyond what the ark holds reads "You can send up to <amount> BTC this way
     now."
   - BTC's one figure counts the ark; what is on its way in shows as "<amount> BTC
-    arriving". Developer mode keeps BTC on the chain and in Lightning, by hand.
+    arriving". Developer mode opens the ark wallet too and counts it (its split reads
+    "… on the Bitcoin ark"), but moves nothing into it or out of it by itself.
 - Leaves are coins held as leaves of an operator's covenant tree on Sequentia: paid and
   received off the chain with the operator's co-signature, and always takeable on-chain
   by the holder. The wallet is the operator's own wallet library (`bark::arca` from

@@ -92,12 +92,9 @@ class _ShellState extends State<Shell> {
   void _onMode() {
     // Opens only a leaf wallet this phone holds for the mnemonic (`start` checks).
     if (!LeafService.instance.open) unawaited(LeafService.instance.start());
-    // User mode keeps BTC on the Bitcoin ark; developer mode keeps it where it is.
-    if (DevMode.instance.on) {
-      ArkBtcService.instance.stop();
-    } else {
-      unawaited(ArkBtcService.instance.start());
-    }
+    // The Bitcoin ark wallet stays open in both modes, so BTC held there is always counted;
+    // only user mode moves BTC into it and pays from it by itself.
+    unawaited(ArkBtcService.instance.start());
   }
 
   Future<void> _initLightning() async {
@@ -396,7 +393,7 @@ class _BalanceTabState extends State<BalanceTab> {
     final btcOnchain = BigInt.tryParse(btcSatsStr ?? '0') ?? BigInt.zero;
     final btcLn = legLiquidity(chans, RailTarget.btc()).balance;
     // User mode: what the Bitcoin ark holds and has on its way counts in BTC's one figure.
-    final btcArk = dev ? BigInt.zero : ArkBtcService.instance.held;
+    final btcArk = ArkBtcService.instance.held;
     final btcTotal = btcOnchain + btcLn + btcArk;
     final hasBtc = btcTotal > BigInt.zero;
     // Headline total: computed over EVERY asset and every rail, hidden assets
@@ -843,6 +840,7 @@ class _BtcRowState extends State<_BtcRow> {
           leaves: null,
           btc: true,
           lightning: widget.lightningSats,
+          ark: ArkBtcService.instance.held,
         ),
       if (widget.dev)
         _LnMeta(
@@ -872,8 +870,12 @@ class _RailLine extends StatelessWidget {
     required this.lightning,
     this.staked,
     this.btc = false,
+    this.ark,
   });
   final String ticker;
+
+  /// BTC on the Bitcoin ark (shown when above zero).
+  final BigInt? ark;
   final int precision;
   final BigInt onchain;
   final BigInt? leaves; // null: no leaf wallet joined, or BTC
@@ -888,6 +890,7 @@ class _RailLine extends StatelessWidget {
       '${f(onchain)} on-chain',
       if (btc) 'no leaves (a tree on Sequentia holds no BTC)' else if (leaves != null) '${f(leaves!)} in leaves',
       '${f(lightning)} on Lightning',
+      if (ark != null && ark! > BigInt.zero) '${f(ark!)} on the Bitcoin ark',
       if (staked != null && staked! > BigInt.zero) '${f(staked!)} staked',
     ];
     return Padding(
