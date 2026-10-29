@@ -152,7 +152,9 @@ module that implements it.
   operator's tree: an in-tree swap with a live leaf maker, a transparent covenant order
   taken in the operator's round, or an order resting in the operator's tree filled in one
   transfer the operator co-signs, choosing the one that gives the most, then the one with the
-  fewest parties left to act. It offers only the pairs the web wallet's reliability drill has
+  fewest parties left to act. A covenant order is taken only as far as the operator can fund
+  its round now (the `fundable` figure its info gives per asset), so a take never waits in a
+  round for coins the operator does not have. It offers only the pairs the web wallet's reliability drill has
   passed on the chain (the web wallet's `user-mode/pairs.json`, read from the node's origin),
   and says "Not offered right now" in plain words for one nobody fills in one step; no screen
   of it names a rail, a round, a leaf, the operator, a covenant, an expiry or an atom. BTC
