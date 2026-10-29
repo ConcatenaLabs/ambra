@@ -22,6 +22,15 @@ void main() {
       expect(legLiquidity([btcChannel()], RailTarget.btc()).spendable, BigInt.from(400000), reason: 'what can be paid stays the spendable');
     });
 
+    test('BTC on the Bitcoin ark counts in BTC\'s figure, and never in an asset\'s', () {
+      final ark = BigInt.from(299300);
+      expect(heldFigure(onchain: BigInt.zero, leaves: BigInt.zero, channels: const [], target: RailTarget.btc(), ark: ark), ark);
+      expect(heldFigure(onchain: BigInt.from(1000), leaves: BigInt.zero, channels: [btcChannel()], target: RailTarget.btc(), ark: ark),
+          BigInt.from(1000 + 500000 + 299300));
+      expect(heldFigure(onchain: BigInt.from(5), leaves: BigInt.from(7), channels: const [], target: RailTarget.asset(hex: x, ticker: 'XT'), ark: ark),
+          BigInt.from(12));
+    });
+
     test('on-chain and Lightning add up; a channel not the wallet\'s own, or not open, counts nothing', () {
       expect(heldFigure(onchain: BigInt.from(1000), leaves: BigInt.zero, channels: [btcChannel()], target: RailTarget.btc()), BigInt.from(501000));
       expect(heldFigure(onchain: BigInt.zero, leaves: BigInt.zero, channels: [btcChannel(nodeKey: null)], target: RailTarget.btc()), BigInt.zero);
