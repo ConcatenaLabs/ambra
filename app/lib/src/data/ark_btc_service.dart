@@ -77,6 +77,9 @@ class ArkBtcService extends ChangeNotifier {
       lastError = null;
       await refresh();
       debugPrint('[ambra-ark] open: ${jsonEncode(balance)}');
+      // A store made before (another device of the phrase, or this one before a remove and an
+      // import) learns here what the phrase's other wallets boarded, received and spent.
+      await catchUp();
       _plan(const Duration(seconds: 1));
     } catch (e) {
       lastError = e;
@@ -94,6 +97,7 @@ class ArkBtcService extends ChangeNotifier {
     _timer = null;
     _watching = null;
     received = null;
+    _caughtUpAt = null;
     if (open) ark.arkClose();
     open = false;
     balance = null;
@@ -116,11 +120,36 @@ class ArkBtcService extends ChangeNotifier {
     _timer = Timer(d, () => unawaited(_tick()));
   }
 
+  /// How often the store is brought up to date with the phrase's other wallets while open.
+  static const catchUpEvery = Duration(minutes: 5);
+  DateTime? _caughtUpAt;
+
+  /// Brings the store up to date with what the phrase's other wallets did; a failure changes
+  /// nothing and is tried again at the next [catchUpEvery].
+  Future<void> catchUp() async {
+    if (!open) return;
+    _caughtUpAt = DateTime.now();
+    try {
+      final t0 = DateTime.now();
+      final r = jsonDecode(await ark.arkCatchUp()) as Map;
+      final n = (r['recovered'] as List?)?.length ?? 0, gone = (r['spent_elsewhere'] as List?)?.length ?? 0;
+      if (n > 0 || gone > 0) {
+        debugPrint('[ambra-ark] caught up in ${DateTime.now().difference(t0).inMilliseconds} ms: '
+            '$n coins (${r['recovered_sat']} sat) recovered, $gone spent elsewhere');
+        await refresh();
+      }
+    } catch (e) {
+      debugPrint('[ambra-ark] catch up refused: $e');
+    }
+  }
+
   Future<void> _tick() async {
     if (!open || _ticking) return;
     _ticking = true;
     try {
       await ark.arkSync();
+      final last = _caughtUpAt;
+      if (last == null || DateTime.now().difference(last) >= catchUpEvery) await catchUp();
       await refresh();
       await autoBoard();
     } catch (e) {

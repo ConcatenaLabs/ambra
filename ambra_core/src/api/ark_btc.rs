@@ -98,3 +98,10 @@ pub fn ark_pay_status(hash: String, drive: bool) -> Result<String> {
 pub fn ark_receive_status(hash: String, claim: bool) -> Result<String> {
     text(ark_btc::receive_status(&hash, claim))
 }
+
+/// Brings the ark wallet's store up to date with what other wallets of the same
+/// phrase did (coins they boarded, received or spent): `{recovered,
+/// recovered_sat, spent_elsewhere, failed, complete}`.
+pub fn ark_catch_up() -> Result<String> {
+    text(ark_btc::catch_up())
+}

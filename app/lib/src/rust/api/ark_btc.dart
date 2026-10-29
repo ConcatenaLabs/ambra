@@ -104,3 +104,8 @@ Future<String> arkReceiveStatus({required String hash, required bool claim}) =>
       hash: hash,
       claim: claim,
     );
+
+/// Brings the ark wallet's store up to date with what other wallets of the same
+/// phrase did (coins they boarded, received or spent): `{recovered,
+/// recovered_sat, spent_elsewhere, failed, complete}`.
+Future<String> arkCatchUp() => RustLib.instance.api.crateApiArkBtcArkCatchUp();
