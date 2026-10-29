@@ -18,6 +18,7 @@ import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/hidden_assets.dart';
 import '../data/pay_code.dart';
+import '../data/problem_report.dart' show ReportWords;
 import '../data/leaf_service.dart';
 import '../data/lightning_service.dart';
 import '../data/ln_payment_limit.dart';
@@ -40,6 +41,7 @@ import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
 import '../widgets/ln_cards.dart';
 import 'contracts_screen.dart';
+import 'report_screen.dart';
 import 'leaves_screen.dart';
 import '../widgets/restricted_asset_detail.dart';
 import '../widgets/widgets.dart';
@@ -2179,6 +2181,19 @@ class MoreTab extends StatelessWidget {
               icon: Icons.water_drop_outlined,
               onPressed: () =>
                   Navigator.of(context).push(MaterialPageRoute(builder: (_) => const FaucetScreen())),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 14),
+        AmbraCard(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const SectionLabel('Help'),
+            const SizedBox(height: 12),
+            SecondaryButton(
+              key: const Key('open-report'),
+              label: ReportWords.title,
+              icon: Icons.bug_report_outlined,
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ReportScreen())),
             ),
           ]),
         ),

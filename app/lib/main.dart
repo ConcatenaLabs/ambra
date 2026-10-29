@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'src/data/dev_mode.dart';
 import 'src/data/leaf_service.dart';
 import 'src/data/node_config.dart';
+import 'src/data/problem_report.dart' show ErrorLog;
 import 'src/data/price_service.dart';
 import 'src/data/registry_service.dart';
 import 'src/data/site_service.dart';
@@ -25,6 +27,17 @@ import 'src/widgets/restricted_asset_detail.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Uncaught errors are kept, scrubbed, for Report a problem (data/problem_report.dart).
+  final flutterOnError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    ErrorLog.instance.note(details.exception);
+    flutterOnError?.call(details);
+  };
+  final platformOnError = PlatformDispatcher.instance.onError;
+  PlatformDispatcher.instance.onError = (error, stack) {
+    ErrorLog.instance.note(error);
+    return platformOnError?.call(error, stack) ?? false;
+  };
   await RustLib.init();
   // Persist wallet state to a writable dir so cold starts resume scanned state
   // from disk instead of a full re-scan. Best-effort: an in-memory wallet still

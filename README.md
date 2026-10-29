@@ -474,6 +474,13 @@ module that implements it.
   from the chain every time, so a reorg moves it back (`ambra_core/src/staking.rs`).
 - Faucet screen requesting tSEQ, USDX, EURX, GOLD, SILVR, or OILX from the public
   testnet faucet.
+- Report a problem (More → Help): what happened, an optional Emissio account code to be
+  credited, and the address only when ticked. The report carries the app's version, its
+  mode and its recent uncaught errors, scrubbed of addresses, keys and invoices, shows
+  exactly what will be sent, refuses a description carrying words of the phrase, and goes
+  to Emissio's intake on the public testnet site whatever node the wallet uses
+  (`app/lib/src/data/problem_report.dart`; the words are the web wallet's,
+  `docs/DEFAULT_MODE.md` there).
 - Custom node: point the wallet at your own Sequentia node/backend (with optional HTTP
   auth) instead of the public testnet default (`app/lib/src/screens/node_screen.dart`).
 
@@ -505,6 +512,7 @@ change:
 | `<origin>/faucet` | Testnet faucet |
 | `<origin>/openamp` | OpenAMP restricted-asset API |
 | `<origin>/lsp` | Hosted SeqLN LSP HTTP API |
+| `https://sequentiatestnet.com/emissio/api/problem-reports` | Report a problem (always the public site) |
 
 The default origin is `https://sequentiatestnet.com`. The Lightning rail's websocket
 endpoints and pinned host keys are separate constants in the same file and are enabled

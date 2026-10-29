@@ -121,7 +121,7 @@ on-chain coins used for boards and exit fees.
   developer mode, the same-chain SeqDEX composer, plus entries to "Buy with Bitcoin
   (cross-chain)" and, when a hosted LSP is configured, "Instant (Lightning)".
 - More hub: Node (view/change backend), Sites (connect to a site by its code, the sites
-  connected, Forget), Testnet faucet, Mode (user or developer mode,
+  connected, Forget), Testnet faucet, Help (Report a problem), Mode (user or developer mode,
   and in developer mode Leaves and Contracts), Security (app lock),
   Wallet (reveal phrase / remove wallet), Assets & staking (issue/manage assets,
   stake tSEQ).
