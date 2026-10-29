@@ -18,6 +18,9 @@ use std::str::FromStr;
 use std::sync::{Mutex, OnceLock};
 
 use bark::ark::bitcoin::{self, consensus, Address, Amount, Network};
+use bark::actions::lightning::pay::LightningSendState;
+use bark::actions::lightning::receive::LightningReceiveState;
+use bark::ark::lightning::{Invoice, PaymentHash};
 use bark::ark::Address as ArkAddress;
 use bark::bip39;
 use bark::{Config, OpenWalletArgs, Wallet, WalletSeed};
@@ -211,13 +214,137 @@ pub fn send(destination: &str, sats_amount: Option<u64>) -> Result<Value, Value>
 }
 
 /// An invoice of `sats` paid into the ark: claimed by [`sync`] while the app
-/// runs.
+/// runs, or at once by [`receive_status`] with `claim`. The answer is
+/// `{"invoice", "payment_hash", "expires_at"}`.
 pub fn invoice(sats_amount: u64, description: Option<String>) -> Result<Value, Value> {
     let w = wallet()?;
     let inv = runtime()
         .block_on(w.bolt11_invoice(Amount::from_sat(sats_amount), description, None))
         .map_err(err)?;
-    Ok(json!({"invoice": inv.to_string()}))
+    let expires_at = inv.duration_since_epoch().as_secs() + inv.expiry_time().as_secs();
+    Ok(json!({
+        "invoice": inv.to_string(),
+        "payment_hash": PaymentHash::from(&inv).to_string(),
+        "expires_at": expires_at,
+    }))
+}
+
+// The calls below are the ones the trade composer makes of a Bitcoin Lightning
+// wallet, answered by the ark. They are the native twins of the commands of
+// the same names in arca's `bark-wasm/src/command.rs`, which the web wallet's
+// ark runs: change them together.
+
+/// The longest lock, in blocks, a Lightning payment out of the ark can take:
+/// the server pays with at most its HTLC-send delta less its own margin.
+fn max_route_delay(info: &bark::ark::ArkInfo) -> u32 {
+    (info.htlc_send_expiry_delta as u32).saturating_sub(info.htlc_expiry_delta as u32)
+}
+
+fn send_state(st: LightningSendState) -> Value {
+    match st {
+        LightningSendState::Paid(p) => json!({"state": "complete", "preimage": p.preimage.to_string()}),
+        LightningSendState::InProgress(s) => json!({"state": "pending", "fee": sats(s.fee), "amount": sats(s.payment_amount)}),
+        LightningSendState::Unknown => json!({"state": "none"}),
+    }
+}
+
+fn receive_state(st: LightningReceiveState) -> Value {
+    match st {
+        LightningReceiveState::Settled(r) => json!({"state": "paid", "preimage": r.preimage.to_string(), "amount": sats(r.amount)}),
+        LightningReceiveState::InProgress(r) => json!({"state": "waiting", "invoice": r.invoice.to_string()}),
+    }
+}
+
+fn payment_hash(hash: &str) -> Result<PaymentHash, Value> {
+    PaymentHash::from_str(hash.trim()).map_err(|_| refusal("not a payment hash"))
+}
+
+/// What paying `sats` over Lightning out of the ark costs now, and the longest
+/// lock the server's payment may take: `{"fee", "gross", "max_route_delay"}`.
+pub fn pay_fee(sats_amount: u64) -> Result<Value, Value> {
+    let w = wallet()?;
+    runtime().block_on(async {
+        let info = w.require_ark_info().await.map_err(err)?;
+        let e = w.estimate_lightning_send_fee(Amount::from_sat(sats_amount)).await.map_err(err)?;
+        Ok(json!({"fee": sats(e.fee), "gross": sats(e.gross_amount), "max_route_delay": max_route_delay(&info)}))
+    })
+}
+
+/// Pays the invoice out of the ark, refused before anything moves when its fee
+/// would be more than `max_fee_sats` or the route's lock could run past
+/// `max_delay` blocks. A payment already made under the invoice's hash is
+/// never made again: its state is the answer. The answer is
+/// `{"state": "complete", "preimage"} | {"state": "pending"} | {"state":
+/// "failed", "reason"}`.
+pub fn pay(invoice: &str, max_fee_sats: Option<u64>, max_delay: Option<u32>, wait: bool) -> Result<Value, Value> {
+    let w = wallet()?;
+    let inv = bark::lightning_invoice::Bolt11Invoice::from_str(invoice.trim())
+        .map_err(|e| refusal(format!("the invoice does not decode: {}", e)))?;
+    let hash = PaymentHash::from(&inv);
+    runtime().block_on(async {
+        match w.lightning_send_state(hash).await.map_err(err)? {
+            LightningSendState::Unknown => {},
+            st => return Ok(send_state(st)),
+        }
+        let msat = inv.amount_milli_satoshis().ok_or_else(|| refusal("the invoice names no amount"))?;
+        let amount = Amount::from_sat(msat.div_ceil(1000));
+        let info = w.require_ark_info().await.map_err(err)?;
+        if let Some(max) = max_delay {
+            if max_route_delay(&info) > max {
+                return Err(refusal(format!(
+                    "refused: a payment from the ark may lock for {} blocks, more than the {} allowed",
+                    max_route_delay(&info),
+                    max
+                )));
+            }
+        }
+        let fee = w.estimate_lightning_send_fee(amount).await.map_err(err)?.fee;
+        if let Some(max) = max_fee_sats {
+            if fee > Amount::from_sat(max) {
+                return Err(refusal(format!(
+                    "refused: the payment's fee of {} sat is more than the {} allowed",
+                    fee.to_sat(),
+                    max
+                )));
+            }
+        }
+        match w.pay_lightning_invoice(Invoice::Bolt11(inv), None, wait).await {
+            Ok(_) => Ok(send_state(w.lightning_send_state(hash).await.map_err(err)?)),
+            Err(e) => match w.lightning_send_state(hash).await.map_err(err)? {
+                LightningSendState::Unknown => Ok(json!({"state": "failed", "reason": format!("{:#}", e)})),
+                st => Ok(send_state(st)),
+            },
+        }
+    })
+}
+
+/// A payment's state under `hash`; with `drive`, the wallet first asks the
+/// server how it stands. `{"state": "none" | "pending" | "complete",
+/// "preimage"?}`.
+pub fn pay_status(hash: &str, drive: bool) -> Result<Value, Value> {
+    let w = wallet()?;
+    let h = payment_hash(hash)?;
+    runtime().block_on(async {
+        let st = if drive {
+            w.check_lightning_payment(h, false).await.map_err(err)?
+        } else {
+            w.lightning_send_state(h).await.map_err(err)?
+        };
+        Ok(send_state(st))
+    })
+}
+
+/// A receive's state under `hash`; with `claim`, the wallet first claims a
+/// payment the server holds for it. `{"state": "paid", "preimage", "amount"} |
+/// {"state": "waiting"} | {"state": "unknown", "reason"}` (unknown: never made
+/// here, or given up).
+pub fn receive_status(hash: &str, claim: bool) -> Result<Value, Value> {
+    let w = wallet()?;
+    let h = payment_hash(hash)?;
+    runtime().block_on(async {
+        let st = if claim { w.try_claim_lightning_receive(h, false).await } else { w.lightning_receive_state(h).await };
+        Ok(st.map(receive_state).unwrap_or_else(|e| json!({"state": "unknown", "reason": format!("{:#}", e)})))
+    })
 }
 
 /// The funding address of a new board and the key and height it is made for:
@@ -316,9 +443,15 @@ mod tests {
             Ok(i) => {
                 println!("invoice {}", i);
                 assert_eq!(kind_of(i["invoice"].as_str().unwrap()), "lightning");
+                let h = i["payment_hash"].as_str().unwrap();
+                println!("receive status {}", receive_status(h, true).expect("receive status"));
+                // The wallet's own invoice, paid from an empty ark: refused before anything moves.
+                println!("pay own invoice {:?}", pay(i["invoice"].as_str().unwrap(), Some(0), Some(66), false));
+                println!("pay status {}", pay_status(h, false).expect("pay status"));
             },
             Err(e) => println!("invoice refused {}", e),
         }
+        println!("pay fee {}", pay_fee(20_000).expect("pay fee"));
         println!("board address {}", board_address().expect("board address"));
         close();
     }

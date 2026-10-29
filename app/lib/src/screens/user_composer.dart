@@ -15,8 +15,11 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/ark_btc_lightning.dart';
+import '../data/ark_btc_service.dart';
 import '../data/btc_lightning.dart';
 import '../data/config.dart';
+import '../data/dev_mode.dart';
 import '../data/format.dart';
 import '../data/leaf_rail.dart' show offerForVerify;
 import '../data/leaf_service.dart';
@@ -73,6 +76,18 @@ BtcLightning? appBtcLightning(String walletTag) {
     log: (m) => debugPrint(m),
   );
 }
+
+/// The Bitcoin ark as the composer's Bitcoin Lightning: in default mode a trade's BTC is paid
+/// from the ark and received into it, like every other BTC payment there.
+final ArkBtcLightning _arkLn = ArkBtcLightning(const CoreArkCalls(), onMoved: () => ArkBtcService.instance.refresh());
+
+/// The BTC rail new trades take: the ark in default mode once it is open, else the wallet's own
+/// hosted Bitcoin node (developer mode always: it leaves the rails to the person).
+String appBtcRail() => !DevMode.instance.on && ArkBtcService.instance.open ? 'ark' : 'lightning';
+
+/// The wallet's Bitcoin Lightning on `rail`: the ark (null while it is not open) or the hosted node.
+BtcLightning? appBtcOn(String rail, String walletTag) =>
+    rail == 'ark' ? (ArkBtcService.instance.open ? _arkLn : null) : appBtcLightning(walletTag);
 
 /// The engine as the app runs it: the leaf library through [LeafService], the maker and the
 /// relay at the app's backend, the pairs list the drill keeps (the web wallet's
@@ -165,7 +180,9 @@ UserTradeEngine appTradeEngine({required String walletTag}) {
     },
     read: () async => (await SharedPreferences.getInstance()).getString(key),
     write: (v) async => (await SharedPreferences.getInstance()).setString(key, v),
-    btc: () => appBtcLightning(walletTag),
+    btc: () => appBtcOn(appBtcRail(), walletTag),
+    btcRail: appBtcRail,
+    btcOf: (rail) => appBtcOn(rail, walletTag),
     log: (m) => debugPrint(m),
   ));
 }
