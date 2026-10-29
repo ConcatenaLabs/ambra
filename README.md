@@ -275,6 +275,10 @@ module that implements it.
     block. An address the ark cannot cover, or one it refuses, is paid as before. A code
     or an invoice beyond what the ark holds reads "You can send up to <amount> BTC this way
     now."
+  - The same phrase on another device, or restored here, holds the same ark BTC: Bark
+    recovers from the server's recovery mailbox when it creates its store, and on every
+    open and every five minutes after the wallet catches up (`catch_up_from_server`) with
+    what the phrase's other wallets boarded, received or spent since.
   - BTC's one figure counts the ark; what is on its way in shows as "<amount> BTC
     arriving". Developer mode opens the ark wallet too and counts it (its split reads
     "… on the Bitcoin ark"), but moves nothing into it or out of it by itself.

@@ -156,6 +156,25 @@ pub fn sync() -> Result<Value, Value> {
     })
 }
 
+/// Brings the store up to date with what other wallets of the same phrase did
+/// since it was made: coins they boarded or received, read from the server's
+/// recovery mailbox and imported when the store lacks them, and coins they
+/// spent, marked spent. [`open`] recovers only when it creates the store, so a
+/// second device, or a store kept across a remove and an import, learns of them
+/// only here. The native twin of bark-wasm's `catch_up`: `{"recovered",
+/// "recovered_sat", "spent_elsewhere", "failed", "complete"}`.
+pub fn catch_up() -> Result<Value, Value> {
+    let w = wallet()?;
+    let r = runtime().block_on(w.catch_up_from_server()).map_err(err)?;
+    Ok(json!({
+        "recovered": r.recovery.recovered().ids().map(|i| i.to_string()).collect::<Vec<_>>(),
+        "recovered_sat": sats(r.recovery.recovered().total_amount()),
+        "spent_elsewhere": r.spent_elsewhere.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
+        "failed": r.recovery.failed().ids().map(|i| i.to_string()).collect::<Vec<_>>(),
+        "complete": r.recovery.is_complete(),
+    }))
+}
+
 /// A new ark address of the wallet's: what another wallet of the same ark pays
 /// in seconds.
 pub fn address() -> Result<Value, Value> {
@@ -439,6 +458,9 @@ mod tests {
         assert_eq!(kind_of(a["address"].as_str().unwrap()), "ark");
         let t = std::time::Instant::now();
         println!("sync {} in {:?}", sync().expect("sync"), t.elapsed());
+        let t = std::time::Instant::now();
+        println!("catch up {} in {:?}", catch_up().expect("catch up"), t.elapsed());
+        println!("balance {}", balance().expect("balance"));
         match invoice(20_000, Some("smoke".into())) {
             Ok(i) => {
                 println!("invoice {}", i);
