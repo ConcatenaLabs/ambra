@@ -550,14 +550,14 @@ abstract class RustLibApi extends BaseApi {
 
   String crateApiOpenampXonlyPubkey({required String mnemonic});
 
-  Future<PairingKeys> crateApiNostrPairingNewKeys();
+  PairingKeys crateApiNostrPairingNewKeys();
 
-  Future<PairingMessage> crateApiNostrPairingOpen({
+  PairingMessage crateApiNostrPairingOpen({
     required String secretHex,
     required String eventJson,
   });
 
-  Future<String> crateApiNostrPairingSeal({
+  String crateApiNostrPairingSeal({
     required String secretHex,
     required String peerHex,
     required BigInt createdAt,
@@ -4073,17 +4073,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
-  Future<PairingKeys> crateApiNostrPairingNewKeys() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
+  PairingKeys crateApiNostrPairingNewKeys() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 92,
-            port: port_,
-          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 92)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_pairing_keys,
@@ -4100,22 +4095,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "pairing_new_keys", argNames: []);
 
   @override
-  Future<PairingMessage> crateApiNostrPairingOpen({
+  PairingMessage crateApiNostrPairingOpen({
     required String secretHex,
     required String eventJson,
   }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(secretHex, serializer);
           sse_encode_String(eventJson, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 93,
-            port: port_,
-          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 93)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_pairing_message,
@@ -4134,26 +4124,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
-  Future<String> crateApiNostrPairingSeal({
+  String crateApiNostrPairingSeal({
     required String secretHex,
     required String peerHex,
     required BigInt createdAt,
     required String plaintext,
   }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(secretHex, serializer);
           sse_encode_String(peerHex, serializer);
           sse_encode_u_64(createdAt, serializer);
           sse_encode_String(plaintext, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 94,
-            port: port_,
-          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 94)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,

@@ -87,10 +87,12 @@ SiteOrder readOrderParams(Map p) {
 }
 
 /// What a limit order rests as: what it sells, for what, at which rate (want atoms per sold atoms).
-/// `unit` is 10^(base precision): the price is quote atoms per whole base unit.
+/// `unit` is 10^(base precision): the price is quote atoms per whole base unit. The rate is kept in
+/// lowest terms: a fill multiplies by it in 64-bit arithmetic.
 ({String sell, String want, BigInt amount, BigInt rateNum, BigInt rateDen}) restTerms(SiteOrder o, BigInt unit) {
-  if (o.side == 'sell') return (sell: o.base, want: o.quote, amount: o.amount, rateNum: o.price!, rateDen: unit);
-  return (sell: o.quote, want: o.base, amount: _ceilDiv(o.amount * o.price!, unit), rateNum: unit, rateDen: o.price!);
+  final g = o.price!.gcd(unit);
+  if (o.side == 'sell') return (sell: o.base, want: o.quote, amount: o.amount, rateNum: o.price! ~/ g, rateDen: unit ~/ g);
+  return (sell: o.quote, want: o.base, amount: _ceilDiv(o.amount * o.price!, unit), rateNum: unit ~/ g, rateDen: o.price! ~/ g);
 }
 
 /// Whether a ticket meets a limit: a sale gets at least the price per base, a purchase pays at most it.
@@ -210,6 +212,7 @@ class SiteOrders {
     }
     v['trades'] = Map<String, dynamic>.from((v['trades'] as Map?) ?? const {});
     v['orders'] = Map<String, dynamic>.from((v['orders'] as Map?) ?? const {});
+    v['placing'] = Map<String, dynamic>.from((v['placing'] as Map?) ?? const {});
     return v;
   }
 
@@ -349,8 +352,11 @@ class SiteOrders {
         throw SiteRefusal(e is LeafRefusal && e.plain ? e.message : UserWords.failed);
       }
       if (rec['state'] == 'failed') throw SiteRefusal(UserWords.failed);
+      final gave = p.ticket!.amountIn, got = p.ticket!.amountOut;
+      // In the market's terms: base and quote atoms of the one fill.
+      final fill = o.side == 'sell' ? {'base': '$gave', 'quote': '$got'} : {'base': '$got', 'quote': '$gave'};
       final v = await _db();
-      (v['trades'] as Map)[rec['id']] = {'origin': p.origin, 'market': market, 'side': o.side, 'type': o.type, 'at': d.now()};
+      (v['trades'] as Map)[rec['id']] = {'origin': p.origin, 'market': market, 'side': o.side, 'type': o.type, 'at': d.now(), ...fill};
       await _save(v);
       return {
         'trade': rec['id'],
@@ -363,16 +369,8 @@ class SiteOrders {
       };
     }
     final args = p.args!;
-    Map<String, dynamic> r;
-    try {
-      r = Map<String, dynamic>.from((await d.leaves('order_place', {...args, 'shown': p.quote})) as Map);
-    } catch (e) {
-      // The library's own words name its internals: the site hears the plain refusal.
-      d.log('[site orders] order_place: $e');
-      throw SiteRefusal(e is LeafRefusal && e.plain ? e.message : SiteWords.cannotRest);
-    }
-    final v = await _db();
-    (v['orders'] as Map)['${r['order']}'] = {
+    final offerId = _hex16();
+    final rec = {
       'origin': p.origin,
       'market': market,
       'side': o.side,
@@ -382,9 +380,28 @@ class SiteOrders {
       'sold': args['amount'],
       'rate_num': args['rate_num'],
       'rate_den': args['rate_den'],
-      'offer_id': _hex16(),
+      'offer_id': offerId,
       'at': d.now(),
     };
+    // Written before the library is asked, so an order whose app closed while it was placed is
+    // still this site's: it shows as being placed until the library's orders name it.
+    var v = await _db();
+    (v['placing'] as Map)[offerId] = rec;
+    await _save(v);
+    Map<String, dynamic> r;
+    try {
+      r = Map<String, dynamic>.from((await d.leaves('order_place', {...args, 'shown': p.quote})) as Map);
+    } catch (e) {
+      v = await _db();
+      (v['placing'] as Map).remove(offerId);
+      await _save(v);
+      // The library's own words name its internals: the site hears the plain refusal.
+      d.log('[site orders] order_place: $e');
+      throw SiteRefusal(e is LeafRefusal && e.plain ? e.message : SiteWords.cannotRest);
+    }
+    v = await _db();
+    (v['placing'] as Map).remove(offerId);
+    (v['orders'] as Map)['${r['order']}'] = rec;
     await _save(v);
     return {'trade': null, 'filled': 0, 'failed': <dynamic>[], 'order': r['order'], 'order_error': null, 'gave': '0', 'got': '0'};
   }
@@ -460,17 +477,36 @@ class SiteOrders {
             'kind': 'take',
             'order': null,
             'state': _tradeState(byId['${e.key}']),
-            'fills': <dynamic>[],
+            'fills': [
+              if ((e.value as Map)['base'] != null)
+                {'txid': e.key, 'base': (e.value as Map)['base'], 'quote': (e.value as Map)['quote'], 'state': _tradeState(byId['${e.key}'])},
+            ],
           },
     ];
-    final ids = [for (final e in (v['orders'] as Map).entries) if ((e.value as Map)['origin'] == origin) e];
+    final placing = [for (final e in (v['placing'] as Map).entries) if ((e.value as Map)['origin'] == origin) e];
+    var ids = [for (final e in (v['orders'] as Map).entries) if ((e.value as Map)['origin'] == origin) e];
     List lib = const [];
-    if (ids.isNotEmpty) {
+    if (ids.isNotEmpty || placing.isNotEmpty) {
       try {
         lib = (await d.leaves('orders', const {})) as List? ?? const [];
       } catch (e) {
         d.log('[site orders] orders: $e');
       }
+    }
+    // An order placed while its app closed: the library's order of the same amount sold, named by
+    // no other record, is it.
+    if (placing.isNotEmpty && lib.isNotEmpty) {
+      final known = {...(v['orders'] as Map).keys.map((k) => '$k')};
+      for (final e in placing) {
+        final rec = e.value as Map;
+        final o = lib.whereType<Map>().where((x) => !known.contains('${x['order']}') && '${x['amount'] ?? x['holds'] ?? ''}' == '${rec['sold']}').firstOrNull;
+        if (o == null) continue;
+        known.add('${o['order']}');
+        (v['orders'] as Map)['${o['order']}'] = rec;
+        (v['placing'] as Map).remove(e.key);
+      }
+      await _save(v);
+      ids = [for (final e in (v['orders'] as Map).entries) if ((e.value as Map)['origin'] == origin) e];
     }
     final byOrder = {for (final o in lib.whereType<Map>()) '${o['order']}': o};
     final t = d.now() ~/ 1000;
@@ -500,6 +536,15 @@ class SiteOrders {
         'can_take_back': from != null && from > 0 && t >= from && (state == 'open' || state == 'filling'),
         'fills': <dynamic>[],
         'note': o != null && o['note'] != null ? '${o['note']}' : '',
+      });
+    }
+    for (final e in (v['placing'] as Map).entries) {
+      final rec = e.value as Map;
+      if (rec['origin'] != origin) continue;
+      out.add({
+        'order': e.key, 'market': rec['market'], 'side': rec['side'], 'price': rec['price'], 'at': rec['at'], 'amount': rec['amount'],
+        'filled': '0', 'holds': rec['sold'], 'sell': rec['sell'], 'state': 'placing', 'settled': false, 'take_back_from': null,
+        'take_back_from_text': '', 'can_take_back': false, 'fills': <dynamic>[], 'note': '',
       });
     }
     return {'orders': out, 'trades': trades};

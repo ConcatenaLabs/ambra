@@ -1,6 +1,8 @@
 // A site's orders (data/site_orders.dart) mapped onto the trade engine and the leaf library's
 // placement, against fakes. The same cases as the web wallet's site-orders.test.mjs; the engine
 // and the library are driven live on the device.
+import 'dart:async';
+
 import 'package:ambra/src/data/leaf_service.dart' show LeafRefusal;
 import 'package:ambra/src/data/site_orders.dart';
 import 'package:ambra/src/data/user_trade.dart';
@@ -55,6 +57,7 @@ class FakeEngine {
 class FakeLeaves {
   final calls = <(String, Map<String, dynamic>)>[];
   Object? placeError;
+  List<Map<String, dynamic>>? ordersAnswer;
   Future<dynamic> call(String c, Map<String, dynamic> a) async {
     calls.add((c, a));
     switch (c) {
@@ -66,6 +69,7 @@ class FakeLeaves {
         if (placeError != null) throw placeError!;
         return {'order': 'o1', 'state': 'waiting'};
       case 'orders':
+        if (ordersAnswer != null) return ordersAnswer;
         return [
           {'order': 'o1', 'state': 'resting', 'holds': '60000000', 'refund_from': 87400, 'rests_at': 't:0'}
         ];
@@ -113,10 +117,14 @@ void main() {
   test('rest terms and the limit check: the price is quote atoms per whole base unit', () {
     final sell = SiteOrder('limit', b, q, 'sell', u * BigInt.two, BigInt.from(4100) * u);
     final rs = restTerms(sell, u);
-    expect([rs.sell, rs.want, rs.amount, rs.rateNum, rs.rateDen], [b, q, u * BigInt.two, BigInt.from(4100) * u, u]);
+    // In lowest terms: 4100·10^8 / 10^8 is 4100 / 1.
+    expect([rs.sell, rs.want, rs.amount, rs.rateNum, rs.rateDen], [b, q, u * BigInt.two, BigInt.from(4100), BigInt.one]);
     final buy = SiteOrder('limit', b, q, 'buy', u ~/ BigInt.two, BigInt.from(3950) * u);
     final rb = restTerms(buy, u);
-    expect([rb.sell, rb.want, rb.amount, rb.rateNum, rb.rateDen], [q, b, BigInt.from(1975) * u, u, BigInt.from(3950) * u]);
+    expect([rb.sell, rb.want, rb.amount, rb.rateNum, rb.rateDen], [q, b, BigInt.from(1975) * u, BigInt.one, BigInt.from(3950)]);
+    // A price with no common factor with the unit stays as it is.
+    final odd = restTerms(SiteOrder('limit', b, q, 'sell', u, BigInt.from(123456789)), u);
+    expect([odd.rateNum, odd.rateDen], [BigInt.from(123456789), u]);
     Ticket t(BigInt i, BigInt o) => Ticket(payAsset: b, receiveAsset: q, amountIn: i, amountOut: o, fees: const [], source: 's');
     expect(meetsLimit(sell, t(u * BigInt.two, BigInt.from(7800) * u), u), false);
     expect(meetsLimit(SiteOrder('limit', b, q, 'sell', u * BigInt.two, BigInt.from(3900) * u), t(u * BigInt.two, BigInt.from(7800) * u), u), true);
@@ -144,6 +152,9 @@ void main() {
     expect([a['filled'], a['got'], a['gave'], a['order']], [1, '$u', '${BigInt.from(4000) * u}', null]);
     final o = await s.orders('https://s/dex/');
     expect((o['trades'] as List).single['state'], 'sent');
+    expect((o['trades'] as List).single['fills'], [
+      {'txid': 'r0', 'base': '$u', 'quote': '${BigInt.from(4000) * u}', 'state': 'sent'}
+    ]);
     // Following moves the site's own trades on, and no other.
     e.recs.add({'id': 'composer', 'state': 'sent'});
     await s.follow();
@@ -188,7 +199,7 @@ void main() {
     expect(forbidden(words(r)), isEmpty);
     final qa = l.calls.firstWhere((c) => c.$1 == 'order_quote').$2;
     expect([qa['sell'], qa['want'], qa['amount'], qa['rate_num'], qa['rate_den'], qa['expiry'], qa['min_lot']],
-        [b, q, '$u', '${BigInt.from(4200) * u}', '$u', '87400', '${u ~/ BigInt.from(10)}']);
+        [b, q, '$u', '4200', '1', '87400', '${u ~/ BigInt.from(10)}']);
     expect(words(r), contains('Price 4,200 USDX per GOLD'));
     expect(words(r), contains('What is left can be taken back from 1970-01-02 00:16 UTC'));
     expect(words(r), contains('Fees 0.00000025 GOLD\n'));
@@ -221,7 +232,7 @@ void main() {
     final r2 = await s.quote({'type': 'limit', 'base': b, 'quote': q, 'side': 'buy', 'amount': '$u', 'price': '${BigInt.from(3000) * u}'}, 'o');
     expect(r2.kind, 'rest');
     final qa = l.calls.lastWhere((c) => c.$1 == 'order_quote').$2;
-    expect([qa['sell'], qa['want'], qa['amount'], qa['rate_num'], qa['rate_den']], [q, b, '${BigInt.from(3000) * u}', '$u', '${BigInt.from(3000) * u}']);
+    expect([qa['sell'], qa['want'], qa['amount'], qa['rate_num'], qa['rate_den']], [q, b, '${BigInt.from(3000) * u}', '1', '3000']);
   });
 
   test('a market order nobody offers is refused in plain words, and a limit against BTC only trades', () async {
@@ -231,6 +242,36 @@ void main() {
         throwsA(isA<SiteRefusal>().having((x) => x.message, 'm', 'Not offered right now: nobody offers USDX for GOLD in one step.')));
     await expectLater(s.quote({'type': 'limit', 'base': b, 'quote': 'BTC', 'side': 'sell', 'amount': '5', 'price': '9'}, 'o'),
         throwsA(isA<SiteRefusal>().having((x) => x.message, 'm', SiteWords.priceNotMet)));
+  });
+
+  test('an order is recorded before the library is asked: one whose app closed mid-placement is still the site\'s', () async {
+    final e = FakeEngine(), l = FakeLeaves();
+    final placing = Completer<void>();
+    final hold = Completer<void>();
+    final real = l.call;
+    String? stored;
+    final s = SiteOrders(SiteOrderDeps(
+      quote: e.quote, confirm: e.confirm, drop: e.dropped.add, advance: (r) async => r, records: () async => e.recs,
+      leaves: (c, a) async {
+        if (c == 'order_place') {
+          placing.complete();
+          await hold.future;
+        }
+        return real(c, a);
+      },
+      meta: (h) => (ticker: 'GOLD', precision: 8), read: () async => stored, write: (v) async => stored = v,
+    ));
+    final r = await s.quote({'type': 'limit', 'base': b, 'quote': q, 'side': 'sell', 'amount': '$u', 'price': '${BigInt.from(9000) * u}'}, 'o');
+    unawaited(s.confirm(r.id));
+    await placing.future;
+    // While the library places it: listed as placing.
+    final o1 = ((await s.orders('o'))['orders'] as List).single as Map;
+    expect(o1['state'], 'placing');
+    // The library's orders name an order of that amount: it is adopted as this site's.
+    l.ordersAnswer = [{'order': 'o9', 'state': 'waiting', 'amount': '$u'}];
+    final o2 = ((await s.orders('o'))['orders'] as List).single as Map;
+    expect([o2['order'], o2['state']], ['o9', 'placing']);
+    hold.complete();
   });
 
   test('a placement the library refuses is said plainly, never in its own words', () async {

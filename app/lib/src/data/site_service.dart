@@ -29,17 +29,17 @@ class FfiSiteCrypto implements SiteCrypto {
   const FfiSiteCrypto();
   @override
   Future<({String secret, String pubkey})> newKeys() async {
-    final k = await pairing.pairingNewKeys();
+    final k = pairing.pairingNewKeys();
     return (secret: k.secretHex, pubkey: k.pubkeyHex);
   }
 
   @override
-  Future<String> seal(String secret, String peer, int createdAt, String plaintext) =>
+  Future<String> seal(String secret, String peer, int createdAt, String plaintext) async =>
       pairing.pairingSeal(secretHex: secret, peerHex: peer, createdAt: BigInt.from(createdAt), plaintext: plaintext);
 
   @override
   Future<({String from, int createdAt, String text})> open(String secret, String eventJson) async {
-    final m = await pairing.pairingOpen(secretHex: secret, eventJson: eventJson);
+    final m = pairing.pairingOpen(secretHex: secret, eventJson: eventJson);
     return (from: m.fromHex, createdAt: m.createdAt.toInt(), text: m.text);
   }
 }
@@ -173,16 +173,21 @@ class AmbraSites {
   Future<Map<String, dynamic>> _balances() async {
     final m = await WalletRepository.instance.readMnemonic();
     if (m == null) throw StateError('the wallet is locked');
+    // A read the site waits on briefly (SeqDEX gives one 20 s): a sync that takes longer leaves
+    // the figures the wallet last read, and goes on by itself.
+    const wait = Duration(seconds: 8);
+    final chainF = core.syncWallet(mnemonic: m, esploraUrl: Backend.esplora).then((s) => s.balances);
+    final btcF = core.btcSync(mnemonic: m, t4Api: Backend.testnet4).then((b) => b.balanceSats);
     List<core.AssetBalance> chain;
     try {
-      chain = (await core.syncWallet(mnemonic: m, esploraUrl: Backend.esplora)).balances;
+      chain = await chainF.timeout(wait);
     } catch (e) {
-      debugPrint('[sites] balances from the cache: $e');
+      debugPrint('[sites] balances from the last read: $e');
       chain = await WalletCache.loadBalances() ?? const [];
     }
     String btc;
     try {
-      btc = (await core.btcSync(mnemonic: m, t4Api: Backend.testnet4)).balanceSats;
+      btc = await btcF.timeout(wait);
     } catch (_) {
       btc = await WalletCache.loadBtc() ?? '0';
     }

@@ -1,6 +1,9 @@
 //! A site paired by a `nostrconnect://` code (the extension's `doc/PAIRING.md`): the key
 //! made for one pairing, and the kind-24133 events it seals and opens. The key signs
 //! events of that pairing and nothing else; it is not derived from the wallet's phrase.
+//!
+//! Each call takes a millisecond, so each is synchronous: a site's answer never waits behind the
+//! wallet's long calls (a sync, a leaf command) for a worker thread.
 
 use anyhow::Result;
 
@@ -17,6 +20,7 @@ pub struct PairingKeys {
 }
 
 /// A fresh key pair for one pairing.
+#[flutter_rust_bridge::frb(sync)]
 pub fn pairing_new_keys() -> Result<PairingKeys> {
     let (secret_hex, pubkey_hex) = nostr::new_keys().map_err(e)?;
     Ok(PairingKeys { secret_hex, pubkey_hex })
@@ -24,6 +28,7 @@ pub fn pairing_new_keys() -> Result<PairingKeys> {
 
 /// A message to `peer_hex`: the signed kind-24133 event (JSON) of `secret_hex`, its
 /// content `plaintext` NIP-44 v2 encrypted to `peer_hex`, tagged `p` with it.
+#[flutter_rust_bridge::frb(sync)]
 pub fn pairing_seal(secret_hex: String, peer_hex: String, created_at: u64, plaintext: String) -> Result<String> {
     Ok(nostr::seal(&secret_hex, &peer_hex, created_at, &plaintext).map_err(e)?.to_string())
 }
@@ -36,6 +41,7 @@ pub struct PairingMessage {
     pub text: String,
 }
 
+#[flutter_rust_bridge::frb(sync)]
 pub fn pairing_open(secret_hex: String, event_json: String) -> Result<PairingMessage> {
     let ev: serde_json::Value = serde_json::from_str(&event_json).map_err(|x| e(format!("bad event: {x}")))?;
     let (from_hex, created_at, text) = nostr::open(&secret_hex, &ev).map_err(e)?;

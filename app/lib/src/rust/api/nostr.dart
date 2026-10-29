@@ -9,12 +9,12 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 // These functions are ignored because they are not marked as `pub`: `e`
 
 /// A fresh key pair for one pairing.
-Future<PairingKeys> pairingNewKeys() =>
+PairingKeys pairingNewKeys() =>
     RustLib.instance.api.crateApiNostrPairingNewKeys();
 
 /// A message to `peer_hex`: the signed kind-24133 event (JSON) of `secret_hex`, its
 /// content `plaintext` NIP-44 v2 encrypted to `peer_hex`, tagged `p` with it.
-Future<String> pairingSeal({
+String pairingSeal({
   required String secretHex,
   required String peerHex,
   required BigInt createdAt,
@@ -26,7 +26,7 @@ Future<String> pairingSeal({
   plaintext: plaintext,
 );
 
-Future<PairingMessage> pairingOpen({
+PairingMessage pairingOpen({
   required String secretHex,
   required String eventJson,
 }) => RustLib.instance.api.crateApiNostrPairingOpen(

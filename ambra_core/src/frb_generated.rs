@@ -3721,16 +3721,15 @@ fn wire__crate__api__openamp_xonly_pubkey_impl(
     )
 }
 fn wire__crate__api__nostr__pairing_new_keys_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "pairing_new_keys",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
         },
         move || {
             let message = unsafe {
@@ -3743,28 +3742,25 @@ fn wire__crate__api__nostr__pairing_new_keys_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             deserializer.end();
-            move |context| {
-                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || {
-                        let output_ok = crate::api::nostr::pairing_new_keys()?;
-                        Ok(output_ok)
-                    })(),
-                )
-            }
+            transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                (move || {
+                    let output_ok = crate::api::nostr::pairing_new_keys()?;
+                    Ok(output_ok)
+                })(),
+            )
         },
     )
 }
 fn wire__crate__api__nostr__pairing_open_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "pairing_open",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
         },
         move || {
             let message = unsafe {
@@ -3779,29 +3775,26 @@ fn wire__crate__api__nostr__pairing_open_impl(
             let api_secret_hex = <String>::sse_decode(&mut deserializer);
             let api_event_json = <String>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| {
-                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || {
-                        let output_ok =
-                            crate::api::nostr::pairing_open(api_secret_hex, api_event_json)?;
-                        Ok(output_ok)
-                    })(),
-                )
-            }
+            transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                (move || {
+                    let output_ok =
+                        crate::api::nostr::pairing_open(api_secret_hex, api_event_json)?;
+                    Ok(output_ok)
+                })(),
+            )
         },
     )
 }
 fn wire__crate__api__nostr__pairing_seal_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "pairing_seal",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
         },
         move || {
             let message = unsafe {
@@ -3818,19 +3811,17 @@ fn wire__crate__api__nostr__pairing_seal_impl(
             let api_created_at = <u64>::sse_decode(&mut deserializer);
             let api_plaintext = <String>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| {
-                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || {
-                        let output_ok = crate::api::nostr::pairing_seal(
-                            api_secret_hex,
-                            api_peer_hex,
-                            api_created_at,
-                            api_plaintext,
-                        )?;
-                        Ok(output_ok)
-                    })(),
-                )
-            }
+            transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                (move || {
+                    let output_ok = crate::api::nostr::pairing_seal(
+                        api_secret_hex,
+                        api_peer_hex,
+                        api_created_at,
+                        api_plaintext,
+                    )?;
+                    Ok(output_ok)
+                })(),
+            )
         },
     )
 }
@@ -6718,9 +6709,6 @@ fn pde_ffi_dispatcher_primary_impl(
         84 => wire__crate__api__leaves__leaves_open_impl(port, ptr, rust_vec_len, data_len),
         85 => wire__crate__api__leaves__leaves_run_impl(port, ptr, rust_vec_len, data_len),
         87 => wire__crate__api__list_stakes_impl(port, ptr, rust_vec_len, data_len),
-        92 => wire__crate__api__nostr__pairing_new_keys_impl(port, ptr, rust_vec_len, data_len),
-        93 => wire__crate__api__nostr__pairing_open_impl(port, ptr, rust_vec_len, data_len),
-        94 => wire__crate__api__nostr__pairing_seal_impl(port, ptr, rust_vec_len, data_len),
         95 => {
             wire__crate__api__rewards__plan_reward_batches_impl(port, ptr, rust_vec_len, data_len)
         }
@@ -6835,6 +6823,9 @@ fn pde_ffi_dispatcher_sync_impl(
         89 => wire__crate__api__openamp_compute_aid_impl(ptr, rust_vec_len, data_len),
         90 => wire__crate__api__openamp_sign_sighash_impl(ptr, rust_vec_len, data_len),
         91 => wire__crate__api__openamp_xonly_pubkey_impl(ptr, rust_vec_len, data_len),
+        92 => wire__crate__api__nostr__pairing_new_keys_impl(ptr, rust_vec_len, data_len),
+        93 => wire__crate__api__nostr__pairing_open_impl(ptr, rust_vec_len, data_len),
+        94 => wire__crate__api__nostr__pairing_seal_impl(ptr, rust_vec_len, data_len),
         102 => wire__crate__api__signer__seqln_derive_asset_impl(ptr, rust_vec_len, data_len),
         103 => wire__crate__api__signer__seqln_derive_node_impl(ptr, rust_vec_len, data_len),
         104 => wire__crate__api__signer__seqln_device_transport_privkey_impl(
