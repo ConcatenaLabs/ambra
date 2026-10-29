@@ -11,6 +11,7 @@ import 'src/data/leaf_service.dart';
 import 'src/data/node_config.dart';
 import 'src/data/price_service.dart';
 import 'src/data/registry_service.dart';
+import 'src/data/site_service.dart';
 import 'src/data/wallet_repository.dart';
 import 'src/rust/api.dart' as core;
 import 'src/rust/frb_generated.dart';
@@ -18,6 +19,7 @@ import 'src/screens/lock_screen.dart';
 import 'src/screens/onboarding.dart';
 import 'src/screens/shell.dart';
 import 'src/screens/sign_screen.dart';
+import 'src/screens/sites_screen.dart';
 import 'src/theme/theme.dart';
 import 'src/widgets/restricted_asset_detail.dart';
 
@@ -84,6 +86,11 @@ class _AmbraAppState extends State<AmbraApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     WalletRepository.instance.addListener(_onRepoChanged);
     _initDeepLinks();
+    // A connected site's requests are approved in a sheet over whatever screen is open.
+    AmbraSites.instance.ask = (a) async {
+      final ctx = _navKey.currentContext;
+      return ctx != null && await showSiteApproval(ctx, a);
+    };
   }
 
   @override
@@ -108,11 +115,22 @@ class _AmbraAppState extends State<AmbraApp> with WidgetsBindingObserver {
     if (_pendingUri != null && repo.hasWallet && repo.unlocked) {
       final u = _pendingUri!;
       _pendingUri = null;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _route(u));
+      WidgetsBinding.instance.addPostFrameCallback((_) => _onUri(u));
     }
   }
 
   void _onUri(Uri uri) {
+    // A site's pairing code opened as a link (nostrconnect://…): the same approval as a scan.
+    if (uri.scheme == 'nostrconnect') {
+      final repo = WalletRepository.instance;
+      if (!(repo.hasWallet && repo.unlocked)) {
+        _pendingUri = uri;
+        return;
+      }
+      final ctx = _navKey.currentContext;
+      if (ctx != null) unawaited(openPairing(ctx, uri.toString()));
+      return;
+    }
     final repo = WalletRepository.instance;
     if (!(repo.hasWallet && repo.unlocked)) {
       _pendingUri = uri; // handled by _onRepoChanged once the shell is up

@@ -417,6 +417,36 @@ module that implements it.
   the transactions the report lists; it does not prove the list complete. User mode shows
   none of it.
 
+**Connect to a site**
+- A site such as SeqDEX trades through this wallet, and every trade it asks for is shown
+  on the phone first (More > Sites > Connect to a site,
+  `app/lib/src/screens/sites_screen.dart`). The site shows a `nostrconnect://` code as a QR
+  code, or as a link on the same phone; Ambra scans it, takes it pasted, or opens it from
+  the link. The pairing shows the site's name and the address it says it has (any page
+  can put any address in a code, so the owner checks it against the page in front of
+  them). Approving it is the site's connection; More > Sites lists the sites connected,
+  each with Forget.
+- The wire is the extension's `doc/PAIRING.md`: Nostr Connect framing over the relays the
+  code names, each message a kind-24133 event, NIP-44 v2 encrypted and signed by its
+  sender, with a key pair Ambra makes for that pairing alone (`ambra_core/src/nostr.rs`,
+  tested against the official NIP-44 vectors). A request more than five minutes from the
+  phone's clock, or with an id already answered, is dropped
+  (`app/lib/src/data/site_link.dart`).
+- The site's methods are the provider protocol's (the extension's `doc/PROVIDER.md`):
+  `getCapabilities`, `getWalletMode`, `connect`, `getAccounts` (the shared `tb1` address),
+  `getBalances` (`assets` on the chain, `btc` on testnet4, and apart from them `leaves`
+  and `btc_ark`, what is held as leaves and in the Bitcoin ark), `placeOrder`,
+  `getOrders` and `cancelOrder` (`app/lib/src/data/site_service.dart`).
+- A market order is one trade of the Swap tab's own engine; a limit order is that trade
+  when the book meets its price, and otherwise rests on the book at its price, placed
+  from the wallet's leaves and listed by the wallet once it rests, to be taken back once
+  its time has run out. The approval sheet names what is given, what is got, the fees and
+  "Asked by" the site; declining it, or leaving it five minutes, answers the site "the
+  user rejected the request" with nothing moved. The same rules as the web wallet's
+  `site-orders.js` (`app/lib/src/data/site_orders.dart`).
+- A site reaches the wallet while Ambra is open: requests are read while the app runs,
+  and one sent while it is closed goes unanswered.
+
 **Assets, staking, faucet, node**
 - Issue a new asset, reissue (mint more of) an asset you hold the reissuance token for,
   and burn (`app/lib/src/screens/assets_screen.dart`). The issued amount, the asset and its

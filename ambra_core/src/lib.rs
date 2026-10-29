@@ -34,6 +34,8 @@ pub mod contracts;
 /// (`bark::arca`) with the phone's HTTP and store, and the scheduled job's pass.
 pub mod leaves;
 pub mod ark_btc;
+/// NIP-44 v2 encryption and BIP340-signed Nostr events: the transport of a site pairing.
+pub mod nostr;
 /// SeqOB passive-CLOB covenant DERIVATION (port of covenant.js: leaves, taptree,
 /// planFill, ceilPrice, rate math) — pinned to SWK's golden vectors.
 pub mod seqob_covenant_derive;

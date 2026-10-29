@@ -27,6 +27,10 @@ pub mod ark_btc;
 /// spend of a template the kit carries, checked and signed by the kit's engine.
 pub mod contracts;
 
+/// A site paired by a `nostrconnect://` code: the pairing's own key, and its messages
+/// sealed and opened (NIP-44 v2, kind-24133 events).
+pub mod nostr;
+
 use std::str::FromStr;
 
 use anyhow::Result;
