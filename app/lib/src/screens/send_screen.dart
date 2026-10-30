@@ -412,6 +412,14 @@ class _SendTabState extends State<SendTab> {
       if (code != null) {
         _route = _routeOf(code);
         if (_route == null) return _snack(DefaultWords.codeTakesAssets);
+        final way = _route == code.ark
+            ? 'ark'
+            : _route == code.lightning
+                ? 'invoice'
+                : _route == code.address
+                    ? 'address'
+                    : 'request';
+        debugPrint('[ambra-send] a receive code, paid at its $way${_byAddress ? ' (nothing held pays it in seconds)' : ''}');
       }
     } on FormatException catch (e) {
       return _snack(e.message);

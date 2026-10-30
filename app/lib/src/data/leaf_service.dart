@@ -371,9 +371,11 @@ class LeafService extends ChangeNotifier {
           boarded = true;
           _boardRefused.remove(asset);
           autoBoardError = null;
+          debugPrint('[leaves] boarded $amount of ${asset.substring(0, 8)} (fee $fee)');
         } catch (err) {
           autoBoardError = LeafRefusal.of(err);
           _boardRefused[asset] = DateTime.now();
+          debugPrint('[leaves] board of ${asset.substring(0, 8)} refused, again in ${boardBackoff.inMinutes} min: ${autoBoardError!.message}');
         }
       }
     } finally {

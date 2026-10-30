@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../rust/api.dart' as core;
 import '../rust/api/ark_btc.dart' as ark;
+import 'btc_state.dart';
 import 'config.dart';
 import 'dev_mode.dart';
 import 'leaf_service.dart';
@@ -210,8 +211,12 @@ class ArkBtcService extends ChangeNotifier {
       if (done['broadcast_error'] != null) debugPrint('[ambra-ark] board broadcast: ${done['broadcast_error']}');
       boardError = null;
       debugPrint('[ambra-ark] boarded $amount sat: ${tx.txid}');
-      // A sync first, so the figure counts the board at once.
+      // A sync first, so the figure counts the board at once; and the address read again, so
+      // the coin the board spent is not counted on the chain as well meanwhile.
       await ark.arkSync();
+      try {
+        BtcState.instance.observe(btc: await core.btcSync(mnemonic: m, t4Api: Backend.testnet4));
+      } catch (_) {}
       await refresh();
     } catch (e) {
       boardError = e;

@@ -1667,6 +1667,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
       _codeUntil = until;
       _code = _compose();
     });
+    debugPrint('[ambra-receive] the last code drawn, shown at once: ${_code?.length} chars');
   }
 
   /// A new code on request; the one shown stays until the new one is ready.
@@ -1753,7 +1754,10 @@ class _ReceiveTabState extends State<ReceiveTab> {
 
   void _show() {
     final c = _compose();
-    if (c != null && mounted) setState(() => _code = c);
+    if (c == null || !mounted || c == _code) return;
+    setState(() => _code = c);
+    // The code is public (it is shown and copied); its size is what a scanner meets.
+    debugPrint('[ambra-receive] code ${c.length} chars, QR version ${payCodeQr(c).typeNumber}: $c');
   }
 
   /// Draws the code part by part, each shown as soon as it is there: the shared address at the
@@ -1831,11 +1835,9 @@ class _ReceiveTabState extends State<ReceiveTab> {
   }
 
   Future<void> _load() async {
-    setState(() {
-      _address = null;
-      _bitcoinAddress = null;
-      _error = null;
-    });
+    // The address shown stays until the next one is ready: a scan moving the index on, or the
+    // wallet syncing, never blanks it.
+    setState(() => _error = null);
     try {
       final m = await WalletRepository.instance.readMnemonic();
       if (m == null) return;
