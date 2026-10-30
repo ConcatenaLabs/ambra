@@ -130,6 +130,9 @@ module that implements it.
 
 **History and stuck-transaction rescue**
 - Transaction history with kind badges, per-asset deltas, and explorer deep links.
+- Each trade of the Swap tab is one row at the top: "Swapped <pay> for <get>", its time and,
+  until settled, its status, with the amounts as -/+ and the fee
+  (`tradeHistoryRows`, `app/lib/src/screens/history_screen.dart`).
 - Rescue actions on unconfirmed transactions (`app/lib/src/screens/rescue_screen.dart`):
   - **RBF bump**: re-send the same payment at a higher fee,
   - **RBF replace**: same inputs, brand-new recipient/asset/amount,
@@ -137,15 +140,29 @@ module that implements it.
     (with a suggested child fee rate from the core).
 
 **Swap (SeqDEX)**
-- **In user mode** (the default) the Swap tab is three inputs and one button: **You pay**
-  (an asset and an amount), **You get**, and **Review** (`app/lib/src/screens/user_composer.dart`,
-  its engine `app/lib/src/data/user_trade.dart`, the web wallet's `user-trade.js` in Dart). BTC
-  heads both pickers; You pay lists BTC and the assets the wallet holds, so a brand-new wallet
-  lists BTC alone, and You get adds what the book offers for the asset paid, and each picker shows what the wallet holds of an asset as its one
+- **In user mode** (the default) the Swap tab is a trading screen (`app/lib/src/screens/user_composer.dart`,
+  its engine `app/lib/src/data/user_trade.dart`, the web wallet's `user-composer.js` and
+  `user-trade.js` in Dart; the words follow the web wallet's `docs/DEFAULT_MODE.md`):
+  - the chosen pair's **market** above it (`app/lib/src/widgets/market_view.dart`, data and words in
+    `app/lib/src/data/market_view.dart`): the pair as "base / quote", its last price and 24-hour
+    change, the day's high, low and volume, a step chart over **1D**, **1W** and **1M**, the best
+    bid and ask with the book's depth on each side, and the recent trades, all read from
+    SeqDEX's relay every five seconds;
+  - **You pay** and **You receive**, each an asset and an amount. Both pickers are the wallet's
+    one asset chooser (`app/lib/src/widgets/asset_sheet.dart`): a search box, "Your assets" first
+    (BTC always, then what the wallet holds, with balance and value), what the book offers now
+    next, hidden assets left out until searched for. The two amounts are tethered: the one typed
+    stays, the other follows the book's best price now (`UserTradeEngine.estimate`, no maker
+    asked for firm terms), with "The book can fill up to … now." when it cannot. Under You pay,
+    its balance and **Max**;
+  - **Review**, then **Trade**.
+
+  BTC heads both pickers; You pay lists BTC and the assets the wallet holds, so a brand-new wallet
+  lists BTC alone, and You receive adds what the book offers for the asset paid, and each picker shows what the wallet holds of an asset as its one
   figure on the balance (`heldFigure`, `app/lib/src/data/ln_rail.dart`: BTC in the wallet's
   own Bitcoin Lightning node included), while a trade is bounded by what can be spent now.
   The wallet's Lightning channels are read apart from the on-chain sync, so a sync that fails
-  hides none of them. Review shows what you pay, what you get and one line of fees, each in
+  hides none of them. Review shows what you pay, what you receive and one line of fees, each in
   the asset it is paid in, before anything is signed; **Trade** confirms it, and the trade then
   reads **Sent**, **Settled** once final, or **Returned: nothing traded.**, with nothing to do
   either way. Settling waits for Bitcoin blocks, so while it waits the row says what is already

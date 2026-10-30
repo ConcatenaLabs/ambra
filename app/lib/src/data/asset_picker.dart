@@ -29,6 +29,9 @@ class AssetPickerItem {
     this.held = false,
     this.hidden = false,
     this.pasted = false,
+    this.offered = false,
+    this.tradable = false,
+    this.value,
   });
   final String hex;
   final String ticker;
@@ -36,6 +39,27 @@ class AssetPickerItem {
   final bool held;
   final bool hidden;
   final bool pasted;
+
+  /// On a trade's receive side: what the book offers now for the asset paid ([offered]), and what
+  /// trades against it at all ([tradable]). Both are listed before anything is typed.
+  final bool offered;
+  final bool tradable;
+
+  /// The row's value in the reference currency, in words ("≈ \$12.40"), under its balance.
+  final String? value;
+}
+
+/// The chooser's words: the same in every wallet (the web wallet's `PICKER_WORDS`,
+/// docs/DEFAULT_MODE.md "Asset pickers").
+class PickerWords {
+  static const search = 'Search assets';
+  static const yours = 'Your assets';
+  static const all = 'All assets';
+  static const assets = 'Assets';
+  static const none = 'No matching assets.';
+  static String more(int n) => '+$n more · keep typing to find them.';
+  static const hint = 'Type to search every asset, or paste an asset id.';
+  static const hintSearch = 'Type to search every asset.';
 }
 
 final RegExp _hex64 = RegExp(r'^[0-9a-fA-F]{64}$');
@@ -52,12 +76,12 @@ bool isAssetIdHex(String s) => _hex64.hasMatch(s.trim());
 /// ([SeqAssets.labelFor] supplies real registry metadata when it can name the
 /// id, else the id-prefix ticker at the 8-dp default the sheet then formats
 /// amounts with).
-List<AssetPickerItem> pickerMatches(List<AssetPickerItem> items, String query) {
+List<AssetPickerItem> pickerMatches(List<AssetPickerItem> items, String query, {bool paste = true}) {
   final q = query.trim();
   if (q.isEmpty) {
     return [
       for (final it in items)
-        if (it.hex == kBtcSentinel || (it.held && !it.hidden)) it,
+        if (it.hex == kBtcSentinel || ((it.held || it.offered || it.tradable) && !it.hidden)) it,
     ];
   }
   final ql = q.toLowerCase();
@@ -65,7 +89,7 @@ List<AssetPickerItem> pickerMatches(List<AssetPickerItem> items, String query) {
     for (final it in items)
       if ('${it.ticker} ${it.name ?? ''} ${it.hex}'.toLowerCase().contains(ql)) it,
   ];
-  if (match.isEmpty && isAssetIdHex(q)) {
+  if (match.isEmpty && paste && isAssetIdHex(q)) {
     final hex = ql; // asset ids are canonically lowercase hex
     final label = SeqAssets.labelFor(hex);
     match.add(AssetPickerItem(
@@ -76,6 +100,39 @@ List<AssetPickerItem> pickerMatches(List<AssetPickerItem> items, String query) {
     ));
   }
   return match;
+}
+
+/// How the rows a search returned are laid out (the web wallet's `pickerGroups`): "Your assets"
+/// (BTC first, even at 0), then the rest; in each group what the book offers now comes first, then
+/// what trades against the other side. While searching, the rest is capped at [cap] rows.
+({List<(String, List<AssetPickerItem>)> groups, int more}) pickerGroups(List<AssetPickerItem> match, String query, {int cap = 40}) {
+  final q = query.trim();
+  bool mine(AssetPickerItem it) => it.held || it.hex == kBtcSentinel;
+  int rank(AssetPickerItem it) => it.offered ? 2 : (it.tradable ? 1 : 0);
+  int order(AssetPickerItem a, AssetPickerItem b) => rank(b) - rank(a);
+  final held = match.where(mine).toList();
+  // A stable sort: BTC first, then offered, then tradable, else as given.
+  final heldIdx = {for (var i = 0; i < held.length; i++) held[i]: i};
+  held.sort((a, b) {
+    final bt = (b.hex == kBtcSentinel ? 1 : 0) - (a.hex == kBtcSentinel ? 1 : 0);
+    if (bt != 0) return bt;
+    final o = order(a, b);
+    return o != 0 ? o : heldIdx[a]! - heldIdx[b]!;
+  });
+  final rest = match.where((it) => !mine(it)).toList();
+  final restIdx = {for (var i = 0; i < rest.length; i++) rest[i]: i};
+  rest.sort((a, b) {
+    final o = order(a, b);
+    return o != 0 ? o : restIdx[a]! - restIdx[b]!;
+  });
+  final capped = q.isNotEmpty && rest.length > cap;
+  return (
+    groups: [
+      if (held.isNotEmpty) (PickerWords.yours, held),
+      if (rest.isNotEmpty) ((q.isNotEmpty && held.isNotEmpty) ? PickerWords.all : PickerWords.assets, capped ? rest.sublist(0, cap) : rest),
+    ],
+    more: capped ? rest.length - cap : 0,
+  );
 }
 
 /// The Balance tab's visible/hidden split.

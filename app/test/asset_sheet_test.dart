@@ -112,4 +112,38 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('the shared chooser: groups, the book first, the cap (docs/DEFAULT_MODE.md "Asset pickers")', () {
+    test('before a search: your assets (BTC first), then what the book offers, hidden left out', () {
+      final items = [
+        const AssetPickerItem(hex: kBtcSentinel, ticker: 'BTC'),
+        AssetPickerItem(hex: hexN(1), ticker: 'HELD', held: true),
+        AssetPickerItem(hex: hexN(2), ticker: 'HID', held: true, hidden: true),
+        AssetPickerItem(hex: hexN(3), ticker: 'OFF', offered: true),
+        AssetPickerItem(hex: hexN(4), ticker: 'TRD', tradable: true),
+        AssetPickerItem(hex: hexN(5), ticker: 'REST'),
+      ];
+      final m = pickerMatches(items, '');
+      final g = pickerGroups(m, '');
+      expect(g.groups.map((x) => x.$1), [PickerWords.yours, PickerWords.assets]);
+      expect(g.groups[0].$2.map((x) => x.ticker), ['BTC', 'HELD']);
+      expect(g.groups[1].$2.map((x) => x.ticker), ['OFF', 'TRD']);
+      // A search reaches the hidden one and the rest, under All assets.
+      final s = pickerGroups(pickerMatches(items, 'r'), 'r');
+      expect(s.groups.single.$1, PickerWords.assets);
+      expect(pickerGroups(pickerMatches(items, 'h'), 'h').groups.map((x) => x.$1), [PickerWords.yours]);
+    });
+    test('many matches show the first forty, then how many more', () {
+      final items = [for (var i = 1; i <= 50; i++) AssetPickerItem(hex: hexN(i), ticker: 'A$i')];
+      final g = pickerGroups(pickerMatches(items, 'a'), 'a');
+      expect(g.groups.single.$2, hasLength(40));
+      expect(g.more, 10);
+      expect(PickerWords.more(g.more), '+10 more · keep typing to find them.');
+    });
+    test('a pasted id is an asset only where the chooser allows it', () {
+      final items = [const AssetPickerItem(hex: kBtcSentinel, ticker: 'BTC')];
+      expect(pickerMatches(items, 'ab' * 32, paste: false), isEmpty);
+      expect(pickerMatches(items, 'ab' * 32).single.pasted, isTrue);
+    });
+  });
 }

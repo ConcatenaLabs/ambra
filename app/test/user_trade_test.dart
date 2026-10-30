@@ -246,7 +246,7 @@ void main() {
     final none = s.engine(now: () => 0, held: (_) async => BigInt.zero, prepare: prepared.add);
     expect((await none.quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'no-funds');
     expect(prepared, [x]);
-    expect(UserWords.notReady('USDX'), 'Your USDX is not ready to trade yet. It will be in a few minutes; nothing has moved.');
+    expect(UserWords.notReady('USDX'), 'Your USDX is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.');
   });
 
   test('engine: a maker quoting levels of one pair is asked for one firm offer, at the level that gives the most', () async {
@@ -259,5 +259,62 @@ void main() {
     await s.engine(now: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000));
     // 400,000 at 5/3 gives 240,000, more than the first level's 100,000 cap or 200,000 at 6/3.
     expect(s.firmGives, ['240000'], reason: 'one firm offer, at the deeper level');
+  });
+
+  test('estimate: the amount typed stays, the other follows the best price now, in both directions', () async {
+    final s = StandIn();
+    final e = s.engine(now: () => 0);
+    // 4 XT buys 3 YT; the maker gives up to 1,000,000 YT and no less than 10,000.
+    final a = await e.estimate(pay: x, receive: y, payAtoms: BigInt.from(400000));
+    expect(a.ok, isTrue);
+    expect(a.receive, BigInt.from(300000));
+    expect(a.short, isNull);
+    final b = await e.estimate(pay: x, receive: y, receiveAtoms: BigInt.from(300000));
+    expect(b.pay, BigInt.from(400000));
+    // More than the book fills: what it can, and how much that is.
+    final c = await e.estimate(pay: x, receive: y, payAtoms: BigInt.from(4000000));
+    expect(c.receive, BigInt.from(1000000));
+    expect(c.short!.receive, BigInt.from(1000000));
+    final d = await e.estimate(pay: x, receive: y, receiveAtoms: BigInt.from(2000000));
+    expect(d.receive, BigInt.from(1000000));
+    expect(d.short, isNotNull);
+    expect((await e.estimate(pay: x, receive: y, payAtoms: BigInt.from(4))).why, 'too-small');
+    // No firm offer is asked for, so the maker holds nothing for an estimate.
+    expect(s.firmGives, isEmpty);
+    expect((await s.engine(sources: const [], now: () => 0).estimate(pay: x, receive: y, payAtoms: BigInt.one)).why, 'not-listed');
+    expect((await s.engine(makers: const [], now: () => 0).estimate(pay: x, receive: y, payAtoms: BigInt.one)).why, 'not-offered');
+  });
+
+  test('estimate: the book is read once every few seconds per pair', () async {
+    final s = StandIn();
+    var reads = 0;
+    var t = 0;
+    final e = UserTradeEngine(UserTradeDeps(
+      run: s.run,
+      fetchJson: (u, {post}) {
+        if (u.endsWith('/v1/quotes')) reads++;
+        return s.fetchJson(u, post: post);
+      },
+      makers: () => ['http://m'],
+      relayBook: (_, _) async => [],
+      admitted: () async => (pairs: {'chains': {'g': {'pairs': [{'pay': x, 'receive': y, 'sources': ['leaf-maker']}]}}}, genesis: 'g'),
+      read: () async => null,
+      write: (_) async {},
+      now: () => t,
+    ));
+    await e.estimate(pay: x, receive: y, payAtoms: BigInt.from(400000));
+    t += 3000;
+    await e.estimate(pay: x, receive: y, payAtoms: BigInt.from(500000));
+    expect(reads, 1);
+    t += 9000;
+    await e.estimate(pay: x, receive: y, payAtoms: BigInt.from(500000));
+    expect(reads, 2);
+  });
+
+  test('offered: what the book offers for the asset paid now', () async {
+    final s = StandIn();
+    expect(await s.engine(now: () => 0).offered(x), [y]);
+    expect(await s.engine(makers: const [], now: () => 0).offered(x), isEmpty);
+    expect(await s.engine(now: () => 0).offered(y), isEmpty);
   });
 }

@@ -77,8 +77,12 @@ List<String> forbiddenIn(String text) {
 class UserWords {
   static const title = 'Swap';
   static const pay = 'You pay';
-  static const get = 'You get';
+  static const get = 'You receive';
   static const amount = 'Amount';
+  static const max = 'Max';
+  static String balance(String x) => 'balance $x';
+  // What the book can fill now, when less than asked: said beside the amounts as they are typed.
+  static String bookUpTo(String x) => 'The book can fill up to $x now.';
   static const review = 'Review';
   static const confirm = 'Trade';
   static const cancel = 'Cancel';
@@ -93,7 +97,7 @@ class UserWords {
   static String noFunds(String pay) => 'You have no $pay to trade.';
   // Held, and shown in the balance, but not where a trade can pay it from yet (just arrived, or
   // still being moved in by the wallet): never "you have none".
-  static String notReady(String pay) => 'Your $pay is not ready to trade yet. It will be in a few minutes; nothing has moved.';
+  static String notReady(String pay) => 'Your $pay is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.';
   static const pricing = 'Finding the best price…';
   static const priceMoved = 'The price moved. Here is the new one.';
   static const sent = 'Sent';
@@ -107,12 +111,19 @@ class UserWords {
   static const working = 'Working…';
   static const failed = 'This trade could not be made. Nothing moved.';
   static const recent = 'Your trades';
+  static const openTrades = 'Open';
+  static const pastTrades = 'Past';
 
   static List<String> all() => [
     title,
     pay,
     get,
     amount,
+    max,
+    balance('1 XT'),
+    bookUpTo('1 XT'),
+    openTrades,
+    pastTrades,
     review,
     confirm,
     cancel,
@@ -238,6 +249,14 @@ class BookEntry {
 const Set<String> kFollowCommands = {
   'sync', 'coins', 'plans', 'info', 'participations', 'swaps', 'lightning_payments', 'lightning_receives',
   'lightning_receive_ready',
+};
+
+/// The library's reads the engine runs in bursts, marked so each may answer from a look at the chain
+/// another made a moment ago (the library looks afresh for anything that takes a coin or signs).
+/// The web wallet's `SHARED_VIEW_READS`.
+const Set<String> kSharedViewReads = {
+  'info', 'coins', 'plans', 'participations', 'swaps', 'balance', 'swap_read', 'take_quote', 'settle_quote', 'quote',
+  'order_fill_resting_quote', 'order_cancel_resting_quote',
 };
 
 /// How long the operator's `info` is read from the last reading.
@@ -448,6 +467,18 @@ class QuoteResult {
   bool get ok => ticket != null;
 }
 
+/// The indicative amounts of [UserTradeEngine.estimate]: [pay] for [receive], and [short] when
+/// the book fills less than was typed (the most one source fills now). Or [why] it has none:
+/// not-listed | not-offered | too-small.
+class Estimate {
+  const Estimate({required BigInt this.pay, required BigInt this.receive, this.short}) : why = null;
+  const Estimate.no(String this.why) : pay = null, receive = null, short = null;
+  final BigInt? pay, receive;
+  final ({BigInt receive, BigInt pay})? short;
+  final String? why;
+  bool get ok => why == null;
+}
+
 class LapsedError implements Exception {
   @override
   String toString() => 'the price is no longer held';
@@ -527,10 +558,13 @@ class UserTradeEngine {
   BtcLightning? get _btc => d.btc?.call();
 
   Future<dynamic> _run(String cmd, [Map<String, dynamic> args = const {}]) async {
+    // The engine's reads come in bursts (a quote asks several candidates at once): each may answer
+    // from the library's look at the chain a moment old, rather than every one looking again.
+    final a = kSharedViewReads.contains(cmd) ? {...args, 'shared_view': true} : args;
     for (var i = 0; ; i++) {
       final t0 = d.now();
       try {
-        final v = await d.run(cmd, args);
+        final v = await d.run(cmd, a);
         if (d.now() - t0 > 2000) d.log('[user trade] $cmd took ${d.now() - t0} ms');
         return v;
       } catch (e) {
@@ -591,13 +625,18 @@ class UserTradeEngine {
     final out = <BookEntry>[];
     // A maker quotes in-tree swaps, and, with a Bitcoin Lightning node, BTC in one hash-lock.
     if (sources.contains('leaf-maker') || (sources.contains('btc-gateway') && _btc != null)) {
-      for (final m in d.makers()) {
+      // Every maker at once: one that does not answer costs its own wait, not the others'.
+      final got = await Future.wait(d.makers().map((m) async {
         try {
           final q = await d.fetchJson('$m/v1/quotes');
-          out.addAll(makerEntries(m, (q['quotes'] as List?) ?? const [], pay: pay, receive: receive).where((e) => sources.contains(e.source)));
+          return makerEntries(m, (q['quotes'] as List?) ?? const [], pay: pay, receive: receive).where((e) => sources.contains(e.source)).toList();
         } catch (e) {
           d.log('[user trade] maker $m did not answer: $e');
+          return <BookEntry>[];
         }
+      }));
+      for (final g in got) {
+        out.addAll(g);
       }
     }
     if (sources.contains('covenant-round') || sources.contains('leaf-resting')) {
@@ -876,6 +915,78 @@ class UserTradeEngine {
       return null;
     }
     return null;
+  }
+
+  /// What can be received for [pay] in one step now: each admitted pair's asset that some source
+  /// in the book offers, whatever the wallet holds. BTC counts only with the wallet's Bitcoin
+  /// Lightning (the desk pays it there). The web wallet's `offered`.
+  Future<List<String>> offered(String pay) async {
+    final ad = await d.admitted();
+    final chain = (ad.pairs?['chains'] as Map?)?[ad.genesis];
+    final pairs = [
+      for (final p in ((chain is Map ? chain['pairs'] : null) as List?) ?? const [])
+        if (p is Map && p['pay'] == pay && p['receive'] != pay && ((p['sources'] as List?) ?? const []).isNotEmpty) p,
+    ];
+    final found = await Future.wait(pairs.map((p) async {
+      try {
+        final es = await _entries(pay, '${p['receive']}', [for (final s in p['sources'] as List) '$s']);
+        return es.any((e) => e.source != 'btc-gateway' || _btc != null) ? '${p['receive']}' : null;
+      } catch (_) {
+        return null;
+      }
+    }));
+    return {for (final f in found) ?f}.toList();
+  }
+
+  final _estimates = <String, ({int at, List<BookEntry> es})>{};
+
+  /// Indicative terms in either direction, for the two amounts while a person types: the book's
+  /// best single-step source for paying [payAtoms], or the least paid to receive [receiveAtoms].
+  /// No maker is asked for firm terms (a firm offer holds the maker's coins); Review does that,
+  /// fees and all. The book's entries are read at most every 8 seconds per pair. The web wallet's
+  /// `estimate`.
+  Future<Estimate> estimate({required String pay, required String receive, BigInt? payAtoms, BigInt? receiveAtoms}) async {
+    final ad = await d.admitted();
+    final sources = admittedSources(ad.pairs, ad.genesis, pay, receive);
+    if (sources.isEmpty) return const Estimate.no('not-listed');
+    final key = '$pay>$receive';
+    var c = _estimates[key];
+    if (c == null || d.now() - c.at > 8000) {
+      List<BookEntry> es;
+      try {
+        es = await _entries(pay, receive, sources);
+      } catch (_) {
+        es = const [];
+      }
+      c = (at: d.now(), es: es);
+      _estimates[key] = c;
+    }
+    final es = c.es.where((e) => (e.source != 'btc-gateway' || _btc != null) && e.maxReceive > BigInt.zero).toList();
+    if (es.isEmpty) return const Estimate.no('not-offered');
+    ({BigInt receive, BigInt pay})? most;
+    for (final e in es) {
+      if (most == null || e.maxReceive > most.receive) most = (receive: e.maxReceive, pay: _ceilDiv(e.maxReceive * e.rateNum, e.rateDen));
+    }
+    if (payAtoms != null) {
+      if (payAtoms <= BigInt.zero) return const Estimate.no('too-small');
+      ({BigInt receive, BigInt pay})? best;
+      for (final e in es) {
+        final s = sizeEntry(e, payAtoms);
+        if (s != null && (best == null || s.receive > best.receive)) best = s;
+      }
+      if (best == null) return const Estimate.no('too-small');
+      return Estimate(pay: payAtoms, receive: best.receive, short: best.pay < payAtoms ? most : null);
+    }
+    final r = receiveAtoms ?? BigInt.zero;
+    if (r <= BigInt.zero) return const Estimate.no('too-small');
+    BigInt? least;
+    for (final e in es) {
+      if (r > e.maxReceive || r < e.minReceive) continue;
+      final p = _ceilDiv(r * e.rateNum, e.rateDen);
+      if (least == null || p < least) least = p;
+    }
+    if (least != null) return Estimate(pay: least, receive: r);
+    return r > most!.receive ? Estimate(pay: most.pay, receive: most.receive, short: most) : const Estimate.no('too-small');
   }
 
   Future<QuoteResult> quote({required String pay, required String receive, required BigInt amount}) async {
