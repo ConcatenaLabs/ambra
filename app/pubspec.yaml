@@ -46,6 +46,7 @@ dependencies:
   # Sidecar HTTP (faucet, registry, prices) + receive QR.
   http: ^1.2.2
   qr_flutter: ^4.1.0
+  qr: ^3.0.2
   # Camera QR scanning for the send recipient address.
   # QR scanning without Google ML Kit: first-party CameraX preview +
   # pure-Dart ZXing decode of the luminance frames.

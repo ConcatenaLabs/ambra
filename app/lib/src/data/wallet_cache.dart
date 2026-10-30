@@ -147,6 +147,33 @@ class WalletCache {
     await saveLnHistory(list);
   }
 
+  /// Records a payment the moment it leaves (or is first seen arriving), in the same list
+  /// History's Payments card shows: `kind` 'payment' (out) or 'received' (in), `ticker`,
+  /// `atoms`, `precision`, `time`, and `rail` ('btc' on the Bitcoin chain, 'ark', 'tree',
+  /// 'address' (from the instant part out to an address), 'lightning'). One with `pending`
+  /// true shows as pending until [settlePayment] clears it; `txid` and `chain` ('btc' or
+  /// 'seq') let History look that up. An entry with a txid already recorded is not added again.
+  static Future<void> addPayment(Map<String, dynamic> entry) async {
+    final list = List<Map<String, dynamic>>.from(await loadLnHistory());
+    final txid = entry['txid'];
+    if (txid != null && list.any((e) => e['txid'] == txid)) return;
+    list.add({'time': DateTime.now().millisecondsSinceEpoch, ...entry});
+    await saveLnHistory(list);
+  }
+
+  /// Marks the payment of [txid] confirmed.
+  static Future<void> settlePayment(String txid) async {
+    final list = List<Map<String, dynamic>>.from(await loadLnHistory());
+    var changed = false;
+    for (final e in list) {
+      if (e['txid'] == txid && e['pending'] == true) {
+        e['pending'] = false;
+        changed = true;
+      }
+    }
+    if (changed) await saveLnHistory(list);
+  }
+
   static Future<void> clear() async {
     final p = await SharedPreferences.getInstance();
     await p.remove(_kBalances);
@@ -154,6 +181,29 @@ class WalletCache {
     await p.remove(_kBtc);
     await p.remove(_kOampXfers);
     await p.remove(_kLnHistory);
+    await p.remove(_kReceiveCode);
+  }
+
+  static const _kReceiveCode = 'ambra.cache.receivecode';
+
+  /// The receive code last drawn, by its parts (address, ark address, receive request and
+  /// the request's lapse), so Receive shows it at once on the next open, syncing or not,
+  /// until it is paid or lapses.
+  static Future<void> saveReceiveCode(Map<String, Object?> parts) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_kReceiveCode, jsonEncode(parts));
+  }
+
+  static Future<Map<String, dynamic>?> loadReceiveCode() async {
+    final p = await SharedPreferences.getInstance();
+    final s = p.getString(_kReceiveCode);
+    if (s == null) return null;
+    try {
+      final v = jsonDecode(s);
+      return v is Map ? Map<String, dynamic>.from(v) : null;
+    } catch (_) {
+      return null;
+    }
   }
 }
 

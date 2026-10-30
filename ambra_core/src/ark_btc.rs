@@ -127,13 +127,21 @@ fn sats(a: Amount) -> String {
 /// What the wallet holds, in sats: `spendable` (in the ark now), and what is on
 /// its way (`pending_board`, `pending_in_round`, `claimable_lightning_receive`)
 /// or leaving (`pending_lightning_send`, `pending_exit`); and how many boards are
-/// still in progress (`boards_in_progress`, those not yet broadcast included).
+/// still in progress (`boards_in_progress`, those not yet broadcast included), each
+/// with its funding transaction (`boards`).
 pub fn balance() -> Result<Value, Value> {
     let w = wallet()?;
     let b = runtime().block_on(w.balance()).map_err(err)?;
-    let boards = runtime().block_on(w.pending_boards()).map(|v| v.len()).unwrap_or(0);
+    let pending = runtime().block_on(w.pending_boards()).unwrap_or_default();
+    // Each board in progress by its funding transaction, so the app can tell one whose
+    // transaction the network never took (a failed broadcast) from one waiting for its block.
+    let boards: Vec<Value> = pending
+        .iter()
+        .map(|p| json!({"funding_txid": p.funding_tx.compute_txid().to_string(), "amount": sats(p.amount)}))
+        .collect();
     Ok(json!({
-        "boards_in_progress": boards,
+        "boards_in_progress": boards.len(),
+        "boards": boards,
         "spendable": sats(b.spendable),
         "pending_board": sats(b.pending_board),
         "pending_in_round": sats(b.pending_in_round),

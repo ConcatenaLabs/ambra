@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../rust/api.dart' as core;
+import '../data/btc_state.dart';
 import '../data/config.dart';
 import '../data/dev_mode.dart';
 import '../data/format.dart';
@@ -43,10 +44,15 @@ class _HistoryTabState extends State<HistoryTab> {
     _load(); // eager: load at launch (also reloads on activation)
     _loadSidecars(); // restricted-transfer tracker + Lightning history
     _loadTrades();
+    // While History is there, pending payments are looked up again every half minute.
+    _paymentsTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (widget.isActive) unawaited(_refreshPayments());
+    });
   }
 
   @override
   void dispose() {
+    _paymentsTimer?.cancel();
     _tradesChanged?.cancel();
     super.dispose();
   }
@@ -77,6 +83,45 @@ class _HistoryTabState extends State<HistoryTab> {
     final ln = await WalletCache.loadLnHistory();
     if (mounted) setState(() { _oamp = xfers; _ln = ln; });
     await _refreshOamp();
+    await _refreshPayments();
+  }
+
+  Timer? _paymentsTimer;
+
+  /// Payments as they move: BTC arriving at the wallet's latest addresses is added as soon as
+  /// the Bitcoin network has it (pending until its block), and every pending payment with a
+  /// transaction is looked up and marked done once confirmed. Fails soft to what is on disk.
+  Future<void> _refreshPayments() async {
+    try {
+      final m = await WalletRepository.instance.readMnemonic();
+      if (m != null) {
+        final next = BtcState.instance.unifiedNext;
+        final mine = <String>{};
+        for (var i = next > 4 ? next - 4 : 0; i <= next; i++) {
+          mine.add((await core.receiveAddressAt(mnemonic: m, index: i, confidential: false)).address);
+        }
+        for (final a in mine) {
+          final r = await http.get(Uri.parse('${Backend.testnet4}/address/$a/txs'), headers: Backend.authHeaders)
+              .timeout(const Duration(seconds: 20));
+          if (r.statusCode != 200) continue;
+          for (final e in incomingBtc(jsonDecode(r.body), mine)) {
+            await WalletCache.addPayment(e);
+          }
+        }
+      }
+    } catch (_) {/* transient: what is on disk stays */}
+    for (final e in await WalletCache.loadLnHistory()) {
+      final txid = e['txid'];
+      if (e['pending'] != true || txid is! String) continue;
+      try {
+        final base = e['chain'] == 'seq' ? Backend.esplora : Backend.testnet4;
+        final r = await http.get(Uri.parse('$base/tx/$txid/status'), headers: Backend.authHeaders)
+            .timeout(const Duration(seconds: 20));
+        if (r.statusCode == 200 && (jsonDecode(r.body) as Map)['confirmed'] == true) await WalletCache.settlePayment(txid);
+      } catch (_) {}
+    }
+    final ln = await WalletCache.loadLnHistory();
+    if (mounted) setState(() => _ln = ln);
   }
 
   /// Re-check every tracked restricted transfer against the Sequentia explorer
@@ -337,8 +382,10 @@ class _LnRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final kind = '${entry['kind'] ?? 'payment'}'.toLowerCase();
+    final rail = entry['rail'] is String ? entry['rail'] as String : 'lightning';
+    final pending = entry['pending'] == true;
     final incoming = kind == 'receive' || kind == 'received' || kind == 'invoice' || kind == 'settle';
-    final badge = DevMode.instance.on ? (incoming ? 'LN IN' : 'LN OUT') : (incoming ? 'IN' : 'OUT');
+    final badge = DevMode.instance.on && rail == 'lightning' ? (incoming ? 'LN IN' : 'LN OUT') : (incoming ? 'IN' : 'OUT');
     final color = incoming ? AmbraColors.green : AmbraColors.amber2;
     final bg = incoming ? const Color(0xFF10241A) : const Color(0xFF241C0A);
 
@@ -355,7 +402,9 @@ class _LnRow extends StatelessWidget {
 
     final desc = entry['description'] is String && (entry['description'] as String).isNotEmpty
         ? entry['description'] as String
-        : (DevMode.instance.on ? (incoming ? 'Lightning invoice' : 'Lightning payment') : (incoming ? 'Received' : 'Sent'));
+        : (DevMode.instance.on && rail == 'lightning'
+            ? (incoming ? 'Lightning invoice' : 'Lightning payment')
+            : (incoming ? 'Received' : 'Sent'));
     final t = entry['time'] is num ? (entry['time'] as num).toInt() : 0;
     String sub = desc;
     if (t > 0) {
@@ -363,6 +412,12 @@ class _LnRow extends StatelessWidget {
       String two(int n) => n.toString().padLeft(2, '0');
       sub = '$desc · ${w.year}-${two(w.month)}-${two(w.day)} ${two(w.hour)}:${two(w.minute)}';
     }
+    if (pending) sub = '$sub · ${entry['chain'] == 'btc' ? 'Waiting for a Bitcoin block' : 'Pending'}';
+    final title = DevMode.instance.on
+        ? (rail == 'lightning'
+            ? (incoming ? 'Received over Lightning' : 'Lightning payment')
+            : '${incoming ? 'Received' : 'Sent'} · ${const {'btc': 'Bitcoin chain', 'ark': 'Bitcoin ark', 'tree': 'in the tree', 'address': 'out to an address'}[rail] ?? rail}')
+        : (incoming ? 'Received' : 'Sent');
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -371,15 +426,15 @@ class _LnRow extends StatelessWidget {
         const SizedBox(width: 12),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(DevMode.instance.on ? (incoming ? 'Received over Lightning' : 'Lightning payment') : (incoming ? 'Received' : 'Sent'),
-                style: const TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w600, fontSize: 14)),
+            Text(title, style: const TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w600, fontSize: 14)),
             const SizedBox(height: 3),
             Text(sub, style: AmbraText.sub, maxLines: 1, overflow: TextOverflow.ellipsis),
           ]),
         ),
         if (amount.isNotEmpty) ...[
           const SizedBox(width: 10),
-          Text(amount, style: AmbraText.mono.copyWith(color: color, fontWeight: FontWeight.w700, fontSize: 14)),
+          Text('${incoming ? '+' : '-'}$amount',
+              style: AmbraText.mono.copyWith(color: color, fontWeight: FontWeight.w700, fontSize: 14)),
         ],
       ]),
     );
@@ -774,4 +829,37 @@ class _DeltaRow extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// The BTC payments into the wallet among an address's transactions (testnet4 esplora's
+/// `/address/:a/txs`): each one paying [mine] and spending none of [mine] (a transaction that
+/// spends the wallet's own coins is one of its own sends, recorded when it left). Pending
+/// until confirmed.
+List<Map<String, dynamic>> incomingBtc(Object? txs, Set<String> mine) {
+  if (txs is! List) return const [];
+  final out = <Map<String, dynamic>>[];
+  for (final t in txs.whereType<Map>()) {
+    final vin = t['vin'] is List ? t['vin'] as List : const [];
+    if (vin.any((i) => i is Map && i['prevout'] is Map && mine.contains((i['prevout'] as Map)['scriptpubkey_address']))) continue;
+    var sats = 0;
+    for (final o in (t['vout'] is List ? t['vout'] as List : const []).whereType<Map>()) {
+      if (mine.contains(o['scriptpubkey_address']) && o['value'] is num) sats += (o['value'] as num).toInt();
+    }
+    if (sats <= 0) continue;
+    final st = t['status'] is Map ? t['status'] as Map : const {};
+    final confirmed = st['confirmed'] == true;
+    final at = st['block_time'] is num ? (st['block_time'] as num).toInt() * 1000 : DateTime.now().millisecondsSinceEpoch;
+    out.add({
+      'kind': 'received',
+      'ticker': 'BTC',
+      'atoms': '$sats',
+      'precision': 8,
+      'rail': 'btc',
+      'chain': 'btc',
+      'txid': '${t['txid']}',
+      'pending': !confirmed,
+      'time': at,
+    });
+  }
+  return out;
 }

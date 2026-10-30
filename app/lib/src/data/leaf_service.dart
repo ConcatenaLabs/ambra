@@ -14,6 +14,7 @@ import 'btc_state.dart';
 import 'config.dart';
 import 'dev_mode.dart';
 import 'format.dart';
+import 'pay_code.dart' show expandRequest;
 import 'wallet_repository.dart';
 
 /// A refusal by the leaf wallet, in the library's own words.
@@ -474,6 +475,16 @@ class LeafService extends ChangeNotifier {
     final i = info;
     if (!open || i == null) return false;
     return requestFor(text, operator: '${i['operator']}', genesis: '${i['genesis_hash']}') != null;
+  }
+
+  /// A receive request as a receive code carries it (short, or the library's own spelling)
+  /// as the library's request this wallet pays in the tree, or null when it names another
+  /// operator or chain, or the leaf wallet is not open ([expandRequest]).
+  String? payable(String text) {
+    final i = info;
+    if (!open || i == null) return null;
+    final full = expandRequest(text, operator: '${i['operator']}', genesis: '${i['genesis_hash']}');
+    return (full != null && paysInTree(full)) ? full : null;
   }
 
   /// Joins an operator: creates the leaf wallet of this wallet's mnemonic against

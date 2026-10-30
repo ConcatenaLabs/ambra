@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
@@ -12,8 +13,13 @@ import '../widgets/widgets.dart';
 
 /// Full-screen QR scanner built on the first-party camera (CameraX preview) and
 /// a pure-Dart ZXing decoder, so it needs no Google ML Kit or Play Services.
-/// Pops the first decoded payload (raw string); the caller parses out the
-/// address. Returns null if the user backs out or types the address instead.
+/// Pops the first decoded payload (raw string): a receive code, an address or an
+/// invoice; the caller reads it. Returns null if the user backs out or types instead.
+///
+/// Made for dense codes shown on another screen: a 720p stream, continuous focus with a
+/// tap to focus where the code is, a large viewfinder, and each frame decoded off the UI
+/// thread, alternately the viewfinder's square alone (fewer pixels, a larger code in
+/// them) and the whole frame.
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
   @override
@@ -27,6 +33,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   bool _busy = false; // a decode is in flight (frames are skipped meanwhile)
   bool _handled = false; // a code was found; ignore further frames
   DateTime _lastDecode = DateTime.fromMillisecondsSinceEpoch(0);
+  int _frames = 0;
 
   @override
   void initState() {
@@ -71,11 +78,14 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       );
       final c = CameraController(
         back,
-        ResolutionPreset.medium,
+        ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.yuv420,
       );
       await c.initialize();
+      try {
+        await c.setFocusMode(FocusMode.auto);
+      } catch (_) {}
       if (!mounted) {
         await c.dispose();
         return;
@@ -87,18 +97,29 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Focuses where the person tapped, then back to continuous focus.
+  Future<void> _focusAt(TapUpDetails d, Size box) async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    final p = Offset((d.localPosition.dx / box.width).clamp(0.0, 1.0), (d.localPosition.dy / box.height).clamp(0.0, 1.0));
+    try {
+      await c.setFocusPoint(p);
+      await c.setExposurePoint(p);
+    } catch (_) {}
+  }
+
   void _onFrame(CameraImage image) {
     if (_busy || _handled) return;
     final now = DateTime.now();
-    if (now.difference(_lastDecode).inMilliseconds < 220) return; // ease CPU/battery
+    if (now.difference(_lastDecode).inMilliseconds < 120) return; // ease CPU/battery
     _lastDecode = now;
     _busy = true;
-    String? code;
-    try {
-      code = _decode(image);
-    } catch (_) {
-      code = null;
-    }
+    final plane = image.planes.first; // Y (luminance) for yuv420
+    final job = _Frame(Uint8List.fromList(plane.bytes), image.width, image.height, plane.bytesPerRow, (_frames++).isEven);
+    Isolate.run(() => _decode(job)).then(_found, onError: (_) => _found(null));
+  }
+
+  void _found(String? code) {
     if (code != null && code.trim().isNotEmpty && !_handled && mounted) {
       _handled = true;
       _controller?.stopImageStream();
@@ -118,20 +139,17 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     _busy = false;
   }
 
-  /// Decode a QR from the frame's luminance (Y) plane. Returns null when there's
-  /// no readable QR in the frame.
-  String? _decode(CameraImage image) {
-    final plane = image.planes.first; // Y (luminance) for yuv420
-    final w = image.width;
-    final h = image.height;
-    final bytes = plane.bytes;
-    final stride = plane.bytesPerRow; // may exceed width (row padding)
+  /// Decode a QR from a frame's luminance (Y) plane, on another isolate: the viewfinder's
+  /// square or the whole frame. Returns null when there's no readable QR in it.
+  static String? _decode(_Frame f) {
+    final side = (f.w < f.h ? f.w : f.h) * 3 ~/ 4;
+    final (left, top, w, h) = f.square ? ((f.w - side) ~/ 2, (f.h - side) ~/ 2, side, side) : (0, 0, f.w, f.h);
     final pixels = Int32List(w * h);
     for (int y = 0; y < h; y++) {
-      final row = y * stride;
+      final row = (y + top) * f.stride + left;
       final out = y * w;
       for (int x = 0; x < w; x++) {
-        final lum = bytes[row + x];
+        final lum = f.y[row + x];
         pixels[out + x] = 0xff000000 | (lum << 16) | (lum << 8) | lum;
       }
     }
@@ -152,7 +170,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text('Scan address', style: AmbraText.title),
+        title: const Text('Scan a code', style: AmbraText.title),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: _body(),
@@ -187,7 +205,12 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       return const Center(child: CircularProgressIndicator(color: AmbraColors.amber));
     }
     final preview = controller.value.previewSize;
-    return Stack(fit: StackFit.expand, children: [
+    final side = MediaQuery.of(context).size.width * 0.82;
+    return LayoutBuilder(
+        builder: (context, box) => GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapUp: (d) => _focusAt(d, box.biggest),
+            child: Stack(fit: StackFit.expand, children: [
       // Cover the screen with the preview (previewSize is in sensor/landscape
       // orientation, so width/height are swapped for the portrait scaffold).
       FittedBox(
@@ -203,8 +226,8 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
         child: Stack(fit: StackFit.expand, children: [
           Center(
             child: Container(
-              width: 240,
-              height: 240,
+              width: side,
+              height: side,
               decoration: BoxDecoration(
                 border: Border.all(color: AmbraColors.amber, width: 2),
                 borderRadius: BorderRadius.circular(16),
@@ -216,14 +239,22 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
             right: 0,
             bottom: 60,
             child: Center(
-              child: Text('Point the camera at a Sequentia address QR',
+              child: Text('Point the camera at a code. Tap to focus.',
                   style: TextStyle(color: Colors.white70, fontSize: 14)),
             ),
           ),
         ]),
       ),
-    ]);
+    ])));
   }
+}
+
+/// One frame's luminance plane, handed to the decoding isolate.
+class _Frame {
+  _Frame(this.y, this.w, this.h, this.stride, this.square);
+  final Uint8List y;
+  final int w, h, stride;
+  final bool square;
 }
 
 /// A centered icon + message with a primary action and an always-available

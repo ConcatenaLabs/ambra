@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 import '../rust/api.dart' as core;
 import '../rust/api/ark_btc.dart' as ark;
 import 'config.dart';
 import 'dev_mode.dart';
 import 'leaf_service.dart';
+import 'lightning_to_ark.dart';
 import 'wallet_repository.dart';
 
 /// BTC on the Bitcoin ark, in user mode: the wallet's BTC lives there by itself,
@@ -152,6 +154,8 @@ class ArkBtcService extends ChangeNotifier {
       if (last == null || DateTime.now().difference(last) >= catchUpEvery) await catchUp();
       await refresh();
       await autoBoard();
+      // A wallet from before BTC lived on the ark moves its Lightning BTC here by itself.
+      unawaited(LightningToArk.instance.tick());
     } catch (e) {
       lastError = e;
       debugPrint('[ambra-ark] sync refused: $e');
@@ -168,8 +172,11 @@ class ArkBtcService extends ChangeNotifier {
   Future<void> autoBoard({BigInt? onchainSats}) async {
     if (!open || _boarding || DevMode.instance.on || LeafService.instance.personBusy) return;
     // One board at a time: a board in progress still holds the coins it spends until it is
-    // seen on the chain, and the address's balance does not show them spent before then.
-    if (((balance?['boards_in_progress'] as num?) ?? 0) > 0) return;
+    // seen on the chain, and the address's balance does not show them spent before then. A
+    // board whose transaction the network never took (its broadcast failed) holds nothing, and
+    // waiting on it would stop every board after it for good: once the network has not known
+    // it for [lostBoard], the BTC at the address is boarded again.
+    if (((balance?['boards_in_progress'] as num?) ?? 0) > 0 && !await boardsLost(balance?['boards'])) return;
     final refused = _boardRefusedAt;
     if (refused != null && DateTime.now().difference(refused) < const Duration(minutes: 10)) return;
     final m = await WalletRepository.instance.readMnemonic();
@@ -214,6 +221,42 @@ class ArkBtcService extends ChangeNotifier {
       _boarding = false;
       notifyListeners();
     }
+  }
+
+  /// How long a board's funding transaction may be unknown to the network before the board is
+  /// taken as never made.
+  static const lostBoard = Duration(minutes: 10);
+  final Map<String, DateTime> _missingSince = {};
+
+  /// Whether every board in progress ([boards], the core's `boards`) has a funding transaction
+  /// the network has not known for [lostBoard]. Any doubt (no list, the explorer unreachable,
+  /// one transaction known) is no.
+  Future<bool> boardsLost(Object? boards, {Future<int> Function(String txid)? status, DateTime? at}) async {
+    if (boards is! List || boards.isEmpty) return false;
+    final ask = status ??
+        (String txid) async => (await http
+                .get(Uri.parse('${Backend.testnet4}/tx/$txid/status'), headers: Backend.authHeaders)
+                .timeout(const Duration(seconds: 20)))
+            .statusCode;
+    final now = at ?? DateTime.now();
+    for (final b in boards) {
+      final txid = b is Map ? b['funding_txid']?.toString() : null;
+      if (txid == null) return false;
+      int code;
+      try {
+        code = await ask(txid);
+      } catch (_) {
+        return false;
+      }
+      if (code != 404) {
+        _missingSince.remove(txid);
+        return false;
+      }
+      final since = _missingSince.putIfAbsent(txid, () => now);
+      if (now.difference(since) < lostBoard) return false;
+    }
+    debugPrint('[ambra-ark] ${boards.length} board(s) never reached the network: boarding again');
+    return true;
   }
 
   /// What a destination is to the ark wallet: `ark`, `lightning`, `onchain` or `none`.
