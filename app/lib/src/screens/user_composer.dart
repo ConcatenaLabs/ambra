@@ -1,11 +1,22 @@
-/// The Swap tab in user mode: what I pay, what I get, how much, one button.
+/// The Swap tab in default mode: the pair's market, then You pay and You receive, Review, Trade.
 ///
-/// The engine ([UserTradeEngine], `data/user_trade.dart`) reads the single-step book, prices the
-/// trade with the leaf library and settles it in one native step; this widget draws it. Before
-/// the button confirms it shows three lines: what you pay, what you get, and the fees. After it,
-/// the trade reads "Sent", then "Settled", or "Returned: nothing traded." Market trades only.
-/// Both pickers list BTC first. Every word it shows is a [UserWords] entry, none of
-/// [kUserModeForbiddenWords] (user_trade_test.dart checks both).
+/// The web wallet's `user-composer.js` (docs/DEFAULT_MODE.md "Trade" and "Market"; change them
+/// together). The engine ([UserTradeEngine], `data/user_trade.dart`) reads the single-step book,
+/// prices the trade with the leaf library and settles it in one native step; this widget draws it.
+///
+/// - The chosen pair's market shows above You pay (`widgets/market_view.dart`).
+/// - Both pickers are the wallet's one asset chooser ([showAssetSheet]): a search box, your assets
+///   first with their balances (BTC always), what the book offers now next, hidden assets left out
+///   until searched for.
+/// - The two amounts are tethered: the one typed stays as typed, the other follows the book's best
+///   price now ([UserTradeEngine.estimate]), again a moment after each keystroke and every ten
+///   seconds while the tab is shown. Under You pay: its balance and Max.
+/// - Review shows what you pay, what you receive and one line of fees before anything is signed;
+///   the trade then reads "Sent", then "Settled", or "Returned: nothing traded.", under Your
+///   trades, Open then Past. Market trades only.
+///
+/// Every word it shows is a [UserWords] or [MarketWords] entry, none of [kUserModeForbiddenWords]
+/// (user_trade_test.dart and market_view_test.dart check).
 library;
 
 import 'dart:async';
@@ -20,17 +31,23 @@ import '../data/ark_btc_service.dart';
 import '../data/btc_lightning.dart';
 import '../data/config.dart';
 import '../data/dev_mode.dart';
+import '../data/asset_picker.dart' show AssetPickerItem;
 import '../data/format.dart';
+import '../data/hidden_assets.dart';
 import '../data/leaf_rail.dart' show offerForVerify;
 import '../data/leaf_service.dart';
 import '../data/lightning_service.dart';
 import '../data/ln_rail.dart';
 import '../data/lsp_client.dart';
+import '../data/market_view.dart';
+import '../data/price_service.dart';
 import '../data/seqln_keys.dart' as lnkeys;
 import '../data/user_trade.dart';
 import '../data/wallet_cache.dart';
 import '../data/wallet_repository.dart';
 import '../rust/api.dart' as core;
+import '../widgets/asset_sheet.dart';
+import '../widgets/market_view.dart';
 
 /// The wallet's own hosted Bitcoin node, as the composer's BTC trades drive it ([HostedBtcLightning]:
 /// holds under the wallet's own hash, payments capped at the ticket's route), once Lightning runs
@@ -98,10 +115,14 @@ final _engines = <String, UserTradeEngine>{};
 UserTradeEngine appTradeEngine({required String walletTag}) => _engines[walletTag] ??= _newTradeEngine(walletTag);
 
 UserTradeEngine _newTradeEngine(String walletTag) {
+  // A read (a maker's quotes) that has not answered in 20 s is given up, so a silent maker costs
+  // the price one source rather than holding it. A POST runs for as long as [kMakerPostTimeout]:
+  // a firm offer or an acceptance can take minutes at a busy maker, and a firm cut short reads as
+  // "too small to trade" while the maker was still pricing it (the web wallet leaves them to run).
   Future<Map<String, dynamic>> fetchJson(String url, {Map<String, dynamic>? post}) async {
     final r = post == null
-        ? await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30))
-        : await http.post(Uri.parse(url), headers: {'Content-Type': 'application/json'}, body: jsonEncode(post)).timeout(const Duration(seconds: 60));
+        ? await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20))
+        : await http.post(Uri.parse(url), headers: {'Content-Type': 'application/json'}, body: jsonEncode(post)).timeout(kMakerPostTimeout);
     Map<String, dynamic> j;
     try {
       j = jsonDecode(r.body) as Map<String, dynamic>;
@@ -204,10 +225,14 @@ UserTradeEngine _newTradeEngine(String walletTag) {
   ));
 }
 
+/// How long the composer waits for a maker's answer to a POST (a firm offer, an acceptance).
+const Duration kMakerPostTimeout = Duration(minutes: 5);
+
 class UserComposer extends StatefulWidget {
   const UserComposer({super.key, required this.engine, required this.assets, required this.held, required this.ticker,
-      required this.precision, this.admittedReceives, this.onMoved});
+      required this.precision, this.admittedReceives, this.onMoved, this.known, this.isHidden, this.refValue, this.relay, this.marketGet});
   final UserTradeEngine engine;
+  /// What can be paid: BTC always, and every other asset the wallet holds.
   final List<String> Function() assets;
   final BigInt Function(String asset) held;
   final String Function(String asset) ticker;
@@ -215,33 +240,63 @@ class UserComposer extends StatefulWidget {
   final Future<List<String>> Function(String pay)? admittedReceives;
   /// Called after open trades moved on, so the app reads its balances again.
   final Future<void> Function()? onMoved;
+  /// Every asset the wallet can name (the registry's), which the receive chooser's search reaches.
+  final List<String> Function()? known;
+  final bool Function(String asset)? isHidden;
+  /// An amount's value in the reference currency, in words ("≈ 1.23 USD"), or null.
+  final String? Function(String asset, BigInt atoms)? refValue;
+  /// The relay's base URL, for the market view; no market view without it.
+  final String Function()? relay;
+  final MarketGet? marketGet;
 
   @override
   State<UserComposer> createState() => _UserComposerState();
 }
 
+/// How long a trade is followed every few seconds, and how often after that.
+const int kFollowFastMs = 120000;
+const int kFollowSlowMs = 30000;
+
 class _UserComposerState extends State<UserComposer> {
   String? _pay, _get;
-  bool _payChosen = false;
+  bool _payChosen = false, _getChosen = false;
   final _amount = TextEditingController();
+  final _receive = TextEditingController();
+  final _amountFocus = FocusNode(), _receiveFocus = FocusNode();
+  /// Which amount the person typed: 'pay' or 'receive'. The other follows the book.
+  String _fixed = 'pay';
   Ticket? _ticket;
   Candidate? _choice;
   bool _busy = false;
   String? _note, _error;
   List<Map<String, dynamic>> _trades = [];
-  List<String> _firstReceives = [];
-  Timer? _timer;
+  List<String> _admitted = [];
+  ({String pay, List<String> list, int at})? _offered;
+  bool _offeredLoading = false;
+  Timer? _timer, _estTimer, _refresh;
+  int _estSeq = 0;
 
   String _amt(String asset, BigInt atoms) => '${formatAtoms('$atoms', widget.precision(asset))} ${widget.ticker(asset)}';
 
   List<String> _payList() => pickerOrder(widget.assets(), widget.held, widget.ticker);
+  List<String> _offeredNow() => _offered != null && _offered!.pay == _pay ? _offered!.list.where((a) => a != _pay).toList() : const [];
   List<String> _getList() {
-    final all = pickerOrder(widget.assets(), widget.held, widget.ticker).where((a) => a != _pay).toList();
+    final all = pickerOrder({...widget.assets(), ...?widget.known?.call()}, widget.held, widget.ticker).where((a) => a != _pay).toList();
+    // BTC first, then what the book offers for this asset now, then what is admitted, then the rest.
     return {
-      if (all.contains(kUserBtc)) kUserBtc,
-      ..._firstReceives.where((a) => a != _pay && a != kUserBtc),
+      if (_pay != kUserBtc) kUserBtc,
+      ..._offeredNow(),
+      ..._admitted.where((a) => a != _pay),
       ...all,
-    }.toList();
+    }.where((a) => a != _pay).toList();
+  }
+
+  String? _defaultGet(List<String> gl) {
+    final o = _offeredNow();
+    for (final a in gl) {
+      if (o.contains(a)) return a;
+    }
+    return gl.isEmpty ? null : gl.first;
   }
 
   StreamSubscription<void>? _changed;
@@ -256,13 +311,22 @@ class _UserComposerState extends State<UserComposer> {
       await _loadTrades();
       if (!_following && !(_timer?.isActive ?? false)) _timer = Timer(const Duration(seconds: 4), _follow);
     });
+    // The amount not typed follows the price every ten seconds while the tab is shown.
+    _refresh = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted && TickerMode.valuesOf(context).enabled) _schedule(0);
+    });
   }
 
   @override
   void dispose() {
     _changed?.cancel();
     _timer?.cancel();
+    _estTimer?.cancel();
+    _refresh?.cancel();
     _amount.dispose();
+    _receive.dispose();
+    _amountFocus.dispose();
+    _receiveFocus.dispose();
     super.dispose();
   }
 
@@ -274,7 +338,31 @@ class _UserComposerState extends State<UserComposer> {
   Future<void> _receivesFor(String? pay) async {
     if (pay == null || widget.admittedReceives == null) return;
     final r = await widget.admittedReceives!(pay);
-    if (mounted) setState(() => _firstReceives = r);
+    if (mounted) setState(() => _admitted = r);
+  }
+
+  /// The book's offers for what is paid, asked when that changes and again after a minute.
+  Future<void> _loadOffered() async {
+    final pay = _pay;
+    if (pay == null || _offeredLoading) return;
+    if (_offered != null && _offered!.pay == pay && DateTime.now().millisecondsSinceEpoch - _offered!.at < 60000) return;
+    _offeredLoading = true;
+    List<String> list = const [];
+    try {
+      list = await widget.engine.offered(pay);
+    } catch (e) {
+      debugPrint('[user composer] offers: $e');
+    }
+    _offeredLoading = false;
+    if (!mounted) return;
+    setState(() => _offered = (pay: pay, list: list, at: DateTime.now().millisecondsSinceEpoch));
+    if (pay != _pay) {
+      _loadOffered();
+    } else if (!_getChosen && _ticket == null && !_busy) {
+      final was = _get;
+      setState(() => _get = _defaultGet(_getList()));
+      if (_get != was) _schedule(0);
+    }
   }
 
   void _reset() {
@@ -284,9 +372,44 @@ class _UserComposerState extends State<UserComposer> {
     _error = null;
   }
 
+  // ---- You pay and You receive, tethered ----
+  void _schedule([int ms = 350]) {
+    _estTimer?.cancel();
+    _estTimer = Timer(Duration(milliseconds: ms), () => _estimateNow().catchError((e) => debugPrint('[user composer] estimate: $e')));
+  }
+
+  Future<void> _estimateNow() async {
+    final pay = _pay, get = _get;
+    if (pay == null || get == null || _ticket != null || _busy || !mounted) return;
+    final typedPay = _fixed == 'pay';
+    final typed = typedPay ? _amount.text : _receive.text;
+    final atoms = parseAtoms(typed.trim(), widget.precision(typedPay ? pay : get));
+    final other = typedPay ? _receive : _amount;
+    final otherFocus = typedPay ? _receiveFocus : _amountFocus;
+    if (atoms == null || atoms <= BigInt.zero) {
+      if (!otherFocus.hasFocus) other.text = '';
+      setState(() => _note = null);
+      return;
+    }
+    final seq = ++_estSeq;
+    final e = await widget.engine.estimate(pay: pay, receive: get, payAtoms: typedPay ? atoms : null, receiveAtoms: typedPay ? null : atoms);
+    if (!mounted || seq != _estSeq || _ticket != null || pay != _pay || get != _get) return;
+    setState(() {
+      if (!e.ok) {
+        final p = widget.ticker(pay), g = widget.ticker(get);
+        _note = switch (e.why) { 'not-listed' => UserWords.notListed(g, p), 'too-small' => UserWords.tooSmall, _ => UserWords.notOffered(g, p) };
+        if (!otherFocus.hasFocus) other.text = '';
+        return;
+      }
+      final fill = typedPay ? formatAtoms('${e.receive}', widget.precision(get)) : formatAtoms('${e.pay}', widget.precision(pay));
+      if (!otherFocus.hasFocus) other.text = fill;
+      _note = e.short != null ? UserWords.bookUpTo(_amt(get, e.short!.receive)) : null;
+    });
+  }
+
   Future<void> _review() async {
     setState(_reset);
-    final atoms = parseAtoms(_amount.text, widget.precision(_pay!));
+    final atoms = parseAtoms(_amount.text.trim(), widget.precision(_pay!));
     if (atoms == null || atoms <= BigInt.zero) {
       setState(() => _error = UserWords.enter);
       return;
@@ -327,6 +450,7 @@ class _UserComposerState extends State<UserComposer> {
       setState(() {
         _reset();
         _amount.clear();
+        _receive.clear();
       });
     } on LapsedError {
       setState(_reset);
@@ -346,10 +470,16 @@ class _UserComposerState extends State<UserComposer> {
     }
   }
 
+  /// Open trades move on every few seconds while any is open, and every half minute once older
+  /// than two minutes; never while a person is pricing or confirming one.
   Future<void> _follow() async {
     _timer?.cancel();
-    final open = _trades.any((r) => !['settled', 'returned', 'failed'].contains(r['state']));
-    if (!open || !mounted || _following) return;
+    final openRecs = _trades.where((r) => !['settled', 'returned', 'failed'].contains(r['state'])).toList();
+    if (openRecs.isEmpty || !mounted || _following) return;
+    if (_busy) {
+      _timer = Timer(const Duration(seconds: 4), _follow);
+      return;
+    }
     _following = true;
     try {
       await widget.engine.resume();
@@ -360,7 +490,9 @@ class _UserComposerState extends State<UserComposer> {
       _following = false;
     }
     await _loadTrades();
-    if (mounted) _timer = Timer(const Duration(seconds: 4), _follow);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final young = openRecs.any((r) => now - (((r['sentAt'] ?? r['at']) as num?)?.toInt() ?? 0) < kFollowFastMs);
+    if (mounted) _timer = Timer(Duration(milliseconds: young ? 4000 : kFollowSlowMs), _follow);
   }
 
   String _stateWord(Map r) {
@@ -372,59 +504,137 @@ class _UserComposerState extends State<UserComposer> {
     return tradeStateWord(r, DateTime.now().millisecondsSinceEpoch) ?? UserWords.returned;
   }
 
-  Widget _picker(String key, List<String> list, String? value, void Function(String) onChanged) => DropdownButton<String>(
+  /// A picker: a button naming the asset chosen, which opens the wallet's one asset chooser.
+  Widget _chooser(String key, List<String> list, String? value, void Function(String) onChanged) {
+    final offered = _offeredNow().toSet();
+    final tradable = key == 'ucGet' ? _admitted.toSet() : const <String>{};
+    return OutlinedButton(
+      key: ValueKey(key),
+      onPressed: _busy
+          ? null
+          : () async {
+              final rows = [
+                for (final h in list)
+                  AssetPickerItem(
+                    hex: h,
+                    ticker: widget.ticker(h),
+                    name: h == kUserBtc ? 'Bitcoin' : SeqAssets.labelFor(h).subtitle,
+                    held: widget.held(h) > BigInt.zero,
+                    hidden: widget.isHidden?.call(h) ?? false,
+                    offered: offered.contains(h),
+                    tradable: tradable.contains(h),
+                    value: widget.held(h) > BigInt.zero ? widget.refValue?.call(h, widget.held(h)) : null,
+                  ),
+              ];
+              final picked = await showAssetSheet(context,
+                  title: key == 'ucPay' ? UserWords.pay : UserWords.get,
+                  rows: rows,
+                  registrySearch: true,
+                  balanceOf: (h) => widget.held(h) > BigInt.zero ? formatAtoms('${widget.held(h)}', widget.precision(h)) : '');
+              if (picked != null && mounted) onChanged(picked);
+            },
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text(value == null ? '…' : widget.ticker(value), key: ValueKey('$key-${value ?? ''}')),
+        const SizedBox(width: 4),
+        const Icon(Icons.arrow_drop_down, size: 18),
+      ]),
+    );
+  }
+
+  Widget _amountField(String key, TextEditingController c, FocusNode f, String side) => TextField(
         key: ValueKey(key),
-        value: list.contains(value) ? value : null,
-        items: [for (final a in list) DropdownMenuItem(value: a, child: Text(widget.ticker(a), key: ValueKey('$key-$a')))],
-        onChanged: _busy ? null : (v) => v == null ? null : onChanged(v),
+        controller: c,
+        focusNode: f,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: const InputDecoration(hintText: UserWords.amount),
+        onChanged: (_) {
+          _fixed = side;
+          setState(() {
+            _error = null;
+            if (_ticket != null) _reset();
+          });
+          _schedule();
+        },
       );
 
   @override
   Widget build(BuildContext context) {
     final pays = _payList();
-    if (_pay == null || !_payChosen) {
+    if (_pay == null || !_payChosen || !pays.contains(_pay)) {
       final first = pays.firstWhere((a) => widget.held(a) > BigInt.zero, orElse: () => pays.first);
       if (first != _pay) {
         _pay = first;
         unawaited(_receivesFor(_pay));
       }
     }
+    unawaited(_loadOffered());
     final gets = _getList();
-    if (_get == null || !gets.contains(_get)) _get = gets.isEmpty ? null : gets.first;
+    if (_get == null || !gets.contains(_get)) _get = _defaultGet(gets);
     final t = _ticket;
-    final shown = _trades.where((r) => r['state'] != 'confirming' && r['ticket'] is Map).toList().reversed.take(8).toList();
+    final shown = _trades.where((r) => (r['state'] != 'confirming' || r['uncertain'] == true) && r['ticket'] is Map).toList().reversed.take(12).toList();
+    bool done(Map r) => ['settled', 'returned', 'failed'].contains(r['state']);
+    final dir = _pay != null && _get != null && _pay != _get ? canonicalPair(_pay!, _get!, widget.ticker) : null;
     return ListView(key: const ValueKey('userComposer'), padding: const EdgeInsets.fromLTRB(20, 20, 20, 24), children: [
       Text(UserWords.title, style: Theme.of(context).textTheme.headlineSmall),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
+      if (dir != null && widget.relay != null) ...[
+        MarketView(
+            key: const ValueKey('ucMarketView'),
+            base: dir.base,
+            quote: dir.quote,
+            ticker: widget.ticker,
+            precision: widget.precision,
+            relay: widget.relay!,
+            get: widget.marketGet),
+        const SizedBox(height: 16),
+      ],
       Text(UserWords.pay, style: Theme.of(context).textTheme.labelLarge),
       Row(children: [
-        _picker('ucPay', pays, _pay, (v) {
+        _chooser('ucPay', pays, _pay, (v) {
           setState(() {
             _pay = v;
             _payChosen = true;
-            if (_get == v) _get = null;
+            _getChosen = false;
+            _get = null;
             _reset();
           });
           _receivesFor(v);
+          _schedule(0);
         }),
         const SizedBox(width: 12),
-        Expanded(
-            child: TextField(
-                key: const ValueKey('ucAmount'),
-                controller: _amount,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(hintText: UserWords.amount),
-                onChanged: (_) {
-                  if (_ticket != null) setState(_reset);
-                })),
+        Expanded(child: _amountField('ucAmount', _amount, _amountFocus, 'pay')),
       ]),
-      if (_pay != null) Text(_amt(_pay!, widget.held(_pay!)), key: const ValueKey('ucHave'), style: Theme.of(context).textTheme.bodySmall),
-      const SizedBox(height: 16),
+      if (_pay != null)
+        Row(key: const ValueKey('ucHave'), children: [
+          Expanded(child: Text(UserWords.balance(_amt(_pay!, widget.held(_pay!))), style: Theme.of(context).textTheme.bodySmall)),
+          TextButton(
+              key: const ValueKey('ucMax'),
+              onPressed: _busy || widget.held(_pay!) <= BigInt.zero
+                  ? null
+                  : () {
+                      _amount.text = formatAtoms('${widget.held(_pay!)}', widget.precision(_pay!));
+                      _fixed = 'pay';
+                      setState(() {
+                        if (_ticket != null) _reset();
+                      });
+                      _schedule(0);
+                    },
+              child: const Text(UserWords.max)),
+        ]),
+      const SizedBox(height: 12),
       Text(UserWords.get, style: Theme.of(context).textTheme.labelLarge),
-      _picker('ucGet', gets, _get, (v) => setState(() {
+      Row(children: [
+        _chooser('ucGet', gets, _get, (v) {
+          setState(() {
             _get = v;
+            _getChosen = true;
             _reset();
-          })),
+          });
+          _schedule(0);
+        }),
+        const SizedBox(width: 12),
+        Expanded(child: _amountField('ucReceive', _receive, _receiveFocus, 'receive')),
+      ]),
       const SizedBox(height: 16),
       if (t != null) ...[
         _line(UserWords.pay, _amt(t.payAsset, t.amountIn), 'ucIn'),
@@ -450,27 +660,34 @@ class _UserComposerState extends State<UserComposer> {
                   : () {
                       widget.engine.drop(_choice);
                       setState(_reset);
+                      _schedule(0);
                     },
               child: const Text(UserWords.cancel)),
         ]),
       if (shown.isNotEmpty) ...[
         const SizedBox(height: 24),
         Text(UserWords.recent, style: Theme.of(context).textTheme.labelLarge),
-        for (final r in shown)
-          Padding(
-            key: ValueKey('ucTrade-${r['id']}'),
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            // A short status beside the amounts; a sentence (a returned trade) on its own line
-            // under them, so neither squeezes the other.
-            child: Builder(builder: (_) {
-              final amounts = Text(
-                  '${_amt('${(r['ticket'] as Map)['payAsset']}', BigInt.parse('${(r['ticket'] as Map)['amountIn']}'))} → ${_amt('${(r['ticket'] as Map)['receiveAsset']}', BigInt.parse('${(r['ticket'] as Map)['amountOut']}'))}');
-              final word = _stateWord(r);
-              final state = Text(word, key: ValueKey('ucState-${r['id']}'));
-              if (word.length <= 16) return Row(children: [Expanded(child: amounts), state]);
-              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [amounts, state]);
-            }),
-          ),
+        for (final (word, group) in [(UserWords.openTrades, shown.where((r) => !done(r)).toList()), (UserWords.pastTrades, shown.where(done).take(8).toList())])
+          if (group.isNotEmpty) ...[
+            Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 2),
+                child: Text(word, key: ValueKey('ucGroup-$word'), style: Theme.of(context).textTheme.bodySmall)),
+            for (final r in group)
+              Padding(
+                key: ValueKey('ucTrade-${r['id']}'),
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                // A short status beside the amounts; a sentence (a returned trade) on its own line
+                // under them, so neither squeezes the other.
+                child: Builder(builder: (_) {
+                  final amounts = Text(
+                      '${_amt('${(r['ticket'] as Map)['payAsset']}', BigInt.parse('${(r['ticket'] as Map)['amountIn']}'))} → ${_amt('${(r['ticket'] as Map)['receiveAsset']}', BigInt.parse('${(r['ticket'] as Map)['amountOut']}'))}');
+                  final word = _stateWord(r);
+                  final state = Text(word, key: ValueKey('ucState-${r['id']}'));
+                  if (word.length <= 16) return Row(children: [Expanded(child: amounts), state]);
+                  return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [amounts, state]);
+                }),
+              ),
+          ],
       ],
     ]);
   }
@@ -481,3 +698,9 @@ class _UserComposerState extends State<UserComposer> {
         child: Row(children: [Expanded(child: Text(k)), Text(v)]),
       );
 }
+
+/// The composer's chooser and figures as the app draws them: hidden assets, values in the
+/// reference currency.
+bool appIsHidden(String h) => HiddenAssets.instance.isHidden(h);
+String? appRefValue(String h, BigInt atoms) =>
+    h == kUserBtc ? PriceService.instance.approx('BTC', '$atoms', 8) : PriceService.instance.approx(SeqAssets.labelFor(h).ticker, '$atoms', SeqAssets.labelFor(h).precision);

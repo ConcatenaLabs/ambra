@@ -116,8 +116,10 @@ on-chain coins used for boards and exit fees.
 - Shell = bottom tab bar over an IndexedStack (state kept per tab):
   **Balance · Send · Receive · Swap · History · More**. Android back returns to
   Balance from any tab and only exits from Balance.
-- Swap tab: in user mode, the user composer (You pay, You get, one amount, Review, then the
-  ticket's three lines and Trade; the trades below it as Sent, Settled or Returned). In
+- Swap tab: in user mode, the user composer: the pair's market (price, 24h, chart, best bid and
+  ask, recent trades), You pay and You receive (each a searchable asset chooser and an amount,
+  the two tethered), Review, then the ticket's three lines and Trade; the trades below it, Open
+  then Past, as Sent, Settled or Returned, and each also one row in History. In
   developer mode, the same-chain SeqDEX composer, plus entries to "Buy with Bitcoin
   (cross-chain)" and, when a hosted LSP is configured, "Instant (Lightning)".
 - More hub: Node (view/change backend), Sites (connect to a site by its code, the sites

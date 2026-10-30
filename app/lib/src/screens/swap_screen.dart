@@ -1327,6 +1327,8 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
       rows: rows,
       balanceOf: withBalance ? balStr : null,
       registrySearch: registrySearch,
+      // Developer mode's swap trades any asset by its id, registered or not.
+      allowPaste: registrySearch,
       onPasted: _SwapCache.pastedIds.add,
     );
   }
@@ -2027,6 +2029,12 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
       ticker: (h) => h == kBtcSentinel ? 'BTC' : SeqAssets.labelFor(h).ticker,
       precision: (h) => h == kBtcSentinel ? 8 : SeqAssets.labelFor(h).precision,
       admittedReceives: (pay) => _userEngine!.admittedReceivesFor(pay),
+      // Every asset the wallet can name: the receive chooser's search reaches them all.
+      known: () => SeqAssets.resolvedIds.toList(),
+      isHidden: appIsHidden,
+      refValue: appRefValue,
+      // The pair's market above You pay, from SeqDEX's relay.
+      relay: () => Backend.seqob,
     );
   }
 
