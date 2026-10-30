@@ -238,7 +238,8 @@ class BtcTrades {
       if (_big(d['sats']) != _big(o['want']) ||
           _big(d['sats']) > fair ||
           (d['expires_at'] as num) * 1000 - now() < (kInvoiceLeftSeconds + 1800) * 1000) {
-        log('[user trade] the maker\'s btc invoice is not the quote\'s');
+        log('[user trade] the maker\'s btc invoice is not the quote\'s: ${d['sats']} sat for $give, the quote\'s $fair at most, '
+            'its offer ${o['want']}, ${(d['expires_at'] as num) - now() ~/ 1000} s left');
         release(maker, '${o['swap']}');
         return null;
       }
