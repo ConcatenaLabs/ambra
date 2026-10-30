@@ -17,6 +17,7 @@ import '../data/dev_mode.dart';
 import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
 import '../data/hidden_assets.dart';
+import '../data/lightning_to_ark.dart';
 import '../data/pay_code.dart';
 import '../data/problem_report.dart' show ReportWords;
 import '../data/leaf_service.dart';
@@ -831,14 +832,28 @@ class _BtcRowState extends State<_BtcRow> {
           ]),
         ),
       ),
-      if (!widget.dev && (widget.arrivingSats ?? BigInt.zero) > BigInt.zero)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(DefaultWords.arriving(formatAtoms(widget.arrivingSats.toString(), 8), 'BTC'),
-                key: const Key('arriving-BTC'), style: AmbraText.sub),
-          ),
+      if (!widget.dev)
+        ListenableBuilder(
+          listenable: LightningToArk.instance,
+          builder: (context, _) {
+            // BTC on its way from the wallet's channel to the ark is said as such; anything
+            // else on its way is "arriving".
+            final moving = LightningToArk.instance.moving;
+            final arriving = widget.arrivingSats ?? BigInt.zero;
+            if (moving == null && arriving <= BigInt.zero) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                    moving != null
+                        ? DefaultWords.moving(formatAtoms(moving.toString(), 8), 'BTC')
+                        : DefaultWords.arriving(formatAtoms(arriving.toString(), 8), 'BTC'),
+                    key: Key(moving != null ? 'moving-BTC' : 'arriving-BTC'),
+                    style: AmbraText.sub),
+              ),
+            );
+          },
         ),
       if (widget.dev && _open && parts.isNotEmpty) _SplitLine(ticker: 'BTC', precision: 8, parts: parts),
       if (widget.dev)
@@ -1604,16 +1619,23 @@ class _ReceiveTabState extends State<ReceiveTab> {
   String? _error;
   String? _ampAid; // OpenAMP account id (how senders address restricted assets)
   String? _ampAddress; // an enclave deposit address for a restricted asset
-  // User mode: the receive code shown first (a payment to it arrives in seconds), drawn
-  // again once one is paid; the address one tap away, for Bitcoin and other senders.
+  // User mode: the receive code shown first (a payment to it arrives in seconds). It shows at
+  // once from what the wallet last drew (kept until it is paid or lapses), whatever the wallet
+  // is syncing, and gains a way to be paid in place when one opens; a new one is drawn in the
+  // background and replaces it only when it is ready.
   String? _code;
+  String? _codeAddr;
+  String? _codeArk;
+  String? _codeSeq;
+  int? _codeUntil; // the receive request's lapse, a median time
   bool _drawing = false;
+  bool _fresh = false; // the next draw asks for a new receive request
   int _paidAt = 0;
 
-  // The one receive code shows in user mode once the wallet holds coins with the operator
-  // or BTC on the ark: it carries the address, the ark address and the receive request.
+  // The one receive code shows in user mode once there is one to show, or once the wallet
+  // holds coins with the operator or BTC on the ark.
   bool get _codeMode =>
-      !DevMode.instance.on && (LeafService.instance.open || ArkBtcService.instance.open);
+      !DevMode.instance.on && (_code != null || LeafService.instance.open || ArkBtcService.instance.open);
 
   @override
   void initState() {
@@ -1626,24 +1648,41 @@ class _ReceiveTabState extends State<ReceiveTab> {
     ArkBtcService.instance.addListener(_onLeaves);
     _paidAt = LeafService.instance.arrivedCount;
     _load();
-    _onLeaves();
+    unawaited(_restoreCode().whenComplete(_onLeaves));
   }
 
-  /// A new code on request, the one shown given up.
+  /// The code last drawn, shown at once, unless its receive request lapses within a day.
+  Future<void> _restoreCode() async {
+    final kept = await WalletCache.loadReceiveCode();
+    if (kept == null || !mounted || _code != null) return;
+    final until = kept['until'] is int ? kept['until'] as int : null;
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    if (until != null && until - now < 86400) return;
+    final addr = kept['address']?.toString();
+    if (addr == null || addr.isEmpty) return;
+    setState(() {
+      _codeAddr = addr;
+      _codeArk = kept['ark']?.toString();
+      _codeSeq = kept['sequentia']?.toString();
+      _codeUntil = until;
+      _code = _compose();
+    });
+    debugPrint('[ambra-receive] the last code drawn, shown at once: ${_code?.length} chars');
+  }
+
+  /// A new code on request; the one shown stays until the new one is ready.
   void _newCode() {
-    setState(() => _code = null);
+    _fresh = true;
     _onLeaves();
   }
 
-  /// Draws a code when the wallet can take one and shows none, and a new one once a
-  /// coin arrived (the code shown is single-use).
+  /// Draws a code when the wallet shows none, adds a way to be paid that opened since, and
+  /// draws a new one once the one shown was paid (its receive request is single use).
   void _onLeaves() {
     final l = LeafService.instance;
     final ark = ArkBtcService.instance;
-    if (DevMode.instance.on || !(l.open || ark.open) || _drawing) return;
-    // A new code once the one shown was paid (its receive request is single use), or once
-    // the ark opened after the code was drawn without it.
-    // A code carrying an invoice is spent once BTC arrived on the ark: a new one then.
+    if (DevMode.instance.on || _drawing || !mounted) return;
+    // A code carrying an invoice is spent once BTC arrived on the ark: a new invoice then.
     final paid = ark.received;
     final invoicePaid = (paid != null && paid.hash == _codeInvoiceHash) ||
         (_codeAmount.isNotEmpty && ark.open && ark.spendable + ark.arriving > _arkSeen);
@@ -1655,22 +1694,22 @@ class _ReceiveTabState extends State<ReceiveTab> {
             .showSnackBar(ambraSnack(DefaultWords.received(formatAtoms(paid.sats.toString(), 8), 'BTC')));
       });
     }
-    final stale = _code == null ||
-        l.arrivedCount != _paidAt ||
+    if (l.arrivedCount != _paidAt) {
+      _paidAt = l.arrivedCount;
+      _fresh = true;
+    }
+    final want = _code == null ||
+        _fresh ||
         (ark.open && _codeArk == null) ||
         (l.open && _codeSeq == null) ||
-        invoicePaid;
-    if (!stale) return;
-    _paidAt = l.arrivedCount;
+        invoicePaid ||
+        _btcAmount.text.trim() != _codeAmount;
+    if (!want) return;
     _drawing = true;
-    _drawCode().then((c) {
-      _drawing = false;
-      if (mounted) setState(() => _code = c);
-    });
+    _drawCode().whenComplete(() => _drawing = false);
   }
 
-  String? _codeArk;
-  String? _codeSeq;
+  String? _codeInvoice;
   String? _codeInvoiceHash; // the payment hash of the code's lightning= invoice
   String? _toldPaid;
 
@@ -1683,9 +1722,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
 
   void _onAmount(String _) {
     _amountDebounce?.cancel();
-    _amountDebounce = Timer(const Duration(milliseconds: 800), () {
-      if (_btcAmount.text.trim() != _codeAmount) _newCode();
-    });
+    _amountDebounce = Timer(const Duration(milliseconds: 800), _onLeaves);
   }
 
   /// The amount field's BTC as a BIP321 decimal (trailing zeros dropped) and in sats, or
@@ -1698,43 +1735,84 @@ class _ReceiveTabState extends State<ReceiveTab> {
     return (dec, sats);
   }
 
-  /// The one receive code: the shared address at the current index, an ark address when
-  /// BTC lives on the ark, and a receive request when the wallet holds coins with the
-  /// operator. Null when it cannot be drawn.
-  Future<String?> _drawCode() async {
+  /// The code from its parts as they stand.
+  String? _compose() {
+    final a = _codeAddr;
+    if (a == null) return null;
     try {
-      final m = await WalletRepository.instance.readMnemonic();
-      if (m == null) return null;
-      final address = (await core.receiveAddressAt(mnemonic: m, index: _index, confidential: false)).address;
-      String? arkAddr;
-      if (ArkBtcService.instance.open) {
-        try {
-          arkAddr = await ArkBtcService.instance.address();
-        } catch (_) {}
-      }
-      final seq = LeafService.instance.open ? await LeafService.instance.receiveCode() : null;
-      _codeArk = arkAddr;
-      _codeSeq = seq;
-      _codeAmount = _btcAmount.text.trim();
-      _arkSeen = ArkBtcService.instance.spendable + ArkBtcService.instance.arriving;
-      final amount = _amountOf(_codeAmount);
-      String? invoice;
-      _codeInvoiceHash = null;
-      if (amount != null && ArkBtcService.instance.open) {
-        try {
-          invoice = await ArkBtcService.instance.invoice(amount.$2);
-          _codeInvoiceHash = '${decodeBtcInvoice(invoice)['payment_hash']}';
-        } catch (_) {}
-      }
       return PayCode(
-              address: address,
-              amount: amount?.$1,
-              lightning: invoice,
-              ark: arkAddr,
-              sequentia: seq)
+              address: a,
+              amount: _amountOf(_codeAmount)?.$1,
+              lightning: _codeInvoice,
+              ark: _codeArk,
+              sequentia: _codeSeq)
           .build();
     } catch (_) {
       return null;
+    }
+  }
+
+  void _show() {
+    final c = _compose();
+    if (c == null || !mounted || c == _code) return;
+    setState(() => _code = c);
+    // The code is public (it is shown and copied); its size is what a scanner meets.
+    debugPrint('[ambra-receive] code ${c.length} chars, QR version ${payCodeQr(c).typeNumber}: $c');
+  }
+
+  /// Draws the code part by part, each shown as soon as it is there: the shared address at the
+  /// current index, an ark address once the Bitcoin ark is open, a receive request once the
+  /// wallet holds coins with the operator (a new one only when the one shown was paid, lapses
+  /// or a new code was asked for), and with an amount an invoice of the ark's for it. What the
+  /// wallet cannot reach now (a sync running, a service closed) is left as it was.
+  Future<void> _drawCode() async {
+    final fresh = _fresh;
+    _fresh = false;
+    try {
+      final m = await WalletRepository.instance.readMnemonic();
+      if (m == null) return;
+      if (_codeAddr == null || fresh) {
+        _codeAddr = (await core.receiveAddressAt(mnemonic: m, index: _index, confidential: false)).address;
+        if (_code == null) _show();
+      }
+      final ark = ArkBtcService.instance;
+      if (ark.open && _codeArk == null) {
+        try {
+          _codeArk = await ark.address();
+          _show();
+        } catch (_) {}
+      }
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final lapsing = _codeUntil != null && _codeUntil! - now < 86400;
+      if (LeafService.instance.open && (_codeSeq == null || fresh || lapsing)) {
+        final seq = await LeafService.instance.receiveCode();
+        if (seq != null) {
+          _codeSeq = seq;
+          final r = libraryRequest(seq);
+          _codeUntil = r?['until'] is int ? r!['until'] as int : null;
+          _paidAt = LeafService.instance.arrivedCount;
+          _show();
+        }
+      }
+      final text = _btcAmount.text.trim();
+      if (text != _codeAmount || _codeInvoice == null || fresh) {
+        _codeAmount = text;
+        _arkSeen = ark.spendable + ark.arriving;
+        _codeInvoice = null;
+        _codeInvoiceHash = null;
+        final amount = _amountOf(text);
+        if (amount != null && ark.open) {
+          try {
+            _codeInvoice = await ark.invoice(amount.$2);
+            _codeInvoiceHash = '${decodeBtcInvoice(_codeInvoice!)['payment_hash']}';
+          } catch (_) {}
+        }
+        _show();
+      }
+      await WalletCache.saveReceiveCode(
+          {'address': _codeAddr, 'ark': _codeArk, 'sequentia': _codeSeq, 'until': _codeUntil});
+    } catch (_) {
+      // The code shown stays; the next change of the wallet's state tries again.
     }
   }
 
@@ -1757,11 +1835,9 @@ class _ReceiveTabState extends State<ReceiveTab> {
   }
 
   Future<void> _load() async {
-    setState(() {
-      _address = null;
-      _bitcoinAddress = null;
-      _error = null;
-    });
+    // The address shown stays until the next one is ready: a scan moving the index on, or the
+    // wallet syncing, never blanks it.
+    setState(() => _error = null);
     try {
       final m = await WalletRepository.instance.readMnemonic();
       if (m == null) return;
@@ -1814,11 +1890,10 @@ class _ReceiveTabState extends State<ReceiveTab> {
               child: Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
-                child: QrImageView(
+                child: QrImageView.withQr(
                     key: const Key('receive-code-qr'),
-                    data: _code!,
-                    version: QrVersions.auto,
-                    size: 264,
+                    qr: payCodeQr(_code!),
+                    size: 288,
                     backgroundColor: Colors.white),
               ),
             ),
@@ -1847,7 +1922,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
                   key: const Key('receive-code-new'),
                   label: DefaultWords.newCode,
                   icon: Icons.refresh,
-                  onPressed: _drawing ? null : _newCode,
+                  onPressed: _newCode,
                 ),
                 if (ArkBtcService.instance.open) ...[
                   const SizedBox(height: 14),

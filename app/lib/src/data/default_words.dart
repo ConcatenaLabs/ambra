@@ -26,6 +26,8 @@ class DefaultWords {
   static String sentThen(String amount, String ticker, String arrives) => 'Sent $amount $ticker. $arrives';
   static String fee(String amount, String ticker) => 'Fee $amount $ticker';
   static String arriving(String amount, String ticker) => '$amount $ticker arriving';
+  /// Held where it cannot be sent in seconds (a wallet made before), on its way to where it can.
+  static String moving(String amount, String ticker) => 'Moving $amount $ticker so it can be sent in seconds.';
   static String received(String amount, String ticker) => 'Received $amount $ticker.';
   static const btcFee = 'The fee is paid in BTC.';
   static String feeIn(String ticker) => 'Fee paid in $ticker.';
@@ -36,6 +38,11 @@ class DefaultWords {
   static String btcSentAfterBlock(String amount) => 'Sent $amount BTC. $arrivesAfterBlock';
   static String btcUpTo(String amount) => 'You can send up to $amount BTC this way now.';
   static const couldNotSend = 'This payment could not be made. Nothing was sent.';
+
+  /// A receive code paid at its address because this wallet holds nothing that pays it in
+  /// seconds: said in the review, with when it arrives.
+  static String byAddress(String arrives) => "This can't arrive in seconds from what you hold now, so it goes to the address. $arrives";
+  static const arrivesNextBlock = 'It arrives after the next block, in about a minute.';
 
   /// The words no default-mode screen says (the contract's list).
   static const forbidden = [
@@ -51,6 +58,6 @@ class DefaultWords {
         codeTakesAssets, addressNotNow, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)),
         fee('5', 'USDX'), arriving('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
         arrivesAfterBlock, noFees, btcSentAfterBlock('0.001'),
-        btcUpTo('0.001'), couldNotSend,
+        btcUpTo('0.001'), couldNotSend, byAddress(arrivesAfterBlock), arrivesNextBlock, moving('0.001', 'BTC'),
       ];
 }

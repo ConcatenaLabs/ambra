@@ -255,22 +255,31 @@ module that implements it.
     freeze; the split by rail and the fee-rate fields are developer mode's.
   - Receive shows the wallet's one **receive code** (`app/lib/src/data/pay_code.dart`, the
     web wallet's format): a BIP321 request,
-    `bitcoin:<address>?ark=<Bitcoin ark address>&sequentia=<receive request>`. The address
+    `BITCOIN:<ADDRESS>?ark=<BITCOIN ARK ADDRESS>&sequentia=<SQR1…>`. The address
     is the shared tb1 address, `ark` is where BTC arrives in seconds, and `sequentia` is the
-    single-use receive request where an asset arrives in seconds. Neither extra part is
-    required, so any Bitcoin wallet reads it as a plain request for the address. A new code
-    is drawn when the one shown is paid, or on "New code". With BTC on the ark, Receive has
+    single-use receive request where an asset arrives in seconds, in its short form. Neither
+    extra part is required, so any Bitcoin wallet reads it as a plain request for the address.
+    It is drawn in upper case as a QR code with alphanumeric segments at level M
+    (`payCodeQr`), so it scans at a glance from another screen. The code shows at once from
+    what the wallet last drew, syncing or not, gains a way to be paid in place when one opens,
+    and is replaced when it is paid, when its request is within a day of lapsing, or on
+    "New code" (the old one stays until the new one is ready). With BTC on the ark, Receive has
     one optional field, "Amount in BTC (optional)": with an amount the code also carries
     `amount=` and a `lightning=` invoice from the Bitcoin ark for exactly that amount
-    (`bitcoin:<address>?amount=<BTC>&lightning=<invoice>&ark=…&sequentia=…`), claimed while
+    (`BITCOIN:<ADDRESS>?amount=<BTC>&lightning=<INVOICE>&ark=…&sequentia=…`), claimed while
     the wallet is open; a new invoice comes with each new code and each new amount. While a code handed out in the
     last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
     the address alone; so does user mode until the wallet holds coins with the operator or
     BTC on the ark.
-  - Send reads a receive code and picks its part without asking: an asset goes to the
-    receive request when the operator pays it (from the wallet's leaves, in seconds), and
-    BTC goes to the ark address when the ark holds the amount. Anything else goes to the
-    address. A bare receive request is paid the same way. Anything that is not a code (an
+  - Send reads a receive code, typed, pasted or scanned (the scanner keeps the whole code),
+    and picks its part without asking, instant first: an asset goes to the receive request
+    when the wallet's leaves hold it (in seconds), and BTC goes to the ark address when the
+    ark holds the amount, else to the code's invoice when the ark or the wallet's Lightning
+    pays it. Anything else goes to the address, and the review says so first ("This can't
+    arrive in seconds from what you hold now, so it goes to the address. …"). A bare receive
+    request is paid the same way. Every payment that leaves is in History at once, pending
+    until its block when it waits for one, and BTC arriving at the wallet's latest addresses
+    shows there as soon as the Bitcoin network has it. Anything that is not a code (an
     address, an invoice, an account id) takes the path it always took.
     An address send the chain cannot cover is paid out of the leaves (the library's
     `offboard_quote`, then `offboard` on the quote shown): "Send <amt> <TICKER>?", "It
@@ -297,8 +306,15 @@ module that implements it.
     fee, to a new board's funding address in one transaction, and the ark wallet boards
     that transaction (`board_funding_address`, `board_psbt`) and puts it on the network.
     Below 20,000 sat it stays on the chain. One board at a time, never while something a
-    person asked for runs, or in the minute after. Bark's own log goes to logcat, tagged
-    `bark`.
+    person asked for runs, or in the minute after; a board whose funding transaction the
+    network has not known for ten minutes (its broadcast failed) holds nothing and no longer
+    holds the next one back. Bark's own log goes to logcat, tagged `bark`.
+  - BTC held in the wallet's own Lightning channel (a wallet made before BTC lived on the
+    ark) moves in by itself too (`app/lib/src/data/lightning_to_ark.dart`): the channel pays
+    an invoice of the wallet's own ark for all it can spend less the route's fee, from
+    5,000 sat, at most every fifteen minutes and never while something a person asked for
+    runs. Until it is paid the BTC stays spendable in the channel; meanwhile Balance says
+    "Moving <amount> BTC so it can be sent in seconds." under BTC's figure.
   - Send pays out of the ark, chosen without asking: an ark address in seconds, a BTC
     invoice (`lntb…`) over Lightning, a Bitcoin address on the chain after a Bitcoin
     block. An address the ark cannot cover, or one it refuses, is paid as before. A code

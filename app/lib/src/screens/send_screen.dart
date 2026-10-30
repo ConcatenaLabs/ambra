@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -60,20 +61,58 @@ class _SendTabState extends State<SendTab> {
   /// The destination of the payment being reviewed.
   String get _to => _route ?? _addr.text.trim();
 
-  /// Picks the way a receive code ([PayCode]) is paid, without asking: an asset to its
-  /// receive request when the operator pays it, BTC to its ark address when the ark holds
-  /// the amount; anything else to its address.
+  /// Picks the way a receive code ([PayCode]) is paid, without asking, instant first: an
+  /// asset to its receive request when this wallet's instant part holds it; BTC to its ark
+  /// address when the ark holds the amount, else to its invoice when the ark or Lightning
+  /// pays it; anything else to its address ([_byAddress] then says so in plain words).
   String? _routeOf(PayCode code) {
+    _byAddress = false;
     if (_isBtc) {
       final sats = parseAtoms(_amount.text, 8);
       final ark = ArkBtcService.instance;
-      if (code.ark != null && ark.open && sats != null && sats > BigInt.zero && sats <= ark.spendable) return code.ark;
+      final some = sats != null && sats > BigInt.zero;
+      if (code.ark != null && ark.open && some && sats <= ark.spendable) return code.ark;
+      final inv = code.lightning;
+      if (inv != null) {
+        final msat = bolt11AmountMsat(inv);
+        final want = msat == null ? sats : msat ~/ BigInt.from(1000);
+        if (want != null && ((ark.open && want <= ark.spendable) || want <= _lnAtoms(_btcId))) return inv;
+      }
+      _byAddress = code.address != null;
       return code.address ?? code.ark;
     }
     final seq = code.sequentia;
-    if (seq != null && LeafService.instance.paysInTree(seq)) return seq;
+    final paid = seq == null ? null : LeafService.instance.payable(seq);
+    if (paid != null) {
+      final label = SeqAssets.labelFor(_assetId);
+      final atoms = parseAtoms(_amount.text, label.precision);
+      // Paid from the instant part when it holds the amount; the review says so otherwise.
+      if (atoms == null || atoms <= LeafService.instance.spendableAtoms(_assetId) || code.address == null) return paid;
+    }
+    _byAddress = code.address != null;
     return code.address;
   }
+
+  /// A payment that just left, in History at once ([WalletCache.addPayment]): pending while
+  /// it waits for a block ([txid] given), done otherwise.
+  Future<void> _logSent(String ticker, BigInt atoms, int precision, String rail, {String? txid, String? chain}) async {
+    try {
+      await WalletCache.addPayment({
+        'kind': 'payment',
+        'ticker': ticker,
+        'atoms': atoms.toString(),
+        'precision': precision,
+        'rail': rail,
+        'pending': txid != null,
+        'txid': ?txid,
+        'chain': ?chain,
+      });
+    } catch (_) {/* history tracking is best-effort */}
+  }
+
+  /// Whether the payment being reviewed is a receive code paid at its address, because no
+  /// instant way fits: the review says so ([DefaultWords.byAddress]).
+  bool _byAddress = false;
   String? _error;
 
   /// The synthetic asset id for parent-chain Bitcoin in the picker/state.
@@ -339,6 +378,19 @@ class _SendTabState extends State<SendTab> {
   Future<void> _scan() async {
     final raw = await Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => const ScanScreen()));
     if (raw == null || !mounted) return;
+    // A receive code is kept whole: its other ways to pay (instant ones) are in its query.
+    try {
+      final code = PayCode.read(raw);
+      if (code != null && (code.ark != null || code.sequentia != null || code.lightning != null)) {
+        setState(() {
+          _addr.text = raw.trim();
+          if (_isBtc && code.amount != null && double.tryParse(code.amount!) != null) _amount.text = code.amount!;
+        });
+        return;
+      }
+    } on FormatException catch (e) {
+      return _snack(e.message);
+    }
     var s = raw.trim();
     if (s.contains(':')) s = s.substring(s.indexOf(':') + 1); // drop any URI scheme
     String? amount;
@@ -360,6 +412,14 @@ class _SendTabState extends State<SendTab> {
       if (code != null) {
         _route = _routeOf(code);
         if (_route == null) return _snack(DefaultWords.codeTakesAssets);
+        final way = _route == code.ark
+            ? 'ark'
+            : _route == code.lightning
+                ? 'invoice'
+                : _route == code.address
+                    ? 'address'
+                    : 'request';
+        debugPrint('[ambra-send] a receive code, paid at its $way${_byAddress ? ' (nothing held pays it in seconds)' : ''}');
       }
     } on FormatException catch (e) {
       return _snack(e.message);
@@ -444,6 +504,7 @@ class _SendTabState extends State<SendTab> {
         feeAsset: feeAsset,
         feeLabel: _feeLabel,
         feeRateSatKvb: feeRateSatKvb,
+        note: _byAddress && !DevMode.instance.on ? DefaultWords.byAddress(DefaultWords.arrivesNextBlock) : null,
       ),
     );
     if (txid != null && mounted) {
@@ -491,8 +552,10 @@ class _SendTabState extends State<SendTab> {
         amountSats: atoms,
         amountStr: formatAtoms(atoms.toString(), 8),
         feeRate: feeRate,
+        note: _byAddress && !DevMode.instance.on ? DefaultWords.byAddress(DefaultWords.arrivesAfterBlock) : null,
       ),
     );
+    if (txid != null) unawaited(_logSent('BTC', atoms, 8, 'btc', txid: txid, chain: 'btc'));
     if (txid != null && mounted) {
       _addr.clear();
       _amount.clear();
@@ -547,6 +610,7 @@ class _SendTabState extends State<SendTab> {
     setState(() => _sendingInTree = true);
     try {
       await LeafService.instance.pay('offboard', {...args, 'shown': quote}, true);
+      unawaited(_logSent(label.ticker, atoms, label.precision, 'address'));
       if (!mounted) return;
       _addr.clear();
       _amount.clear();
@@ -585,6 +649,8 @@ class _SendTabState extends State<SendTab> {
     }
     if (sats > ark.spendable) {
       if (kind == 'onchain') return false; // an address is paid as before
+      // An invoice the wallet's own Lightning holds enough for is paid there, at once.
+      if (kind == 'lightning' && LightningService.instance.configured && sats <= _lnAtoms(_btcId)) return false;
       _snack(DefaultWords.btcUpTo(formatAtoms(ark.spendable.toString(), 8)));
       return true;
     }
@@ -613,6 +679,7 @@ class _SendTabState extends State<SendTab> {
     try {
       await ark.send(dest, kind == 'lightning' ? null : sats);
       final secs = DateTime.now().difference(started).inMilliseconds / 1000;
+      unawaited(_logSent('BTC', sats, 8, kind == 'onchain' ? 'address' : (kind == 'lightning' ? 'lightning' : 'ark')));
       if (!mounted) return true;
       _addr.clear();
       _amount.clear();
@@ -667,6 +734,7 @@ class _SendTabState extends State<SendTab> {
       await LeafService.instance.pay(
           'send', {'request': _to, 'amount': atoms.toString(), 'asset': _assetId}, !DevMode.instance.on);
       final secs = DateTime.now().difference(started).inMilliseconds / 1000;
+      unawaited(_logSent(label.ticker, atoms, label.precision, 'tree'));
       if (!mounted) return;
       _addr.clear();
       _amount.clear();
@@ -894,7 +962,10 @@ class _ReviewSheet extends StatefulWidget {
     required this.feeAsset,
     required this.feeLabel,
     required this.feeRateSatKvb,
+    this.note,
   });
+  /// A plain sentence over the figures (a receive code paid at its address, and why).
+  final String? note;
   final String address;
   final String assetId;
   final BigInt atoms;
@@ -1003,6 +1074,10 @@ class _ReviewSheetState extends State<_ReviewSheet> {
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const Text('Confirm payment', style: AmbraText.h1),
+          if (widget.note != null) ...[
+            const SizedBox(height: 10),
+            Text(widget.note!, key: const Key('send-by-address-note'), style: AmbraText.sub),
+          ],
           const SizedBox(height: 18),
           AmbraCard(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1039,7 +1114,10 @@ class _BtcReviewSheet extends StatefulWidget {
     required this.amountSats,
     required this.amountStr,
     required this.feeRate,
+    this.note,
   });
+  /// A plain sentence over the figures (a receive code paid at its address, and why).
+  final String? note;
   final String address;
   final BigInt amountSats;
   final String amountStr;
@@ -1136,6 +1214,10 @@ class _BtcReviewSheetState extends State<_BtcReviewSheet> {
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const Text('Confirm Bitcoin payment', style: AmbraText.h1),
+          if (widget.note != null) ...[
+            const SizedBox(height: 10),
+            Text(widget.note!, key: const Key('send-btc-by-address-note'), style: AmbraText.sub),
+          ],
           const SizedBox(height: 18),
           AmbraCard(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
