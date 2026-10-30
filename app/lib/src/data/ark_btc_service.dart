@@ -244,7 +244,7 @@ class ArkBtcService extends ChangeNotifier {
 
   String? _watching;
 
-  /// The last invoice of the ark's that was paid and claimed: its hash and amount.
+  /// The last invoice of the ark's that was paid and claimed: its hash and what arrived of it.
   ({String hash, BigInt sats})? received;
 
   Future<void> _watch(String hash, BigInt sats, int untilMs) async {
@@ -255,7 +255,8 @@ class ArkBtcService extends ChangeNotifier {
         final st = jsonDecode(await ark.arkReceiveStatus(hash: hash, claim: true)) as Map;
         if (st['state'] == 'paid') {
           _watching = null;
-          received = (hash: hash, sats: BigInt.tryParse('${st['amount']}') ?? sats);
+          // What arrived: the invoice's amount less the server's fee for receiving it.
+          received = (hash: hash, sats: BigInt.tryParse('${st['net'] ?? st['amount']}') ?? sats);
           debugPrint('[ambra-ark] invoice paid and claimed: $hash');
           await refresh();
           return;
