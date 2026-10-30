@@ -242,8 +242,18 @@ class _BalanceTabState extends State<BalanceTab> {
   }
 
   void _onPrice() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    // A board just spent coins on the chain: read the chain again, so they are not counted there
+    // and as arriving at once.
+    final boards = LeafService.instance.boardsMade + ArkBtcService.instance.boardsMade;
+    if (boards != _boardsSeen) {
+      _boardsSeen = boards;
+      unawaited(_refresh());
+    }
   }
+
+  int _boardsSeen = 0;
 
   @override
   void dispose() {
@@ -366,7 +376,8 @@ class _BalanceTabState extends State<BalanceTab> {
     // asset with nothing yet but something arriving still gets its row.
     final arriving = LeafService.instance.joined ? LeafService.instance.arrivingAtoms() : const <String, BigInt>{};
     final onchainOf = {
-      for (final b in onchainBalances ?? const <core.AssetBalance>[]) b.assetId: BigInt.tryParse(b.atoms) ?? BigInt.zero
+      for (final b in onchainBalances ?? const <core.AssetBalance>[])
+        b.assetId: LeafService.instance.onchainLessBoards(b.assetId, BigInt.tryParse(b.atoms) ?? BigInt.zero)
     };
     final chans = _lnChannels.cast<Map>();
     BigInt lnOf(String id) => legLiquidity(chans, RailTarget.asset(hex: id, ticker: SeqAssets.labelFor(id).ticker)).balance;
