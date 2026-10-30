@@ -354,15 +354,33 @@ pub fn pay_status(hash: &str, drive: bool) -> Result<Value, Value> {
 }
 
 /// A receive's state under `hash`; with `claim`, the wallet first claims a
-/// payment the server holds for it. `{"state": "paid", "preimage", "amount"} |
-/// {"state": "waiting"} | {"state": "unknown", "reason"}` (unknown: never made
-/// here, or given up).
+/// payment the server holds for it. `{"state": "paid", "preimage", "amount",
+/// "fee", "net"} | {"state": "waiting"} | {"state": "unknown", "reason"}`
+/// (unknown: never made here, or given up). `amount` is what the invoice was
+/// paid; `net` is what arrived in the ark, `amount` less the server's fee for
+/// a receive of that size (`fee`; both absent when the server's terms cannot be
+/// read).
 pub fn receive_status(hash: &str, claim: bool) -> Result<Value, Value> {
     let w = wallet()?;
     let h = payment_hash(hash)?;
     runtime().block_on(async {
         let st = if claim { w.try_claim_lightning_receive(h, false).await } else { w.lightning_receive_state(h).await };
-        Ok(st.map(receive_state).unwrap_or_else(|e| json!({"state": "unknown", "reason": format!("{:#}", e)})))
+        let st = match st {
+            Ok(st) => st,
+            Err(e) => return Ok(json!({"state": "unknown", "reason": format!("{:#}", e)})),
+        };
+        let paid = match &st {
+            LightningReceiveState::Settled(r) => Some(r.amount),
+            _ => None,
+        };
+        let mut v = receive_state(st);
+        if let Some(amount) = paid {
+            if let Ok(e) = w.estimate_lightning_receive_fee(amount).await {
+                v["fee"] = json!(sats(e.fee));
+                v["net"] = json!(sats(e.net_amount));
+            }
+        }
+        Ok(v)
     })
 }
 
