@@ -221,6 +221,8 @@ UserTradeEngine _newTradeEngine(String walletTag) {
       return chain + (LeafService.instance.leafAtoms()[a] ?? BigInt.zero);
     },
     prepare: (_) => LeafService.instance.boardSoon(),
+    // Coins a refresh plan keeps are freed for a trade in the wallet's next round.
+    release: (a, leaves) => LeafService.instance.releaseFor(a, leaves),
     log: (m) => debugPrint(m),
   ));
 }
@@ -427,6 +429,7 @@ class _UserComposerState extends State<UserComposer> {
           _error = switch (q.why) {
             'no-funds' => UserWords.noFunds(p),
             'not-ready' => UserWords.notReady(p),
+            'freeing' => UserWords.freeing(p),
             'too-small' => UserWords.tooSmall,
             'not-listed' => UserWords.notListed(g, p),
             _ => UserWords.notOffered(g, p),
@@ -508,7 +511,13 @@ class _UserComposerState extends State<UserComposer> {
   Widget _chooser(String key, List<String> list, String? value, void Function(String) onChanged) {
     final offered = _offeredNow().toSet();
     final tradable = key == 'ucGet' ? _admitted.toSet() : const <String>{};
-    return OutlinedButton(
+    // The button reads as the asset it names, to a screen reader as on screen.
+    return Semantics(
+      container: true,
+      button: true,
+      label: '${key == 'ucPay' ? UserWords.pay : UserWords.get}: ${value == null ? '' : widget.ticker(value)}',
+      excludeSemantics: true,
+      child: OutlinedButton(
       key: ValueKey(key),
       onPressed: _busy
           ? null
@@ -538,7 +547,7 @@ class _UserComposerState extends State<UserComposer> {
         const SizedBox(width: 4),
         const Icon(Icons.arrow_drop_down, size: 18),
       ]),
-    );
+    ));
   }
 
   Widget _amountField(String key, TextEditingController c, FocusNode f, String side) => TextField(

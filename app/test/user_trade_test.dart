@@ -317,4 +317,36 @@ void main() {
     expect(await s.engine(makers: const [], now: () => 0).offered(x), isEmpty);
     expect(await s.engine(now: () => 0).offered(y), isEmpty);
   });
+
+  test('quote: a pay asset held only in coins a refresh plan keeps is freed in the next round', () async {
+    final released = <String>[];
+    final e = UserTradeEngine(UserTradeDeps(
+      run: (cmd, _) async => switch (cmd) {
+        'coins' => [
+            {'leaf_id': 'k1', 'asset': x, 'value': '3000000', 'state': 'live'},
+            {'leaf_id': 'k2', 'asset': x, 'value': '5', 'state': 'live'},
+          ],
+        'plans' => {
+            'plans': [
+              {'coin': 'k1', 'state': 'open'},
+              {'coin': 'old', 'state': 'open', 'steps': [{'leaf_id': 'k2'}]},
+              {'coin': 'k3', 'state': 'done'},
+            ]
+          },
+        _ => {},
+      },
+      fetchJson: (u, {post}) async => {'quotes': []},
+      makers: () => ['http://m'],
+      relayBook: (_, _) async => [],
+      admitted: () async => (pairs: {'chains': {'g': {'pairs': [{'pay': x, 'receive': y, 'sources': ['leaf-maker']}]}}}, genesis: 'g'),
+      read: () async => null,
+      write: (_) async {},
+      held: (_) async => BigInt.from(3000005),
+      release: (a, leaves) => released.addAll(leaves),
+    ));
+    expect((await e.quote(pay: x, receive: y, amount: BigInt.from(100))).why, 'freeing');
+    expect(released, ['k1', 'k2']);
+    expect(UserWords.freeing('USDX'), 'Your USDX is being made ready to trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.');
+    expect(spendableFrom([{'leaf_id': 'k2', 'asset': x, 'value': '5', 'state': 'live'}], {'plans': [{'coin': 'old', 'state': 'open', 'steps': [{'leaf_id': 'k2'}]}]}), isEmpty);
+  });
 }

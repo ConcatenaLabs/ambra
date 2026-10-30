@@ -399,6 +399,35 @@ class LeafService extends ChangeNotifier {
   static const _kWindow = 'ambra.leaves.window';
   Timer? _boardSoon;
 
+  /// A trade from coins an open plan keeps (the trade engine's `release`): they are given up in
+  /// the next round (`plan_release`) for leaves no plan names, followed until that round is done
+  /// with them, so the trade can be asked again. One release at a time; a second ask while one
+  /// runs is the one running.
+  bool _releasingForTrade = false;
+  void releaseFor(String asset, List<String> leaves) {
+    if (_releasingForTrade || !open || leaves.isEmpty) return;
+    _releasingForTrade = true;
+    unawaited(() async {
+      try {
+        await run('plan_release', {'leaves': leaves});
+        debugPrint('[leaves] ${leaves.length} planned coin(s) of ${asset.substring(0, 8)} given up in the next round to be traded');
+        final until = DateTime.now().add(kReleaseWait);
+        while (DateTime.now().isBefore(until)) {
+          await Future<void>.delayed(kReleasePoll);
+          try {
+            await run('sync');
+            if (releaseDone((await run('coins') as List?) ?? const [], leaves)) break;
+          } catch (_) {}
+        }
+        await refresh();
+      } catch (e) {
+        debugPrint('[leaves] release for a trade: $e');
+      } finally {
+        _releasingForTrade = false;
+      }
+    }());
+  }
+
   /// A trade found an asset held but not payable yet: board it once the person's action is
   /// [boardQuiet] behind, instead of at the next scheduled pass.
   void boardSoon() {
