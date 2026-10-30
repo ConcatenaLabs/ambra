@@ -333,7 +333,16 @@ class LeafService extends ChangeNotifier {
   /// left for [boardBackoff]. Whatever is boarded shows as arriving until its board is
   /// final, then in the figure as before.
   Future<void> autoBoard() async {
-    if (!open || DevMode.instance.on || _boarding || personBusy) return;
+    final skip = !open
+        ? 'not open'
+        : DevMode.instance.on
+            ? null
+            : _boarding
+                ? 'a board runs'
+                : personBusy
+                    ? 'something a person asked for runs ($_asking asking)'
+                    : null;
+    if (skip != null || DevMode.instance.on) return _boardWhy(skip);
     // The library must read every key the balance may show a coin at, first.
     if (await _coverReceiveKeys() > 0) {
       try {
@@ -342,7 +351,8 @@ class LeafService extends ChangeNotifier {
     }
     final served = minLeaves(info);
     final on = balance?['sequentia_onchain'];
-    if (on is! Map || served.isEmpty) return;
+    if (on is! Map || served.isEmpty) return _boardWhy('no on-chain balance or no served asset read');
+    _boardWhy('looking at ${on.length} asset(s) on the chain');
     _boarding = true;
     var boarded = false;
     try {
@@ -355,20 +365,15 @@ class LeafService extends ChangeNotifier {
         if (refused != null && DateTime.now().difference(refused) < boardBackoff) continue;
         if (_asking > 0) break;
         try {
-          final first = await run('board_quote', {'asset': asset, 'amount': held.toString(), 'fee_asset': asset});
-          final fee = boardFee(first);
-          if (fee == null) continue;
-          final amount = held - fee;
-          if (amount < min) continue;
-          final quote = await run('board_quote', {'asset': asset, 'amount': amount.toString(), 'fee_asset': asset});
-          if (boardFee(quote) != fee || _asking > 0) continue;
-          await run('board', {
-            'asset': asset,
-            'amount': amount.toString(),
-            'fee_asset': asset,
-            'shown': (quote as Map)['fee'],
-          });
+          final done = await boardAll(run, asset: asset, held: held, min: min, stop: () => _asking > 0);
+          if (done == null) {
+            debugPrint('[leaves] board of ${asset.substring(0, 8)} left for the next pass: no fee leaves room for itself, or a person asked');
+            continue;
+          }
+          final amount = done.$1, fee = done.$2;
           boarded = true;
+          boardsMade++;
+          _boardSpent[asset] = (spent: amount + fee, below: held - amount - fee, at: DateTime.now());
           _boardRefused.remove(asset);
           autoBoardError = null;
           debugPrint('[leaves] boarded $amount of ${asset.substring(0, 8)} (fee $fee)');
@@ -431,6 +436,42 @@ class LeafService extends ChangeNotifier {
     }());
   }
 
+  String? _lastBoardWhy;
+
+  /// How many boards the wallet made by itself since the app started: a screen showing the
+  /// on-chain balance reads it again when this moves, so a coin a board spent is not counted on
+  /// the chain and in the leaves at once.
+  int boardsMade = 0;
+
+  final Map<String, ({BigInt spent, BigInt below, DateTime at})> _boardSpent = {};
+
+  @visibleForTesting
+  void debugBoarded(String asset, {required BigInt spent, required BigInt held}) =>
+      _boardSpent[asset] = (spent: spent, below: held - spent, at: DateTime.now());
+
+  /// [onchain] atoms of [asset] as the main wallet's chain reading shows them, less what a board
+  /// the wallet just made spent and that reading does not show spent yet (it sees a spend once
+  /// confirmed, a block later): the board's coins are counted as arriving in the leaves
+  /// meanwhile, never twice. Taken as seen once the reading drops to what the board left, or
+  /// after half an hour.
+  BigInt onchainLessBoards(String asset, BigInt onchain) {
+    final b = _boardSpent[asset];
+    if (b == null) return onchain;
+    if (onchain <= b.below || DateTime.now().difference(b.at) > const Duration(minutes: 30)) {
+      _boardSpent.remove(asset);
+      return onchain;
+    }
+    final v = onchain - b.spent;
+    return v > BigInt.zero ? v : BigInt.zero;
+  }
+
+  /// Logs why the automatic board did nothing, once per reason.
+  void _boardWhy(String? why) {
+    if (why == null || why == _lastBoardWhy) return;
+    _lastBoardWhy = why;
+    debugPrint('[leaves] auto board: $why');
+  }
+
   /// A trade found an asset held but not payable yet: board it once the person's action is
   /// [boardQuiet] behind, instead of at the next scheduled pass.
   void boardSoon() {
@@ -445,7 +486,9 @@ class LeafService extends ChangeNotifier {
   /// The operator's round interval in whole minutes (`info.fills.round_interval_seconds`),
   /// or null when it publishes none: how long a payment to an address takes.
   int? roundMinutes() {
-    final s = (info?['fills'] is Map) ? (info!['fills'] as Map)['round_interval_seconds'] : null;
+    final si = info?['server_info'];
+    final fills = si is Map && si['fills'] is Map ? si['fills'] as Map : (info?['fills'] is Map ? info!['fills'] as Map : null);
+    final s = fills?['round_interval_seconds'];
     return s is num && s > 0 ? (s / 60).ceil() : null;
   }
 
@@ -1201,13 +1244,50 @@ Map<String, BigInt> leafAtomsOf(Map? balance) {
 /// an asset with no smallest leaf published is left out (nothing of it boards now).
 Map<String, BigInt> minLeaves(Map? info) {
   final out = <String, BigInt>{};
-  final list = info?['assets'];
+  // The library's `info` carries the operator's own under `server_info`.
+  final si = info?['server_info'];
+  final list = si is Map && si['assets'] is List ? si['assets'] : info?['assets'];
   if (list is! List) return out;
   for (final a in list.whereType<Map>()) {
     final v = BigInt.tryParse('${a['min_leaf'] ?? ''}');
     if (a['asset'] is String && v != null) out[a['asset'] as String] = v;
   }
   return out;
+}
+
+/// Boards everything [held] of [asset] less the board's fee, paid in the asset itself, through
+/// the library's [run]: the fee of a board of [min] first, then a quote of [held] less that fee,
+/// asked again (at most [tries] times) until the fee it names leaves room for itself. The
+/// library prices a board's coins at a size before it knows the real one, so a quote of all but
+/// the real fee can be refused for want of a few atoms: the refusal doubles the room left. The
+/// board is signed only on the fee its own quote named (`shown`). Answers the amount boarded
+/// and its fee, or null when nothing was boarded ([stop] true: a person asked for something).
+/// The web wallet's `boardAll` (default-arca.js).
+Future<(BigInt, BigInt)?> boardAll(Future<dynamic> Function(String, [Map<String, dynamic>]) run,
+    {required String asset, required BigInt held, required BigInt min, bool Function()? stop, int tries = 3}) async {
+  var fee = boardFee(await run('board_quote', {'asset': asset, 'amount': min.toString(), 'fee_asset': asset}));
+  if (fee == null) return null;
+  for (var i = 0; i < tries; i++) {
+    final v = held - fee!;
+    if (v < min || v <= BigInt.zero) return null;
+    Object? q;
+    try {
+      q = await run('board_quote', {'asset': asset, 'amount': v.toString(), 'fee_asset': asset});
+    } on LeafRefusal catch (e) {
+      if (!e.message.contains('needs')) rethrow;
+      fee = fee * BigInt.two + BigInt.one;
+      continue;
+    }
+    final f = boardFee(q);
+    if (f == null) return null;
+    if (v + f <= held) {
+      if (stop != null && stop()) return null;
+      await run('board', {'asset': asset, 'amount': v.toString(), 'fee_asset': asset, 'shown': (q as Map)['fee']});
+      return (v, f);
+    }
+    fee = f;
+  }
+  return null;
 }
 
 /// A board quote's fee in atoms of the boarded asset (`{"fee": {"asset", "amount"}}`).

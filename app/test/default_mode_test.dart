@@ -41,6 +41,16 @@ void main() {
     });
     expect(m, {'a1': BigInt.from(1000000), 'a3': BigInt.from(12)});
     expect(minLeaves(null), isEmpty);
+    // The library's `info` (wallet.rs `info`): the operator's assets are under `server_info`.
+    final lib = minLeaves({
+      'operator': 'ab',
+      'server_info': {
+        'assets': [
+          {'asset': 'a1', 'min_leaf': '1000000'},
+        ]
+      }
+    });
+    expect(lib, {'a1': BigInt.from(1000000)});
   });
 
   test('boardFee reads a board quote', () {

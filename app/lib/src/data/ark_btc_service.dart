@@ -43,6 +43,9 @@ class ArkBtcService extends ChangeNotifier {
 
   bool open = false;
   bool _opening = false;
+
+  /// How many boards the wallet made by itself since the app started (see LeafService.boardsMade).
+  int boardsMade = 0;
   bool _ticking = false;
   bool _boarding = false;
   Timer? _timer;
@@ -211,6 +214,7 @@ class ArkBtcService extends ChangeNotifier {
       if (done['broadcast_error'] != null) debugPrint('[ambra-ark] board broadcast: ${done['broadcast_error']}');
       boardError = null;
       debugPrint('[ambra-ark] boarded $amount sat: ${tx.txid}');
+      boardsMade++;
       // A sync first, so the figure counts the board at once; and the address read again, so
       // the coin the board spent is not counted on the chain as well meanwhile.
       await ark.arkSync();
