@@ -98,6 +98,9 @@ class UserWords {
   // Held, and shown in the balance, but not where a trade can pay it from yet (just arrived, or
   // still being moved in by the wallet): never "you have none".
   static String notReady(String pay) => 'Your $pay is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.';
+  // Kept by the wallet's plan to refresh it while the wallet is closed, which only a round can end:
+  // the wallet gives it up in its next round for a coin it can trade.
+  static String freeing(String pay) => 'Your $pay is being made ready to trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.';
   static const pricing = 'Finding the best price…';
   static const priceMoved = 'The price moved. Here is the new one.';
   static const sent = 'Sent';
@@ -137,6 +140,7 @@ class UserWords {
     tooSmall,
     noFunds('XT'),
     notReady('XT'),
+    freeing('XT'),
     pricing,
     priceMoved,
     sent,
@@ -211,11 +215,21 @@ List<String> pickerOrder(Iterable<String> assets, BigInt Function(String) held, 
 
 /// What the library can pay now, per asset: live coins, less the coin of every open
 /// offline-refresh plan.
-Map<String, BigInt> spendableFrom(List coins, Map? plans) {
+/// The coins open offline-refresh plans keep: each plan's coin and the leaf its last step made.
+Set<String> plannedLeaves(Map? plans) {
   final planned = <String>{};
   for (final p in ((plans ?? const {})['plans'] as List?) ?? const []) {
-    if (p is Map && !RegExp(r'^(done|cancelled|stopped|finished)$').hasMatch('${p['state'] ?? ''}')) planned.add('${p['coin']}');
+    if (p is! Map || RegExp(r'^(done|cancelled|stopped|finished)$').hasMatch('${p['state'] ?? ''}')) continue;
+    planned.add('${p['coin']}');
+    for (final st in (p['steps'] as List?) ?? const []) {
+      if (st is Map && st['leaf_id'] != null) planned.add('${st['leaf_id']}');
+    }
   }
+  return planned;
+}
+
+Map<String, BigInt> spendableFrom(List coins, Map? plans) {
+  final planned = plannedLeaves(plans);
   final out = <String, BigInt>{};
   for (final c in coins) {
     if (c is! Map || c['state'] != 'live' || planned.contains('${c['leaf_id']}')) continue;
@@ -463,7 +477,7 @@ class QuoteResult {
   QuoteResult.no(this.why) : ticket = null, choice = null;
   final Ticket? ticket;
   final Candidate? choice;
-  final String? why; // not-listed | not-offered | no-funds | not-ready | too-small
+  final String? why; // not-listed | not-offered | no-funds | not-ready | freeing | too-small
   bool get ok => ticket != null;
 }
 
@@ -500,6 +514,7 @@ class UserTradeDeps {
     this.btcOf,
     this.held,
     this.prepare,
+    this.release,
     int Function()? now,
     void Function(String)? log,
     Future<void> Function(int ms)? sleep,
@@ -530,6 +545,11 @@ class UserTradeDeps {
   /// mode boards on-chain coins). Both optional.
   final Future<BigInt> Function(String asset)? held;
   final void Function(String asset)? prepare;
+
+  /// Asks the wallet to free [leaves], live coins of [asset] an open offline-refresh plan keeps, in
+  /// its next round (`plan_release`), as a payment from them is. Optional: with it, a pay asset held
+  /// only in such coins is 'freeing'.
+  final void Function(String asset, List<String> leaves)? release;
   final Future<String?> Function() read;
   final Future<void> Function(String value) write;
   final int Function() now;
@@ -1016,6 +1036,24 @@ class UserTradeEngine {
         } catch (_) {}
       }
       if (held > BigInt.zero) {
+        // Live coins an open offline-refresh plan keeps: the library pays them only in a round, so
+        // the wallet gives them up in its next one for coins a trade can pay from.
+        if (pay != kUserBtc && d.release != null) {
+          try {
+            final coins = (await _run('coins')) as List? ?? const [];
+            final planned = plannedLeaves((await _run('plans')) as Map?);
+            final kept = [
+              for (final c in coins)
+                if (c is Map && c['asset'] == pay && c['state'] == 'live' && planned.contains('${c['leaf_id']}')) '${c['leaf_id']}',
+            ];
+            if (kept.isNotEmpty) {
+              d.release!(pay, kept);
+              return QuoteResult.no('freeing');
+            }
+          } catch (e) {
+            d.log('[user trade] release: $e');
+          }
+        }
         try {
           d.prepare?.call(pay);
         } catch (_) {}

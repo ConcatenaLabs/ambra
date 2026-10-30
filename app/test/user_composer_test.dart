@@ -75,6 +75,9 @@ void main() {
     expect(find.byKey(ValueKey('ucPay-$x')), findsOneWidget);
     expect(find.byKey(ValueKey('ucGet-$y')), findsOneWidget);
     expect(find.text('balance 300 XT'), findsOneWidget);
+    // Each chooser reads as the asset it names, and the amount fields stay their own.
+    expect(find.bySemanticsLabel('You pay: XT'), findsOneWidget);
+    expect(find.bySemanticsLabel('You receive: YT'), findsOneWidget);
     // The market: the pair, the recent trade.
     expect(find.text('XT / YT'), findsOneWidget);
     expect(find.text('Recent trades'), findsOneWidget);
