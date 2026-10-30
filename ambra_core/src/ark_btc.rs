@@ -144,15 +144,29 @@ pub fn balance() -> Result<Value, Value> {
 }
 
 /// One pass of what the wallet does by itself: the server's news (payments
-/// received, boards confirmed, rounds), every pending Lightning receive driven
-/// on, and the maintenance that refreshes coins close to their expiry.
+/// received, boards confirmed, rounds, coins the server renewed while the app
+/// was closed), every pending Lightning receive driven on, the renewal of each
+/// coin scheduled with the server, and the maintenance that refreshes coins
+/// close to their expiry.
+///
+/// The scheduled renewal ([`bark::Wallet::schedule_refreshes`]) is what keeps
+/// the BTC of a phone left closed: the server runs it by itself shortly before
+/// the coin's expiry, and the next pass takes the new coin in. The maintenance
+/// leaves a coin with a renewal scheduled to the server.
 pub fn sync() -> Result<Value, Value> {
     let w = wallet()?;
     runtime().block_on(async {
         w.sync().await;
         let claimed = w.try_claim_all_lightning_receives(false).await.map(|v| v.len()).unwrap_or(0);
+        let scheduled = match w.schedule_refreshes().await {
+            Ok(s) => s.iter().map(|r| r.vtxos.len()).sum::<usize>(),
+            Err(e) => {
+                log::warn!("scheduling renewals: {:#}", e);
+                0
+            }
+        };
         let maintained = w.maintenance().await.map(|_| true).unwrap_or(false);
-        Ok(json!({"lightning_receives": claimed, "maintained": maintained}))
+        Ok(json!({"lightning_receives": claimed, "renewals_scheduled": scheduled, "maintained": maintained}))
     })
 }
 

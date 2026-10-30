@@ -308,6 +308,11 @@ module that implements it.
     recovers from the server's recovery mailbox when it creates its store, and on every
     open and every five minutes after the wallet catches up (`catch_up_from_server`) with
     what the phrase's other wallets boarded, received or spent since.
+  - Each pass of the wallet's sync schedules with the ark's server, for every coin
+    that has none, a renewal the server runs by itself shortly before the coin's expiry
+    (`schedule_refreshes`), so a phone left closed keeps its BTC renewed on time; the
+    renewed coin is taken in at the next open, and the maintenance that renews coins
+    near their expiry leaves a coin with a renewal scheduled to the server.
   - BTC's one figure counts the ark; what is on its way in shows as "<amount> BTC
     arriving". Developer mode opens the ark wallet too and counts it (its split reads
     "… on the Bitcoin ark"), but moves nothing into it or out of it by itself.
