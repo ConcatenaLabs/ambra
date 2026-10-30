@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -7,14 +8,17 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../rust/api.dart' as core;
 import '../data/config.dart';
+import '../data/dev_mode.dart';
 import '../data/format.dart';
 import '../data/price_service.dart';
+import '../data/user_trade.dart';
 import '../data/wallet_cache.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
 import 'rescue_screen.dart';
 import 'sign_screen.dart';
+import 'user_composer.dart' show appTradeEngine;
 
 class HistoryTab extends StatefulWidget {
   const HistoryTab({super.key, this.isActive = false});
@@ -28,6 +32,9 @@ class _HistoryTabState extends State<HistoryTab> {
   String? _error;
   List<OampTransfer> _oamp = const []; // locally-tracked restricted transfers
   List<Map<String, dynamic>> _ln = const []; // Lightning history (written by the LN cards)
+  List<Map<String, dynamic>> _trades = const []; // the Swap tab's trades, one row each
+  StreamSubscription<void>? _tradesChanged;
+  String? _tradesTag;
 
   @override
   void initState() {
@@ -35,6 +42,27 @@ class _HistoryTabState extends State<HistoryTab> {
     _loadCached(); // show last-known history at once, refresh below
     _load(); // eager: load at launch (also reloads on activation)
     _loadSidecars(); // restricted-transfer tracker + Lightning history
+    _loadTrades();
+  }
+
+  @override
+  void dispose() {
+    _tradesChanged?.cancel();
+    super.dispose();
+  }
+
+  /// The trades of the Swap tab's composer (default mode's and a connected site's), read from its
+  /// engine and again whenever one changes: each is one row here, however many legs it has.
+  Future<void> _loadTrades() async {
+    final tag = DevMode.instance.tag ?? 'default';
+    final engine = appTradeEngine(walletTag: tag);
+    if (_tradesTag != tag) {
+      _tradesChanged?.cancel();
+      _tradesTag = tag;
+      _tradesChanged = engine.changes.listen((_) => _loadTrades());
+    }
+    final r = await engine.records();
+    if (mounted) setState(() => _trades = tradeHistoryRows(r));
   }
 
   Future<void> _loadCached() async {
@@ -116,6 +144,7 @@ class _HistoryTabState extends State<HistoryTab> {
     if (widget.isActive && !oldWidget.isActive) {
       _load();
       _loadSidecars();
+      _loadTrades();
     }
   }
 
@@ -148,6 +177,7 @@ class _HistoryTabState extends State<HistoryTab> {
     return RefreshIndicator(
       onRefresh: () async {
         await _load();
+        await _loadTrades();
         await _refreshOamp();
         final ln = await WalletCache.loadLnHistory();
         if (mounted) setState(() => _ln = ln);
@@ -157,6 +187,14 @@ class _HistoryTabState extends State<HistoryTab> {
       child: ListView(padding: const EdgeInsets.fromLTRB(20, 20, 20, 24), children: [
         const Text('History', style: AmbraText.h1),
         const SizedBox(height: 16),
+        if (_trades.isNotEmpty) ...[
+          AmbraCard(
+            key: const ValueKey('historyTrades'),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Column(children: [for (final r in _trades) _TradeRow(rec: r)]),
+          ),
+          const SizedBox(height: 16),
+        ],
         if (_error != null)
           AmbraCard(child: Text(_error!, style: const TextStyle(color: AmbraColors.red)))
         else if (txs == null)
@@ -170,7 +208,8 @@ class _HistoryTabState extends State<HistoryTab> {
           ),
         if (_ln.isNotEmpty) ...[
           const SizedBox(height: 22),
-          const SectionLabel('Lightning'),
+          // Default mode names no way a payment travelled.
+          SectionLabel(DevMode.instance.on ? 'Lightning' : 'Payments'),
           const SizedBox(height: 8),
           _LnHistoryCard(entries: _ln),
         ],
@@ -299,7 +338,7 @@ class _LnRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final kind = '${entry['kind'] ?? 'payment'}'.toLowerCase();
     final incoming = kind == 'receive' || kind == 'received' || kind == 'invoice' || kind == 'settle';
-    final badge = incoming ? 'LN IN' : 'LN OUT';
+    final badge = DevMode.instance.on ? (incoming ? 'LN IN' : 'LN OUT') : (incoming ? 'IN' : 'OUT');
     final color = incoming ? AmbraColors.green : AmbraColors.amber2;
     final bg = incoming ? const Color(0xFF10241A) : const Color(0xFF241C0A);
 
@@ -316,7 +355,7 @@ class _LnRow extends StatelessWidget {
 
     final desc = entry['description'] is String && (entry['description'] as String).isNotEmpty
         ? entry['description'] as String
-        : (incoming ? 'Lightning invoice' : 'Lightning payment');
+        : (DevMode.instance.on ? (incoming ? 'Lightning invoice' : 'Lightning payment') : (incoming ? 'Received' : 'Sent'));
     final t = entry['time'] is num ? (entry['time'] as num).toInt() : 0;
     String sub = desc;
     if (t > 0) {
@@ -332,7 +371,7 @@ class _LnRow extends StatelessWidget {
         const SizedBox(width: 12),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(incoming ? 'Received over Lightning' : 'Lightning payment',
+            Text(DevMode.instance.on ? (incoming ? 'Received over Lightning' : 'Lightning payment') : (incoming ? 'Received' : 'Sent'),
                 style: const TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w600, fontSize: 14)),
             const SizedBox(height: 3),
             Text(sub, style: AmbraText.sub, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -341,6 +380,88 @@ class _LnRow extends StatelessWidget {
         if (amount.isNotEmpty) ...[
           const SizedBox(width: 10),
           Text(amount, style: AmbraText.mono.copyWith(color: color, fontWeight: FontWeight.w700, fontSize: 14)),
+        ],
+      ]),
+    );
+  }
+}
+
+/// The Swap tab's trades as History lists them, newest first: every trade that was made (one
+/// whose step did not answer while it is looked for), not one still being confirmed.
+List<Map<String, dynamic>> tradeHistoryRows(List<Map<String, dynamic>> records) {
+  int at(Map r) => ((r['sentAt'] ?? r['at']) as num?)?.toInt() ?? 0;
+  final rows = [
+    for (final r in records)
+      if (r['ticket'] is Map && (r['state'] != 'confirming' || r['uncertain'] == true) && r['state'] != 'failed') r,
+  ]..sort((a, b) => at(b).compareTo(at(a)));
+  return rows;
+}
+
+/// One trade's row (docs/DEFAULT_MODE.md "History"): "Swapped `pay` for `get`", then the time and,
+/// while it is not settled, its status; on the right "-`pay`" and "+`get`", and the fee when there
+/// was one. A trade returned moved nothing: no amounts, its status says so.
+class TradeHistoryLine {
+  TradeHistoryLine(Map rec, {required String Function(String asset, BigInt atoms) fmt, int? nowMs}) {
+    final t = rec['ticket'] as Map;
+    final pay = '${t['payAsset']}', get = '${t['receiveAsset']}';
+    final inA = BigInt.tryParse('${t['amountIn']}') ?? BigInt.zero, outA = BigInt.tryParse('${t['amountOut']}') ?? BigInt.zero;
+    title = 'Swapped ${fmt(pay, inA)} for ${fmt(get, outA)}';
+    final st = rec['state'];
+    returned = st == 'returned';
+    status = st == 'settled' ? null : (tradeStateWord(rec, nowMs ?? DateTime.now().millisecondsSinceEpoch) ?? UserWords.returned);
+    if (returned && ((rec['feesPaid'] as List?) ?? const []).isNotEmpty) {
+      status = UserWords.returnedFees([for (final f in rec['feesPaid'] as List) fmt('${(f as Map)['asset']}', BigInt.parse('${f['atoms']}'))].join(' and '));
+    }
+    minus = returned ? null : '-${fmt(pay, inA)}';
+    plus = returned ? null : '+${fmt(get, outA)}';
+    final fees = <String, BigInt>{};
+    for (final f in (t['fees'] as List?) ?? const []) {
+      final a = BigInt.tryParse('${(f as Map)['atoms']}') ?? BigInt.zero;
+      if (a > BigInt.zero) fees['${f['asset']}'] = (fees['${f['asset']}'] ?? BigInt.zero) + a;
+    }
+    fee = returned || fees.isEmpty ? null : 'fee ${[for (final e in fees.entries) fmt(e.key, e.value)].join(' + ')}';
+    final ms = ((rec['sentAt'] ?? rec['at']) as num?)?.toInt() ?? 0;
+    final w = DateTime.fromMillisecondsSinceEpoch(ms).toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    time = ms > 0 ? '${w.year}-${two(w.month)}-${two(w.day)} ${two(w.hour)}:${two(w.minute)}' : '';
+  }
+  late final String title, time;
+  late final String? status, minus, plus, fee;
+  late final bool returned;
+}
+
+String _tradeAmt(String asset, BigInt atoms) => asset == kUserBtc
+    ? '${formatAtoms('$atoms', 8)} BTC'
+    : '${formatAtoms('$atoms', SeqAssets.labelFor(asset).precision)} ${SeqAssets.labelFor(asset).ticker}';
+
+class _TradeRow extends StatelessWidget {
+  const _TradeRow({required this.rec});
+  final Map<String, dynamic> rec;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = TradeHistoryLine(rec, fmt: _tradeAmt);
+    final small = [if (l.time.isNotEmpty) l.time, ?l.status].join(' · ');
+    return Padding(
+      key: ValueKey('historyTrade-${rec['id']}'),
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const _Badge(text: 'SWAP', fg: AmbraColors.blue, bg: Color(0xFF0D1F2A)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(l.title, style: const TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w600, fontSize: 14)),
+            const SizedBox(height: 3),
+            Text(small, style: AmbraText.sub),
+          ]),
+        ),
+        if (l.minus != null) ...[
+          const SizedBox(width: 10),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(l.minus!, style: AmbraText.mono.copyWith(color: AmbraColors.amber2, fontSize: 13)),
+            Text(l.plus!, style: AmbraText.mono.copyWith(color: AmbraColors.green, fontSize: 13)),
+            if (l.fee != null) Text(l.fee!, style: AmbraText.sub.copyWith(fontSize: 11)),
+          ]),
         ],
       ]),
     );
