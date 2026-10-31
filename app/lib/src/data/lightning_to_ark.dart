@@ -126,7 +126,10 @@ class LightningToArk extends ChangeNotifier {
   Future<void> tickAssets() async {
     final leaves = LeafService.instance;
     final ln = LightningService.instance;
-    if (_assetsRunning || DevMode.instance.on || !leaves.open || !ln.configured || leaves.personBusy) return;
+    if (_assetsRunning || DevMode.instance.on) return;
+    if (!leaves.open || !ln.configured || leaves.personBusy) {
+      return _why(!leaves.open ? 'the leaf wallet is not open' : (!ln.configured ? 'no Lightning here' : 'a person asked for something'));
+    }
     _assetsRunning = true;
     try {
       final receives = await _receives(leaves);
@@ -135,7 +138,7 @@ class LightningToArk extends ChangeNotifier {
       if (last != null && DateTime.now().difference(last) < const Duration(minutes: 2)) return;
       _lastAssetTry = DateTime.now();
       final legs = lightningLegs(leaves.info);
-      if (legs.isEmpty) return;
+      if (legs.isEmpty) return _why('the operator receives no asset over Lightning');
       final m = await WalletRepository.instance.readMnemonic();
       if (m == null) return;
       final nodes = [for (final a in legs) lnkeys.ownNodeKeyForAsset(m, a)];
@@ -145,13 +148,25 @@ class LightningToArk extends ChangeNotifier {
       final channels = ((st.raw['channels'] as List?) ?? const []).whereType<Map>().where(channelLockedIn).toList();
       for (final asset in legs) {
         if (leaves.personBusy) break;
-        if (receivesUnderWay(receives, asset, DateTime.now(), givenUp: givenUp)) continue;
+        final a8 = asset.substring(0, 8);
+        if (receivesUnderWay(receives, asset, DateTime.now(), givenUp: givenUp)) {
+          _why('$a8: a move is under way');
+          continue;
+        }
         final refused = _assetRefused[asset];
-        if (refused != null && DateTime.now().difference(refused) < retry) continue;
+        if (refused != null && DateTime.now().difference(refused) < retry) {
+          _why('$a8: refused at $refused, tried again later');
+          continue;
+        }
         final spendable = legLiquidity(channels, RailTarget.asset(hex: asset)).spendable;
+        if (spendable <= BigInt.zero) continue;
         final min = minLeaves(leaves.info)[asset];
-        final amount = withinAllowance(amountToMove(spendable, min: min), await LnPaymentLimit.instance.allowanceAtoms(asset), min: min);
-        if (amount == null) continue;
+        final allowance = await LnPaymentLimit.instance.allowanceAtoms(asset);
+        final amount = withinAllowance(amountToMove(spendable, min: min), allowance, min: min);
+        if (amount == null) {
+          _why('$a8: $spendable in the channel, too little to move (smallest leaf $min, the day\'s limit $allowance)');
+          continue;
+        }
         try {
           await _moveAsset(leaves, ln, asset, amount, spendable);
         } catch (e) {
@@ -165,6 +180,13 @@ class LightningToArk extends ChangeNotifier {
     } finally {
       _assetsRunning = false;
     }
+  }
+
+  final Set<String> _said = {};
+
+  /// Logs why the asset channels' move did nothing, once per reason.
+  void _why(String why) {
+    if (_said.add(why)) debugPrint('[ambra-ln-ark] assets: $why');
   }
 
   Future<void> _moveAsset(LeafService leaves, LightningService ln, String asset, BigInt amount, BigInt spendable) async {
