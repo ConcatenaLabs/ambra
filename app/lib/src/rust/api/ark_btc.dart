@@ -109,3 +109,7 @@ Future<String> arkReceiveStatus({required String hash, required bool claim}) =>
 /// phrase did (coins they boarded, received or spent): `{recovered,
 /// recovered_sat, spent_elsewhere, failed, complete}`.
 Future<String> arkCatchUp() => RustLib.instance.api.crateApiArkBtcArkCatchUp();
+
+/// The wallet's movements, newest first, at most `limit`: what History lists of the ark.
+Future<String> arkHistory({required int limit}) =>
+    RustLib.instance.api.crateApiArkBtcArkHistory(limit: limit);

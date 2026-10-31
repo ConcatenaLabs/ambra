@@ -152,11 +152,14 @@ class WalletCache {
   /// `atoms`, `precision`, `time`, and `rail` ('btc' on the Bitcoin chain, 'ark', 'tree',
   /// 'address' (from the instant part out to an address), 'lightning'). One with `pending`
   /// true shows as pending until [settlePayment] clears it; `txid` and `chain` ('btc' or
-  /// 'seq') let History look that up. An entry with a txid already recorded is not added again.
+  /// 'seq') let History look that up. An entry with a txid, or a `key`, already recorded is not
+  /// added again.
   static Future<void> addPayment(Map<String, dynamic> entry) async {
     final list = List<Map<String, dynamic>>.from(await loadLnHistory());
     final txid = entry['txid'];
     if (txid != null && list.any((e) => e['txid'] == txid)) return;
+    final key = entry['key'];
+    if (key != null && list.any((e) => e['key'] == key)) return;
     list.add({'time': DateTime.now().millisecondsSinceEpoch, ...entry});
     await saveLnHistory(list);
   }
@@ -168,6 +171,21 @@ class WalletCache {
     for (final e in list) {
       if (e['txid'] == txid && e['pending'] == true) {
         e['pending'] = false;
+        changed = true;
+      }
+    }
+    if (changed) await saveLnHistory(list);
+  }
+
+  /// Settles the payment of [hash] (a Lightning payment its payee held): done when [paid],
+  /// else marked come back (`returned`), so History says it was not paid.
+  static Future<void> settleHeld(String hash, {required bool paid}) async {
+    final list = List<Map<String, dynamic>>.from(await loadLnHistory());
+    var changed = false;
+    for (final e in list) {
+      if (e['hash'] == hash && e['pending'] == true) {
+        e['pending'] = false;
+        if (!paid) e['returned'] = true;
         changed = true;
       }
     }

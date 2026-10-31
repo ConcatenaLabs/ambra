@@ -95,7 +95,8 @@ class _SendTabState extends State<SendTab> {
 
   /// A payment that just left, in History at once ([WalletCache.addPayment]): pending while
   /// it waits for a block ([txid] given), done otherwise.
-  Future<void> _logSent(String ticker, BigInt atoms, int precision, String rail, {String? txid, String? chain}) async {
+  /// A payment its payee holds ([hash] given) is pending until it is taken or comes back.
+  Future<void> _logSent(String ticker, BigInt atoms, int precision, String rail, {String? txid, String? chain, String? hash}) async {
     try {
       await WalletCache.addPayment({
         'kind': 'payment',
@@ -103,9 +104,10 @@ class _SendTabState extends State<SendTab> {
         'atoms': atoms.toString(),
         'precision': precision,
         'rail': rail,
-        'pending': txid != null,
+        'pending': txid != null || hash != null,
         'txid': ?txid,
         'chain': ?chain,
+        'hash': ?hash,
       });
     } catch (_) {/* history tracking is best-effort */}
   }
@@ -676,15 +678,21 @@ class _SendTabState extends State<SendTab> {
     if (ok != true || !mounted) return true;
     setState(() => _sendingInTree = true);
     final started = DateTime.now();
+    final messenger = ScaffoldMessenger.of(context);
     try {
-      await ark.send(dest, kind == 'lightning' ? null : sats);
+      final r = await ark.send(dest, kind == 'lightning' ? null : sats);
       final secs = DateTime.now().difference(started).inMilliseconds / 1000;
-      unawaited(_logSent('BTC', sats, 8, kind == 'onchain' ? 'address' : (kind == 'lightning' ? 'lightning' : 'ark')));
+      // An invoice whose payee holds the payment is not paid until they take it: "On its way"
+      // until then, followed to its end even after this screen is left.
+      final held = kind == 'lightning' && r['state'] != 'complete' && r['payment_hash'] is String ? '${r['payment_hash']}' : null;
+      unawaited(_logSent('BTC', sats, 8, kind == 'onchain' ? 'address' : (kind == 'lightning' ? 'lightning' : 'ark'), hash: held));
+      if (held != null) unawaited(_followHeld(messenger, held, amountStr, started));
       if (!mounted) return true;
       _addr.clear();
       _amount.clear();
-      ScaffoldMessenger.of(context).showSnackBar(
-          ambraSnack(fast ? DefaultWords.sent(amountStr, 'BTC', secs) : DefaultWords.btcSentAfterBlock(amountStr)));
+      messenger.showSnackBar(ambraSnack(held != null
+          ? DefaultWords.payWaiting
+          : (fast ? DefaultWords.sent(amountStr, 'BTC', secs) : DefaultWords.btcSentAfterBlock(amountStr))));
     } catch (e) {
       debugPrint('ark send refused: $e');
       if (mounted) setState(() => _sendingInTree = false);
@@ -697,6 +705,18 @@ class _SendTabState extends State<SendTab> {
     }
     _load();
     return true;
+  }
+
+  /// A payment out of the ark its payee holds, followed until they take it ("Sent …") or it
+  /// comes back ("Not paid …", the BTC in the balance again); History follows it too.
+  Future<void> _followHeld(ScaffoldMessengerState messenger, String hash, String amountStr, DateTime started) async {
+    final out = await ArkBtcService.instance.payOutcome(hash);
+    debugPrint('[ambra-ark] held payment $hash: $out');
+    if (out == 'pending') return;
+    await WalletCache.settleHeld(hash, paid: out == 'complete');
+    final secs = DateTime.now().difference(started).inMilliseconds / 1000;
+    messenger.showSnackBar(ambraSnack(out == 'complete' ? DefaultWords.sent(amountStr, 'BTC', secs) : DefaultWords.payCameBack));
+    if (mounted) _load();
   }
 
   /// A payment to a receive code ([LeafService.paysInTree]): off the chain, from this

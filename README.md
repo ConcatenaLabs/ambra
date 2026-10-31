@@ -297,6 +297,23 @@ module that implements it.
     main wallet by a gap past the last key with any history. A trade whose asset is held
     but not payable yet says "Your <ticker> is not ready to trade yet. It will be in a few
     minutes; nothing has moved." and asks for that board at once.
+  - An asset held in the wallet's own Lightning channel (a wallet made before its assets
+    lived with the operator) moves into the tree by itself (`tickAssets`,
+    `app/lib/src/data/lightning_to_ark.dart`): the leaf wallet asks to receive it over
+    Lightning (`lightning_receive`: an invoice of the operator's node in that asset, under a
+    hash whose preimage only the wallet holds), and the channel pays it, all it can spend
+    less the route's fee, when that reaches the operator's smallest leaf. The operator holds
+    the payment until the wallet's leaf is in the asset's next round; the leaf wallet's sync
+    then claims the leaf with the preimage, which settles the payment. One move per asset
+    at a time, never while something a person asked for runs, and a refused one waits
+    fifteen minutes. Until the leaf is the wallet's the amount stays in the figure, and
+    Balance says "Moving <amount> <TICKER> so it can be sent in seconds." under it; a payment
+    that fails comes back to the channel. An asset the operator serves without a Lightning
+    node stays in its channel, spendable as before. A supervised asset (one held only as a
+    landing leaf) is never in a channel, so it has nothing to move.
+  - History in user mode lists no board: moving the wallet's own coins into the tree is not
+    a payment. The wallet keeps each board's transaction as it boards, and reads the ones it
+    made before from the operator (`boards`).
 - **User mode keeps BTC on the Bitcoin ark** (`app/lib/src/data/ark_btc_service.dart`,
   `ambra_core/src/ark_btc.rs`): Second's Bark client, from arca's `arca-wallet` crate,
   opened from the same recovery phrase against the ark server the default node serves
@@ -313,13 +330,22 @@ module that implements it.
     ark) moves in by itself too (`app/lib/src/data/lightning_to_ark.dart`): the channel pays
     an invoice of the wallet's own ark for all it can spend less the route's fee, from
     5,000 sat, at most every fifteen minutes and never while something a person asked for
-    runs. Until it is paid the BTC stays spendable in the channel; meanwhile Balance says
+    runs. The payment leaves the wallet's own hosted node over whatever channel it has,
+    to the ark server's Lightning node. Until it is paid the BTC stays spendable in the channel; meanwhile Balance says
     "Moving <amount> BTC so it can be sent in seconds." under BTC's figure.
   - Send pays out of the ark, chosen without asking: an ark address in seconds, a BTC
     invoice (`lntb…`) over Lightning, a Bitcoin address on the chain after a Bitcoin
     block. An address the ark cannot cover, or one it refuses, is paid as before. A code
     or an invoice beyond what the ark holds reads "You can send up to <amount> BTC this way
-    now."
+    now." An invoice is paid only once its payee takes the payment: while the payee holds it
+    (a hold invoice), Send says "On its way: waiting for the other side to accept it." and
+    History shows it "On its way"; then "Sent <amount> BTC (<seconds> s)." when it is taken,
+    or "Not paid: the payment came back, and the BTC is in your balance again." when it
+    fails back, and History marks it "Not paid".
+  - BTC another wallet pays into the ark (to its address, or an invoice of the receive
+    code) is listed in History as received, read from the ark's own record of its
+    movements (`ark_history`); the wallet's own moves into the ark (a board, its channel's
+    BTC, a trade's leg) are not.
   - The same phrase on another device, or restored here, holds the same ark BTC: Bark
     recovers from the server's recovery mailbox when it creates its store, and on every
     open and every five minutes after the wallet catches up (`catch_up_from_server`) with

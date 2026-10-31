@@ -213,6 +213,7 @@ class _BalanceTabState extends State<BalanceTab> {
     PriceService.instance.addListener(_onPrice);
     DevMode.instance.addListener(_onPrice);
     LeafService.instance.addListener(_onPrice);
+    LightningToArk.instance.addListener(_onPrice);
     ArkBtcService.instance.addListener(_onPrice);
     StakeHoldings.instance.addListener(_onPrice);
     // Asset labels can arrive after first paint (network registry); rebuild so
@@ -260,6 +261,7 @@ class _BalanceTabState extends State<BalanceTab> {
     PriceService.instance.removeListener(_onPrice);
     DevMode.instance.removeListener(_onPrice);
     LeafService.instance.removeListener(_onPrice);
+    LightningToArk.instance.removeListener(_onPrice);
     ArkBtcService.instance.removeListener(_onPrice);
     StakeHoldings.instance.removeListener(_onPrice);
     RegistryService.instance.removeListener(_onPrice);
@@ -381,7 +383,10 @@ class _BalanceTabState extends State<BalanceTab> {
         b.assetId: LeafService.instance.onchainLessBoards(b.assetId, BigInt.tryParse(b.atoms) ?? BigInt.zero)
     };
     final chans = _lnChannels.cast<Map>();
-    BigInt lnOf(String id) => legLiquidity(chans, RailTarget.asset(hex: id, ticker: SeqAssets.labelFor(id).ticker)).balance;
+    // What is on its way from a channel to the tree stays in the figure until its leaf counts.
+    final moving = dev ? const <String, BigInt>{} : LightningToArk.instance.movingAssets;
+    BigInt lnOf(String id) =>
+        legLiquidity(chans, RailTarget.asset(hex: id, ticker: SeqAssets.labelFor(id).ticker)).balance + (moving[id] ?? BigInt.zero);
     final stakedAtoms = StakeHoldings.instance.stakedAtoms;
     final staked = {if (stakedAtoms > BigInt.zero) SeqAssets.policy: stakedAtoms};
     final lnAssets = <String>{
@@ -393,7 +398,7 @@ class _BalanceTabState extends State<BalanceTab> {
         : assetFigures(
             onchain: onchainOf,
             leaves: leafAtoms,
-            lightning: {for (final id in {...onchainOf.keys, ...leafAtoms.keys, ...arriving.keys, ...lnAssets}) id: lnOf(id)},
+            lightning: {for (final id in {...onchainOf.keys, ...leafAtoms.keys, ...arriving.keys, ...lnAssets, ...moving.keys}) id: lnOf(id)},
             staked: staked,
           );
     final figureOf = {for (final f in figures ?? const <AssetFigure>[]) f.id: f};
@@ -406,7 +411,8 @@ class _BalanceTabState extends State<BalanceTab> {
         ? _openamp.toList()
         : [
             ...balances.where((b) =>
-                (BigInt.tryParse(b.atoms) ?? BigInt.zero) > BigInt.zero || (!dev && arriving.containsKey(b.assetId))),
+                (BigInt.tryParse(b.atoms) ?? BigInt.zero) > BigInt.zero ||
+                (!dev && (arriving.containsKey(b.assetId) || moving.containsKey(b.assetId)))),
             ..._openamp,
           ];
     // Bitcoin is first-class: on-chain (the last-known balance if a fresh testnet4
@@ -507,6 +513,7 @@ class _BalanceTabState extends State<BalanceTab> {
                     frozen: LeafService.instance.joined ? LeafService.instance.frozenAtoms(h) : BigInt.zero,
                     arriving: arriving[h],
                     redoing: redoing[h],
+                    moving: moving[h],
                     channels: _lnChannels,
                     onChanged: _refresh,
                     onHide: () async {
@@ -542,6 +549,7 @@ class _AssetRow extends StatefulWidget {
       this.frozen,
       this.arriving,
       this.redoing,
+      this.moving,
       this.channels = const [],
       this.onChanged,
       this.onHide});
@@ -563,6 +571,9 @@ class _AssetRow extends StatefulWidget {
   /// User mode: of what is arriving, what a Bitcoin reorganisation took back out of the chain and
   /// is being redone: said apart, never as gone.
   final BigInt? redoing;
+
+  /// User mode: what of the asset is on its way from its channel to the tree.
+  final BigInt? moving;
   final List<Map<dynamic, dynamic>> channels;
   final VoidCallback? onChanged;
   // Per-asset Hide control (quiet trailing icon). null = no control — the BTC row
@@ -652,6 +663,15 @@ class _AssetRowState extends State<_AssetRow> {
             alignment: Alignment.centerLeft,
             child: Text(frozenSentence(formatAtoms(widget.frozen.toString(), label.precision), label.ticker),
                 key: Key('frozen-${label.ticker}'), style: const TextStyle(color: AmbraColors.amber2, fontSize: 12)),
+          ),
+        ),
+      if (!widget.dev && (widget.moving ?? BigInt.zero) > BigInt.zero)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(DefaultWords.moving(formatAtoms(widget.moving.toString(), label.precision), label.ticker),
+                key: Key('moving-${label.ticker}'), style: AmbraText.sub),
           ),
         ),
       if (!widget.dev && _arrivingOnly > BigInt.zero)
@@ -1681,9 +1701,17 @@ class _ReceiveTabState extends State<ReceiveTab> {
     BtcState.instance.addListener(_onUnified);
     LeafService.instance.addListener(_onLeaves);
     ArkBtcService.instance.addListener(_onLeaves);
+    // The mode decides what Receive shows (one code, or every rail): it follows a switch at once.
+    DevMode.instance.addListener(_onMode);
     _paidAt = LeafService.instance.arrivedCount;
     _load();
     unawaited(_restoreCode().whenComplete(_onLeaves));
+  }
+
+  void _onMode() {
+    if (!mounted) return;
+    setState(() {});
+    _load();
   }
 
   /// The code last drawn, shown at once, unless its receive request lapses within a day.
@@ -1864,6 +1892,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
     BtcState.instance.removeListener(_onUnified);
     LeafService.instance.removeListener(_onLeaves);
     ArkBtcService.instance.removeListener(_onLeaves);
+    DevMode.instance.removeListener(_onMode);
     _amountDebounce?.cancel();
     _btcAmount.dispose();
     super.dispose();

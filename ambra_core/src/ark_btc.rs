@@ -197,6 +197,16 @@ pub fn catch_up() -> Result<Value, Value> {
     }))
 }
 
+/// The wallet's movements (Bark's history: each with its `subsystem`, `status`,
+/// `effective_balance` in sats, `received_on`, `metadata` and `time`), newest
+/// first, at most `limit`.
+pub fn history(limit: usize) -> Result<Value, Value> {
+    let w = wallet()?;
+    let mut ms = runtime().block_on(w.history()).map_err(err)?;
+    ms.truncate(limit);
+    serde_json::to_value(&ms).map_err(|e| refusal(format!("the history: {}", e)))
+}
+
 /// A new ark address of the wallet's: what another wallet of the same ark pays
 /// in seconds.
 pub fn address() -> Result<Value, Value> {
@@ -224,7 +234,8 @@ pub fn kind_of(destination: &str) -> &'static str {
 /// Pays `sats` to `destination` out of the ark: an ark address in the ark
 /// (seconds), an invoice over Lightning (its own amount unless it names
 /// none), a Bitcoin address on the chain (after a Bitcoin block). The answer
-/// is `{"kind", "txid"?}`.
+/// is `{"kind", "txid"?}`; for an invoice, `{"kind", "payment_hash", "state",
+/// ...}` with the payment's state as [`pay`] gives it.
 pub fn send(destination: &str, sats_amount: Option<u64>) -> Result<Value, Value> {
     let w = wallet()?;
     let d = destination.trim();
@@ -237,9 +248,25 @@ pub fn send(destination: &str, sats_amount: Option<u64>) -> Result<Value, Value>
             Ok(json!({"kind": "ark"}))
         },
         "lightning" => {
+            // A payee that holds the payment (a hold invoice) has not been paid until it takes
+            // it, and may fail it back: the answer carries the payment's state, as [`pay`] gives
+            // it, and its hash, which [`pay_status`] follows to its end.
             let inv = bark::lightning_invoice::Bolt11Invoice::from_str(d).map_err(|e| refusal(format!("the invoice: {}", e)))?;
-            runtime().block_on(w.pay_lightning_invoice(inv, amount, true)).map_err(err)?;
-            Ok(json!({"kind": "lightning"}))
+            let hash = PaymentHash::from(&inv);
+            let st = runtime().block_on(async {
+                match w.pay_lightning_invoice(inv, amount, true).await {
+                    Ok(_) => Ok(send_state(w.lightning_send_state(hash).await.map_err(err)?)),
+                    Err(e) => match w.lightning_send_state(hash).await.map_err(err)? {
+                        LightningSendState::Unknown => Err(err(e)),
+                        st => Ok(send_state(st)),
+                    },
+                }
+            })?;
+            let mut v = json!({"kind": "lightning", "payment_hash": hash.to_string()});
+            if let (Some(o), Some(s)) = (v.as_object_mut(), st.as_object()) {
+                o.extend(s.clone());
+            }
+            Ok(v)
         },
         "onchain" => {
             let a = Address::from_str(d)

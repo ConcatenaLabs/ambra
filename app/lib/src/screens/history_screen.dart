@@ -7,10 +7,14 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../rust/api.dart' as core;
+import '../data/ark_btc_service.dart';
 import '../data/btc_state.dart';
+import '../data/default_words.dart';
 import '../data/config.dart';
 import '../data/dev_mode.dart';
 import '../data/format.dart';
+import '../data/leaf_service.dart';
+import '../data/lightning_to_ark.dart';
 import '../data/price_service.dart';
 import '../data/user_trade.dart';
 import '../data/wallet_cache.dart';
@@ -72,7 +76,8 @@ class _HistoryTabState extends State<HistoryTab> {
   }
 
   Future<void> _loadCached() async {
-    final txs = await WalletCache.loadTxs();
+    var txs = await WalletCache.loadTxs();
+    if (txs != null && !DevMode.instance.on) txs = withoutBoards(txs, LeafService.instance.boardTxids);
     if (txs != null && mounted && _txs == null) setState(() => _txs = txs);
   }
 
@@ -110,7 +115,25 @@ class _HistoryTabState extends State<HistoryTab> {
         }
       }
     } catch (_) {/* transient: what is on disk stays */}
+    // BTC another wallet paid into the ark (to its address, or an invoice of the receive code).
+    try {
+      final own = {
+        ...await LightningToArk.instance.ownInvoices(),
+        for (final t in await appTradeEngine(walletTag: DevMode.instance.tag ?? 'default').records())
+          if (t['hash'] is String) t['hash'] as String,
+      };
+      for (final e in arkReceipts(await ArkBtcService.instance.history(), own)) {
+        await WalletCache.addPayment(e);
+      }
+    } catch (_) {}
     for (final e in await WalletCache.loadLnHistory()) {
+      // A payment out of the ark its payee held: taken, or come back, since it left.
+      final hash = e['hash'];
+      if (e['pending'] == true && hash is String) {
+        final st = await ArkBtcService.instance.payState(hash);
+        if (st == 'complete' || st == 'came-back') await WalletCache.settleHeld(hash, paid: st == 'complete');
+        continue;
+      }
       final txid = e['txid'];
       if (e['pending'] != true || txid is! String) continue;
       try {
@@ -197,7 +220,13 @@ class _HistoryTabState extends State<HistoryTab> {
     try {
       final m = await WalletRepository.instance.readMnemonic();
       if (m == null) return;
-      final txs = await core.walletTransactions(mnemonic: m, esploraUrl: Backend.esplora);
+      var txs = await core.walletTransactions(mnemonic: m, esploraUrl: Backend.esplora);
+      // A board moves the wallet's own coins into the instant part: nothing left the wallet,
+      // so default mode lists no payment for it (developer mode keeps every transaction).
+      if (!DevMode.instance.on) {
+        final boards = await LeafService.instance.boardTransactions();
+        txs = withoutBoards(txs, boards);
+      }
       txs.sort((a, b) {
         if (a.height == null && b.height == null) return 0;
         if (a.height == null) return -1; // unconfirmed first
@@ -412,8 +441,12 @@ class _LnRow extends StatelessWidget {
       String two(int n) => n.toString().padLeft(2, '0');
       sub = '$desc · ${w.year}-${two(w.month)}-${two(w.day)} ${two(w.hour)}:${two(w.minute)}';
     }
-    if (pending) sub = '$sub · ${entry['chain'] == 'btc' ? 'Waiting for a Bitcoin block' : 'Pending'}';
-    final title = DevMode.instance.on
+    final returned = entry['returned'] == true;
+    if (pending) {
+      sub = '$sub · ${entry['chain'] == 'btc' ? 'Waiting for a Bitcoin block' : (entry['hash'] != null ? DefaultWords.onItsWay : 'Pending')}';
+    }
+    if (returned) sub = '$sub · ${DefaultWords.cameBack}';
+    final title = returned ? DefaultWords.notPaid : DevMode.instance.on
         ? (rail == 'lightning'
             ? (incoming ? 'Received over Lightning' : 'Lightning payment')
             : '${incoming ? 'Received' : 'Sent'} · ${const {'btc': 'Bitcoin chain', 'ark': 'Bitcoin ark', 'tree': 'in the tree', 'address': 'out to an address'}[rail] ?? rail}')
@@ -859,6 +892,40 @@ List<Map<String, dynamic>> incomingBtc(Object? txs, Set<String> mine) {
       'txid': '${t['txid']}',
       'pending': !confirmed,
       'time': at,
+    });
+  }
+  return out;
+}
+
+/// [txs] less the wallet's own boards ([boards]: their transaction ids).
+List<core.TxRow> withoutBoards(List<core.TxRow> txs, Set<String> boards) =>
+    boards.isEmpty ? txs : [for (final t in txs) if (!boards.contains(t.txid)) t];
+
+/// The ark's movements ([movements]: Bark's history) that are money received from another
+/// wallet, as History's payment rows: a payment to the ark's address, or an invoice of the ark
+/// paid, settled, and none of the wallet's own moves ([own]: invoices it paid from its own
+/// channel, hashes of its trades).
+List<Map<String, dynamic>> arkReceipts(List<Map> movements, Set<String> own) {
+  final out = <Map<String, dynamic>>[];
+  for (final m in movements) {
+    final sub = m['subsystem'];
+    final name = sub is Map ? sub['name'] : null;
+    if (name != 'bark.arkoor' && name != 'bark.lightning_receive') continue;
+    if ('${m['status']}'.toLowerCase() != 'successful') continue;
+    final sats = BigInt.tryParse('${m['effective_balance'] ?? ''}');
+    if (sats == null || sats <= BigInt.zero) continue;
+    final text = jsonEncode(m);
+    if (own.any((o) => o.isNotEmpty && text.contains(o))) continue;
+    final t = m['time'];
+    final at = t is Map ? DateTime.tryParse('${t['completed_at'] ?? t['created_at'] ?? ''}') : null;
+    out.add({
+      'kind': 'received',
+      'ticker': 'BTC',
+      'atoms': '$sats',
+      'precision': 8,
+      'rail': 'ark',
+      'key': 'ark:${m['id']}',
+      'time': ?at?.millisecondsSinceEpoch,
     });
   }
   return out;

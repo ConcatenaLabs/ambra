@@ -271,12 +271,50 @@ class ArkBtcService extends ChangeNotifier {
   /// What a destination is to the ark wallet: `ark`, `lightning`, `onchain` or `none`.
   String kindOf(String destination) => ark.arkKindOf(destination: destination);
 
-  /// Pays [sats] (null: the invoice's own amount) to [destination] out of the ark.
+  /// Pays [sats] (null: the invoice's own amount) to [destination] out of the ark. For an
+  /// invoice the answer carries the payment's `state` and `payment_hash`: `complete` once the
+  /// payee took it, `pending` while the payee holds it without taking it yet ([payOutcome]
+  /// follows it to its end).
   Future<Map<String, dynamic>> send(String destination, BigInt? sats) async {
     LeafService.instance.personActed();
     final out = Map<String, dynamic>.from(jsonDecode(await ark.arkSend(destination: destination, sats: sats)) as Map);
     unawaited(refresh());
     return out;
+  }
+
+  /// A payment out of the ark that its payee holds (a hold invoice), followed to its end:
+  /// `complete` when they take it, `came-back` when it fails back (the BTC is the wallet's
+  /// again), or `pending` still after [until]. The web wallet's `payOutcome`.
+  Future<String> payOutcome(String hash,
+      {Duration until = const Duration(minutes: 30), Duration every = const Duration(seconds: 3)}) async {
+    final t0 = DateTime.now();
+    while (true) {
+      final st = await payState(hash);
+      if (st == 'complete' || st == 'came-back') {
+        await refresh();
+        return st!;
+      }
+      if (DateTime.now().difference(t0) >= until) return 'pending';
+      await Future.delayed(every);
+    }
+  }
+
+  /// One look at the payment [hash] out of the ark, the server asked how it stands: `complete`,
+  /// `came-back`, `pending`, or null when it could not be read now.
+  Future<String?> payState(String hash) async {
+    if (!open) return null;
+    try {
+      final r = jsonDecode(await ark.arkPayStatus(hash: hash, drive: true)) as Map;
+      return switch (r['state']) {
+        'complete' => 'complete',
+        'none' || 'failed' => 'came-back',
+        'pending' => 'pending',
+        _ => null,
+      };
+    } catch (e) {
+      debugPrint('[ambra-ark] payment status: $e');
+      return null;
+    }
   }
 
   /// An invoice of [sats] paid into the ark. While it runs the wallet looks for its payment
@@ -317,6 +355,17 @@ class ArkBtcService extends ChangeNotifier {
       } catch (e) {
         debugPrint('[ambra-ark] invoice watch: $e');
       }
+    }
+  }
+
+  /// The ark's movements, newest first (Bark's history), or none while it is not open.
+  Future<List<Map>> history({int limit = 200}) async {
+    if (!open) return const [];
+    try {
+      return (jsonDecode(await ark.arkHistory(limit: limit)) as List).whereType<Map>().toList();
+    } catch (e) {
+      debugPrint('[ambra-ark] history: $e');
+      return const [];
     }
   }
 

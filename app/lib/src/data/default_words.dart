@@ -41,6 +41,14 @@ class DefaultWords {
   static String btcUpTo(String amount) => 'You can send up to $amount BTC this way now.';
   static const couldNotSend = 'This payment could not be made. Nothing was sent.';
 
+  /// An invoice whose payee holds the payment and has not taken it yet (a hold invoice): not
+  /// paid until they do, and it comes back if they never do. The web wallet's words.
+  static const payWaiting = 'On its way: waiting for the other side to accept it.';
+  static const payCameBack = 'Not paid: the payment came back, and the BTC is in your balance again.';
+  static const onItsWay = 'On its way';
+  static const notPaid = 'Not paid';
+  static const cameBack = 'The payment came back';
+
   /// A receive code paid at its address because this wallet holds nothing that pays it in
   /// seconds: said in the review, with when it arrives.
   static String byAddress(String arrives) => "This can't arrive in seconds from what you hold now, so it goes to the address. $arrives";
@@ -61,5 +69,6 @@ class DefaultWords {
         fee('5', 'USDX'), arriving('5', 'USDX'), redoing('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
         arrivesAfterBlock, noFees, btcSentAfterBlock('0.001'),
         btcUpTo('0.001'), couldNotSend, byAddress(arrivesAfterBlock), arrivesNextBlock, moving('0.001', 'BTC'),
+        payWaiting, payCameBack, onItsWay, notPaid, cameBack,
       ];
 }
