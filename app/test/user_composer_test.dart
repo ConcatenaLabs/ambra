@@ -2,6 +2,7 @@
 // both pickers open the searchable chooser, You pay and You receive are tethered both ways, Max
 // fills what is held, and the pair's market shows above You pay.
 import 'package:ambra/src/data/user_trade.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ambra/src/screens/user_composer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -113,6 +114,79 @@ void main() {
     await tester.tap(find.text('ZT'));
     await tester.pumpAndSettle();
     expect(find.byKey(ValueKey('ucGet-$z')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  Widget composer({String? draftKey, List<String> Function()? assets}) {
+    final names = {x: 'XT', y: 'YT', z: 'ZT', kUserBtc: 'BTC'};
+    return MaterialApp(
+      home: Scaffold(
+        body: UserComposer(
+          engine: engine(),
+          assets: assets ?? () => [kUserBtc, x, y],
+          known: () => [y, z],
+          held: (a) => a == x || a == y ? BigInt.from(3000000) : BigInt.zero,
+          ticker: (a) => names[a] ?? a,
+          precision: (a) => 4,
+          admittedReceives: (pay) async => pay == x ? [y] : const [],
+          draftKey: draftKey,
+        ),
+      ),
+    );
+  }
+
+  // #166: the amount that follows the price is an estimate, and reads as one until Review.
+  // #168: ⇅ swaps the two sides, each amount with its asset.
+  testWidgets('the amount not typed reads "about"; ⇅ swaps You pay and You receive', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.5;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(composer());
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+    await tester.enterText(find.byKey(const ValueKey('ucAmount')), '40');
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    final recv = tester.widget<TextField>(find.byKey(const ValueKey('ucReceive')));
+    expect(recv.controller!.text, '30');
+    expect(recv.decoration!.prefixText, 'about ', reason: 'the estimate says it is one');
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('ucAmount'))).decoration!.prefixText, isNull,
+        reason: 'what was typed is exact');
+    expect(find.byTooltip(UserWords.flip), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('ucFlip')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(ValueKey('ucPay-$y')), findsOneWidget);
+    expect(find.byKey(ValueKey('ucGet-$x')), findsOneWidget);
+    // The amounts ride with their assets: 30 YT is now paid, 40 XT received.
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('ucAmount'))).controller!.text, '30');
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('ucReceive'))).controller!.text, '40');
+    expect(tester.takeException(), isNull);
+  });
+
+  // #164: what was entered is there again after the app went away (the screen rebuilt from scratch,
+  // as after a restart), even before the balances that list the assets are in.
+  testWidgets('what was entered is kept and comes back', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.5;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(composer(draftKey: 'draft'));
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+    await tester.enterText(find.byKey(const ValueKey('ucAmount')), '40');
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    // Back, with the balances not read yet: only BTC to list at first.
+    var held = [kUserBtc];
+    await tester.pumpWidget(composer(draftKey: 'draft', assets: () => held));
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('ucAmount'))).controller!.text, '40');
+    held = [kUserBtc, x, y];
+    await tester.pumpWidget(composer(draftKey: 'draft', assets: () => held));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    expect(find.byKey(ValueKey('ucPay-$x')), findsOneWidget, reason: 'the asset chosen before, once listed');
     expect(tester.takeException(), isNull);
   });
 }

@@ -128,11 +128,16 @@ fn sats(a: Amount) -> String {
 /// its way (`pending_board`, `pending_in_round`, `claimable_lightning_receive`)
 /// or leaving (`pending_lightning_send`, `pending_exit`); and how many boards are
 /// still in progress (`boards_in_progress`, those not yet broadcast included), each
-/// with its funding transaction (`boards`).
+/// with its funding transaction (`boards`). With the server's info from the last
+/// handshake, also what one board may carry (`max_board`: the server's largest coin;
+/// a board makes one coin, `null` when it names no largest), the least it takes
+/// (`min_board`), and the Bitcoin confirmations a board waits for before it can be
+/// spent (`board_confirmations`).
 pub fn balance() -> Result<Value, Value> {
     let w = wallet()?;
     let b = runtime().block_on(w.balance()).map_err(err)?;
     let pending = runtime().block_on(w.pending_boards()).unwrap_or_default();
+    let info = runtime().block_on(w.ark_info()).ok().flatten();
     // Each board in progress by its funding transaction, so the app can tell one whose
     // transaction the network never took (a failed broadcast) from one waiting for its block.
     let boards: Vec<Value> = pending
@@ -148,6 +153,9 @@ pub fn balance() -> Result<Value, Value> {
         "claimable_lightning_receive": sats(b.claimable_lightning_receive),
         "pending_lightning_send": sats(b.pending_lightning_send),
         "pending_exit": b.pending_exit.map(sats),
+        "max_board": info.as_ref().and_then(|i| i.max_vtxo_amount).map(sats),
+        "min_board": info.as_ref().map(|i| sats(i.min_board_amount)),
+        "board_confirmations": info.as_ref().map(|i| i.required_board_confirmations),
     }))
 }
 

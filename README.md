@@ -157,9 +157,18 @@ module that implements it.
     (BTC always, then what the wallet holds, with balance and value), what the book offers now
     next, hidden assets left out until searched for. The two amounts are tethered: the one typed
     stays, the other follows the book's best price now (`UserTradeEngine.estimate`, no maker
-    asked for firm terms), with "The book can fill up to … now." when it cannot. Under You pay,
-    its balance and **Max**;
-  - **Review**, then **Trade**.
+    asked for firm terms), with "The book can fill up to … now." when it cannot, and reads
+    "about" until Review. Under You pay, its balance and **Max**; between the two, **⇅** swaps
+    the sides, each amount riding with its asset;
+  - **Review** ("Getting the exact price…": every source asked at once, a firm price within
+    8 s, 20 s when the BTC desk is the only source, a late answer left out and released), then
+    **Trade**, which frees the screen after 1.5 s: the trade goes on under Open as "Sending…",
+    then Sent, "Received, settling" and Settled, the same words as History.
+  - What was entered, and a price being asked for, is kept across the background, the app lock
+    and a restart (`draftKey`); the lock covers the open wallet instead of closing its screens.
+  - BTC held at the wallet's address, none yet on the Bitcoin ark, is moved there for a trade
+    that needs it (a board of at most the server's largest coin), and the trade says so and is
+    priced again by itself; by itself the wallet keeps at most four such boards on the ark.
 
   BTC heads both pickers; You pay lists BTC and the assets the wallet holds, so a brand-new wallet
   lists BTC alone, and You receive adds what the book offers for the asset paid, and each picker shows what the wallet holds of an asset as its one
@@ -542,6 +551,16 @@ module that implements it.
   Bitcoin blocks after the Bitcoin block the unbond's block anchors to), **Return to
   wallet** pays it to a fresh address of the wallet. Where each stake stands is read
   from the chain every time, so a reorg moves it back (`ambra_core/src/staking.rs`).
+- In default mode the Stake screen speaks to a first-time staker
+  (`app/lib/src/data/stake_words.dart`): what staking is for, how much, where it makes
+  blocks, what it costs and how to get it back, then **1. Stake** and **2. Choose a pool**.
+  A phone makes no blocks itself, so a stake makes them through a pool the person picks;
+  each declared pool shows whether it is producing (the pool board's verdicts), its share of
+  all stake, its members and what it pays, and none is picked for them. The two steps of
+  taking a stake back read **Take back** and **Return to wallet**. Tokens held in the Ark
+  are moved out to the wallet's address first when a stake or a first pool membership needs
+  them (`app/lib/src/data/on_chain_need.dart`). Developer mode shows the staking key, lock
+  heights and the pools' keys and full payout policies.
 - Faucet screen requesting tSEQ, USDX, EURX, GOLD, SILVR, or OILX from the public
   testnet faucet.
 - Report a problem (More → Help): what happened, an optional Emissio account code to be

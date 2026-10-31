@@ -106,6 +106,39 @@ BigInt stakedTotal(Iterable<BigInt> stakes, BigInt? delegation) =>
 
 /// What a stake's line says, in plain words: where it stands and when it moves on.
 /// [blockSeconds] is the chain's block spacing; [now] the phone's clock.
+/// [stakeStatusText] in default mode's words: no lock heights, no Bitcoin block numbers.
+String plainStakeStatus(core.StakeEntry s, {int? tip, int blockSeconds = 60, DateTime? now}) {
+  final at = now ?? DateTime.now();
+  String day(DateTime d) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final l = d.toLocal();
+    return '${l.day} ${months[l.month - 1]} ${l.year}';
+  }
+
+  switch (s.state) {
+    case 'pending':
+      return s.lock.isEmpty ? 'Coming back: waiting for the network to confirm it' : 'Waiting for the network to confirm it';
+    case 'bonded':
+      if (s.lock == 'time' && s.maturesAtTime != null) {
+        return 'Locked until about ${day(DateTime.fromMillisecondsSinceEpoch(s.maturesAtTime!.toInt() * 1000))}';
+      }
+      if (s.maturesAtHeight != null && tip != null && s.maturesAtHeight! - 1 - tip > 0) {
+        return 'Locked until about ${day(at.add(Duration(seconds: (s.maturesAtHeight! - 1 - tip) * blockSeconds)))}';
+      }
+      return 'Locked';
+    case 'unbondable':
+      return 'Unlocked: you can take it back';
+    case 'unbonding':
+      if (s.claimableAtAnchor != null && s.tipAnchor != null && s.claimableAtAnchor! - s.tipAnchor! > 0) {
+        return 'Coming back: ready about ${day(at.add(Duration(minutes: (s.claimableAtAnchor! - s.tipAnchor!) * 10)))}';
+      }
+      return 'Coming back';
+    case 'claimable':
+      return 'Ready: return it to your wallet';
+  }
+  return 'Waiting for the network to confirm it';
+}
+
 String stakeStatusText(core.StakeEntry s, {int? tip, int blockSeconds = 60, DateTime? now}) {
   final at = now ?? DateTime.now();
   String day(DateTime d) {

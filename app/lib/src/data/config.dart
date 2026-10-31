@@ -44,6 +44,13 @@ class Backend {
   /// the chain and in Lightning there.
   static String? get bitcoinArk => isDefault ? _origin : null;
 
+  /// The watchtowers other operators run for the default operator's users, beside those the
+  /// operator names itself: the leaf wallet deposits each coin with them too, at its next sync, so
+  /// its coins never rest on the operator alone to name who watches them. None on a custom node.
+  /// The web wallet's `SEQ_ARCA.watchtowers`.
+  static List<String> get defaultWatchtowers => isDefault
+      ? const ['https://arca.albertodeluigi.com/watchtower', 'https://sequentiatestnet.com/watchtower-b']
+      : const [];
   static String? get arcaOperatorKey =>
       isDefault ? 'b6f4c5924ad81947658cf85bb93d9267efc54c7fcb2e4577e8c954c68fa087bb' : null;
   static String get leafMaker => '$_origin/leafmaker'; // the live leaf maker user mode's Swap tab trades with

@@ -29,6 +29,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../data/ark_btc_lightning.dart';
 import '../data/ark_btc_service.dart';
 import '../data/btc_lightning.dart';
+import '../data/btc_state.dart';
 import '../data/config.dart';
 import '../data/dev_mode.dart';
 import '../data/asset_picker.dart' show AssetPickerItem;
@@ -223,8 +224,19 @@ UserTradeEngine _newTradeEngine(String walletTag) {
       return chain + (LeafService.instance.leafAtoms()[a] ?? BigInt.zero);
     },
     prepare: (_) => LeafService.instance.boardSoon(),
+    leavesOpen: () => LeafService.instance.open || !LeafService.instance.joined,
     // Coins a refresh plan keeps are freed for a trade in the wallet's next round.
     release: (a, leaves) => LeafService.instance.releaseFor(a, leaves),
+    // BTC at the wallet's address (as the last look at it saw it), moved to the Bitcoin ark for a
+    // trade that pays more than the ark holds: in default mode only, where the ark is where a
+    // trade's BTC is paid from.
+    // BTC already on its way onto the ark (a board waiting for its blocks) counts too: the trade
+    // says it is being moved rather than only what can be paid now.
+    btcAtAddress: () async => appBtcRail() == 'ark'
+        ? (BigInt.tryParse(BtcState.instance.last?.balanceSats ?? '') ?? BigInt.zero) + ArkBtcService.instance.arriving
+        : BigInt.zero,
+    btcMove: (sats) => ArkBtcService.instance.boardFor(sats),
+    btcMoveBlocks: () => ArkBtcService.instance.boardConfirmations,
     log: (m) => debugPrint(m),
   ));
 }
@@ -234,7 +246,8 @@ const Duration kMakerPostTimeout = Duration(minutes: 5);
 
 class UserComposer extends StatefulWidget {
   const UserComposer({super.key, required this.engine, required this.assets, required this.held, required this.ticker,
-      required this.precision, this.admittedReceives, this.onMoved, this.known, this.isHidden, this.refValue, this.relay, this.marketGet});
+      required this.precision, this.admittedReceives, this.onMoved, this.known, this.isHidden, this.refValue, this.relay, this.marketGet,
+      this.draftKey});
   final UserTradeEngine engine;
   /// What can be paid: BTC always, and every other asset the wallet holds.
   final List<String> Function() assets;
@@ -253,6 +266,11 @@ class UserComposer extends StatefulWidget {
   final String Function()? relay;
   final MarketGet? marketGet;
 
+  /// Where what the person has entered is kept (the two assets, the amount typed, whether a price
+  /// was asked for), so it is there again after the app was in the background, locked or
+  /// restarted. Null: nothing is kept.
+  final String? draftKey;
+
   @override
   State<UserComposer> createState() => _UserComposerState();
 }
@@ -260,6 +278,19 @@ class UserComposer extends StatefulWidget {
 /// How long a trade is followed every few seconds, and how often after that.
 const int kFollowFastMs = 120000;
 const int kFollowSlowMs = 30000;
+
+/// While the wallet gets coins ready for a trade (BTC moved where trades pay from, coins refreshed
+/// for a resting order), the trade is priced again this often, this many times at most.
+const int kReadyRetryMs = 20000;
+const int kReadyTries = 90;
+
+/// How long Confirm waits for the trade's step before the screen is free again: after it, the trade
+/// goes on in Open as "Sending…", and the person can leave and come back.
+const Duration kConfirmShownFor = Duration(milliseconds: 1500);
+
+/// How long a person waits on Review at most, whatever a source or the wallet is doing: then a
+/// plain reason (the engine's own deadline is shorter; this is the last guard).
+const Duration kReviewAtMost = Duration(seconds: 25);
 
 class _UserComposerState extends State<UserComposer> {
   String? _pay, _get;
@@ -277,8 +308,12 @@ class _UserComposerState extends State<UserComposer> {
   List<String> _admitted = [];
   ({String pay, List<String> list, int at})? _offered;
   bool _offeredLoading = false;
-  Timer? _timer, _estTimer, _refresh;
-  int _estSeq = 0;
+  Timer? _timer, _estTimer, _refresh, _readyTimer;
+  int _estSeq = 0, _readyTries = 0;
+  /// BTC is being moved for the ticket shown, beyond what it pays now.
+  bool _moving = false;
+  /// Restored from [UserComposer.draftKey]: until it is, nothing is kept over what was there.
+  bool _restored = false;
 
   String _amt(String asset, BigInt atoms) => '${formatAtoms('$atoms', widget.precision(asset))} ${widget.ticker(asset)}';
 
@@ -309,6 +344,8 @@ class _UserComposerState extends State<UserComposer> {
   @override
   void initState() {
     super.initState();
+    widget.engine.figure = widget.held;
+    unawaited(_restoreDraft());
     _loadTrades().then((_) => _follow());
     // A trade made elsewhere (a connected site's) shows at once, and is followed.
     _changed = widget.engine.changes.listen((_) async {
@@ -321,8 +358,75 @@ class _UserComposerState extends State<UserComposer> {
     });
   }
 
+  // ---- What the person entered, kept ----
+  Future<void> _restoreDraft() async {
+    final k = widget.draftKey;
+    if (k == null) {
+      _restored = true;
+      return;
+    }
+    Map? j;
+    try {
+      final v = (await SharedPreferences.getInstance()).getString(k);
+      if (v != null) j = jsonDecode(v) as Map;
+    } catch (_) {}
+    if (!mounted) return;
+    _restored = true;
+    if (j == null) return;
+    setState(() {
+      // Taken up once the lists hold them (a balance read after a restart may come later).
+      if (j!['pay'] is String) {
+        _wantPay = j['pay'] as String;
+        _payChosen = j['payChosen'] == true;
+      }
+      if (j['get'] is String) {
+        _wantGet = j['get'] as String;
+        _getChosen = j['getChosen'] == true;
+      }
+      _fixed = j['fixed'] == 'receive' ? 'receive' : 'pay';
+      _amount.text = '${j['amount'] ?? ''}';
+      _receive.text = '${j['receive'] ?? ''}';
+    });
+    unawaited(_receivesFor(_wantPay ?? _pay));
+    // A price asked for when the app went away is asked for again: the terms held then have lapsed.
+    if (j['reviewing'] == true && _amount.text.trim().isNotEmpty) {
+      _reviewOnRestore = true;
+    } else {
+      _schedule(0);
+    }
+  }
+
+  void _saveDraft() {
+    final k = widget.draftKey;
+    if (k == null || !_restored) return;
+    final v = jsonEncode({
+      'pay': _wantPay ?? _pay,
+      'get': _wantGet ?? _get,
+      'payChosen': _payChosen,
+      'getChosen': _getChosen,
+      'fixed': _fixed,
+      'amount': _amount.text,
+      'receive': _receive.text,
+      'reviewing': _reviewing || _ticket != null,
+    });
+    unawaited(SharedPreferences.getInstance().then((p) => p.setString(k, v)).catchError((_) => false));
+  }
+
+  /// Review was pressed and its price is being asked for now.
+  bool _reviewing = false;
+  /// The assets kept from before, until the lists hold them; and a price to ask for again then.
+  String? _wantPay, _wantGet;
+  bool _reviewOnRestore = false;
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _saveDraft();
+  }
+
   @override
   void dispose() {
+    _readyTimer?.cancel();
     _changed?.cancel();
     _timer?.cancel();
     _estTimer?.cancel();
@@ -374,6 +478,48 @@ class _UserComposerState extends State<UserComposer> {
     _choice = null;
     _note = null;
     _error = null;
+    _moving = false;
+  }
+
+  /// ⇅: the two sides change places, each amount riding with its asset (the web wallet's flip):
+  /// "I was buying 50 GOLD" becomes "I am selling 50 GOLD", never the number in the other asset.
+  void _flip() {
+    final p = _pay, g = _get;
+    if (p == null || g == null) return;
+    if (_ticket != null) widget.engine.drop(_choice);
+    final a = _amount.text, r = _receive.text;
+    setState(() {
+      _reset();
+      _wantPay = null;
+      _wantGet = null;
+      _pay = g;
+      _get = p;
+      _payChosen = true;
+      _getChosen = true;
+      _amount.text = r;
+      _receive.text = a;
+      _fixed = _fixed == 'pay' ? 'receive' : 'pay';
+    });
+    _receivesFor(_pay);
+    _schedule(0);
+  }
+
+  /// Prices the trade again by itself, while the wallet gets what it pays ready, as long as nothing
+  /// the person entered changed.
+  void _readyAgain() {
+    final asked = '$_pay|$_get|${_amount.text}';
+    _readyTimer?.cancel();
+    if (++_readyTries > kReadyTries) {
+      _readyTries = 0;
+      return;
+    }
+    _readyTimer = Timer(const Duration(milliseconds: kReadyRetryMs), () {
+      if (!mounted || '$_pay|$_get|${_amount.text}' != asked || _busy || _ticket != null) {
+        _readyTries = 0;
+        return;
+      }
+      _review();
+    });
   }
 
   // ---- You pay and You receive, tethered ----
@@ -412,6 +558,7 @@ class _UserComposerState extends State<UserComposer> {
   }
 
   Future<void> _review() async {
+    if (_pay == null) return;
     setState(_reset);
     final atoms = parseAtoms(_amount.text.trim(), widget.precision(_pay!));
     if (atoms == null || atoms <= BigInt.zero) {
@@ -419,59 +566,114 @@ class _UserComposerState extends State<UserComposer> {
       return;
     }
     if (_get == null) return;
-    setState(() => _busy = true);
+    final pay = _pay!, get = _get!;
+    setState(() {
+      _busy = true;
+      _reviewing = true;
+    });
+    final t0 = DateTime.now();
+    var again = false;
     try {
-      final q = await widget.engine.quote(pay: _pay!, receive: _get!, amount: atoms);
+      // The engine answers within its own deadline; this guards a wait on anything else.
+      final q = await widget.engine.quote(pay: pay, receive: get, amount: atoms).timeout(kReviewAtMost, onTimeout: () {
+        debugPrint('[user composer] quote: no answer in ${kReviewAtMost.inSeconds} s');
+        return QuoteResult.no('no-firm-offer');
+      });
+      debugPrint('[user composer] quote ${q.ok ? 'ticket' : q.why} in ${DateTime.now().difference(t0).inMilliseconds} ms');
+      if (!mounted) return;
+      // What was asked changed while the price came: this answer is not for it.
+      if (pay != _pay || get != _get) {
+        if (q.ok) widget.engine.drop(q.choice);
+        return;
+      }
       setState(() {
         if (q.ok) {
           _ticket = q.ticket;
           _choice = q.choice;
+          _moving = q.moving;
+          _readyTries = 0;
         } else {
-          final p = widget.ticker(_pay!), g = widget.ticker(_get!);
+          final p = widget.ticker(pay), g = widget.ticker(get);
           _error = switch (q.why) {
             'no-funds' => UserWords.noFunds(p),
             'not-ready' => UserWords.notReady(p, q.soon),
             'redoing' => UserWords.redoing(p),
             'freeing' => UserWords.freeing(p, q.soon),
+            'readying' => UserWords.readying(p, q.soon),
+            'btc-moving' => UserWords.btcMoving(widget.engine.btcMoveBlocks),
+            'part-ready' => UserWords.partReady(_amt(pay, q.ready ?? BigInt.zero), p, q.soon),
             'too-small' => UserWords.tooSmall,
+            'no-firm-offer' => UserWords.noFirmOffer,
+            'opening' => UserWords.opening,
             'not-listed' => UserWords.notListed(g, p),
             _ => UserWords.notOffered(g, p),
           };
+          again = q.why == 'readying' || q.why == 'btc-moving' || q.why == 'opening';
         }
       });
     } catch (e) {
       debugPrint('[user composer] quote: $e');
-      setState(() => _error = e is LeafRefusal && e.plain ? e.message : UserWords.notOffered(widget.ticker(_get!), widget.ticker(_pay!)));
+      if (mounted) setState(() => _error = e is LeafRefusal && e.plain ? e.message : UserWords.notOffered(widget.ticker(get), widget.ticker(pay)));
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _reviewing = false;
+        });
+      }
     }
+    if (again && mounted) _readyAgain();
   }
 
+  /// Trade: the step is taken in the background. If it is not done within [kConfirmShownFor], the
+  /// screen is free again at once and the trade goes on in Open ("Sending…", then "Sent"), where it
+  /// is followed whether the person stays, leaves or closes the app. A refusal that comes at once
+  /// (the price moved) is said here, as before.
   Future<void> _confirm() async {
     final c = _choice, t = _ticket;
     if (c == null || t == null) return;
     setState(() => _busy = true);
-    try {
-      await widget.engine.confirm(c, t);
+    final t0 = DateTime.now();
+    final done = widget.engine.confirm(c, t).then<Object?>((r) => r, onError: (Object e) => e);
+    final first = await Future.any<Object?>([done, Future.delayed(kConfirmShownFor, () => #later)]);
+    debugPrint('[user composer] confirm: screen free after ${DateTime.now().difference(t0).inMilliseconds} ms'
+        '${first == #later ? ' (goes on in Open)' : ''}');
+    if (!mounted) return;
+    if (first is LapsedError) {
       setState(() {
         _reset();
-        _amount.clear();
-        _receive.clear();
+        _busy = false;
       });
-    } on LapsedError {
-      setState(_reset);
-      setState(() => _busy = false);
       await _review();
       if (mounted && _ticket != null) setState(() => _note = UserWords.priceMoved);
-    } catch (e) {
-      debugPrint('[user composer] confirm: $e');
+      return;
+    }
+    if (first is Object && first is! Map && first != #later) {
+      debugPrint('[user composer] confirm: $first');
       setState(() {
         _reset();
-        _error = e is LeafRefusal && e.plain ? e.message : UserWords.failed;
+        _busy = false;
+        _error = first is LeafRefusal && first.plain ? first.message : UserWords.failed;
       });
-    } finally {
-      if (mounted) setState(() => _busy = false);
       await _loadTrades();
+      return;
+    }
+    setState(() {
+      _reset();
+      _busy = false;
+      _amount.clear();
+      _receive.clear();
+    });
+    await _loadTrades();
+    if (first == #later) {
+      // Followed from Open once its step is taken; a refusal then shows on its row.
+      unawaited(done.then((r) async {
+        debugPrint('[user composer] confirm: step taken in ${DateTime.now().difference(t0).inMilliseconds} ms'
+            '${r is Map ? '' : ': $r'}');
+        if (mounted) await _loadTrades();
+        _follow();
+      }));
+    } else {
       _follow();
     }
   }
@@ -481,8 +683,9 @@ class _UserComposerState extends State<UserComposer> {
   Future<void> _follow() async {
     _timer?.cancel();
     final openRecs = _trades.where((r) => !['settled', 'returned', 'failed'].contains(r['state'])).toList();
+    final confirming = openRecs.any((r) => widget.engine.confirmingNow(r['id']));
     if (openRecs.isEmpty || !mounted || _following) return;
-    if (_busy) {
+    if (_busy || (confirming && openRecs.every((r) => widget.engine.confirmingNow(r['id'])))) {
       _timer = Timer(const Duration(seconds: 4), _follow);
       return;
     }
@@ -507,7 +710,7 @@ class _UserComposerState extends State<UserComposer> {
     if (r['state'] == 'returned' && fees.isNotEmpty) {
       return UserWords.returnedFees([for (final f in fees) _amt('${(f as Map)['asset']}', BigInt.parse('${f['atoms']}'))].join(' and '));
     }
-    return tradeStateWord(r, DateTime.now().millisecondsSinceEpoch, soon: widget.engine.soon) ?? UserWords.returned;
+    return tradeStateWord(r, DateTime.now().millisecondsSinceEpoch) ?? UserWords.returned;
   }
 
   /// A picker: a button naming the asset chosen, which opens the wallet's one asset chooser.
@@ -553,12 +756,16 @@ class _UserComposerState extends State<UserComposer> {
     ));
   }
 
+  // The amount not typed follows the book's price now: an estimate until Review, so it reads as one
+  // ("about …"), and Review's ticket gives the exact amounts.
   Widget _amountField(String key, TextEditingController c, FocusNode f, String side) => TextField(
         key: ValueKey(key),
         controller: c,
         focusNode: f,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: const InputDecoration(hintText: UserWords.amount),
+        decoration: InputDecoration(
+            hintText: UserWords.amount,
+            prefixText: _fixed != side && _ticket == null && c.text.trim().isNotEmpty ? '${UserWords.about} ' : null),
         onChanged: (_) {
           _fixed = side;
           setState(() {
@@ -572,6 +779,11 @@ class _UserComposerState extends State<UserComposer> {
   @override
   Widget build(BuildContext context) {
     final pays = _payList();
+    if (_wantPay != null && pays.contains(_wantPay)) {
+      _pay = _wantPay;
+      _wantPay = null;
+      unawaited(_receivesFor(_pay));
+    }
     if (_pay == null || !_payChosen || !pays.contains(_pay)) {
       final first = pays.firstWhere((a) => widget.held(a) > BigInt.zero, orElse: () => pays.first);
       if (first != _pay) {
@@ -581,9 +793,24 @@ class _UserComposerState extends State<UserComposer> {
     }
     unawaited(_loadOffered());
     final gets = _getList();
+    if (_wantPay == null && _wantGet != null && gets.contains(_wantGet)) {
+      _get = _wantGet;
+      _wantGet = null;
+    }
     if (_get == null || !gets.contains(_get)) _get = _defaultGet(gets);
+    if (_reviewOnRestore && _wantPay == null && _wantGet == null && _pay != null && _get != null) {
+      _reviewOnRestore = false;
+      scheduleMicrotask(() {
+        if (mounted && !_busy && _ticket == null) _review();
+      });
+    }
     final t = _ticket;
-    final shown = _trades.where((r) => (r['state'] != 'confirming' || r['uncertain'] == true) && r['ticket'] is Map).toList().reversed.take(12).toList();
+    final shown = _trades
+        .where((r) => (r['state'] != 'confirming' || r['uncertain'] == true || widget.engine.confirmingNow(r['id'])) && r['ticket'] is Map)
+        .toList()
+        .reversed
+        .take(12)
+        .toList();
     bool done(Map r) => ['settled', 'returned', 'failed'].contains(r['state']);
     final dir = _pay != null && _get != null && _pay != _get ? canonicalPair(_pay!, _get!, widget.ticker) : null;
     return ListView(key: const ValueKey('userComposer'), padding: const EdgeInsets.fromLTRB(20, 20, 20, 24), children: [
@@ -604,6 +831,8 @@ class _UserComposerState extends State<UserComposer> {
       Row(children: [
         _chooser('ucPay', pays, _pay, (v) {
           setState(() {
+            _wantPay = null;
+            _wantGet = null;
             _pay = v;
             _payChosen = true;
             _getChosen = false;
@@ -633,11 +862,19 @@ class _UserComposerState extends State<UserComposer> {
                     },
               child: const Text(UserWords.max)),
         ]),
-      const SizedBox(height: 12),
+      Center(
+        child: IconButton(
+          key: const ValueKey('ucFlip'),
+          tooltip: UserWords.flip,
+          icon: const Icon(Icons.swap_vert),
+          onPressed: _busy || _pay == null || _get == null ? null : _flip,
+        ),
+      ),
       Text(UserWords.get, style: Theme.of(context).textTheme.labelLarge),
       Row(children: [
         _chooser('ucGet', gets, _get, (v) {
           setState(() {
+            _wantGet = null;
             _get = v;
             _getChosen = true;
             _reset();
@@ -652,7 +889,8 @@ class _UserComposerState extends State<UserComposer> {
         _line(UserWords.pay, _amt(t.payAsset, t.amountIn), 'ucIn'),
         _line(UserWords.get, _amt(t.receiveAsset, t.amountOut), 'ucOut'),
         Text(costLine(t.fees, _amt, t.payAsset), key: const ValueKey('ucCost'), style: Theme.of(context).textTheme.bodySmall),
-        if (t.upTo != null) Text(UserWords.upTo(_amt(t.payAsset, t.upTo!))),
+        if (t.upTo != null) Text(UserWords.upTo(_amt(t.payAsset, t.upTo!)), key: const ValueKey('ucUpTo')),
+        if (_moving) Text(UserWords.btcMore(widget.engine.btcMoveBlocks), key: const ValueKey('ucMoving')),
         const SizedBox(height: 12),
       ],
       if ((_error ?? _note) != null)
@@ -663,7 +901,7 @@ class _UserComposerState extends State<UserComposer> {
             child: Text(_busy ? UserWords.pricing : UserWords.review))
       else
         Row(children: [
-          FilledButton(key: const ValueKey('ucConfirm'), onPressed: _busy ? null : _confirm, child: Text(_busy ? UserWords.working : UserWords.confirm)),
+          FilledButton(key: const ValueKey('ucConfirm'), onPressed: _busy ? null : _confirm, child: Text(_busy ? UserWords.sending : UserWords.confirm)),
           const SizedBox(width: 12),
           TextButton(
               key: const ValueKey('ucCancel'),
