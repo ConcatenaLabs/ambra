@@ -2017,6 +2017,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     return UserComposer(
       key: ValueKey('userComposer-$tag'),
       engine: _userEngine!,
+      draftKey: 'ambra.usercomposer.draft.$tag',
       // What the person can pay with: BTC always, and every other asset only once the wallet
       // holds it (a brand-new wallet lists BTC alone).
       assets: () => <String>{kBtcSentinel, ..._payableAssets(), ...leaves().keys}

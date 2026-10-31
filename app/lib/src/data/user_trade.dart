@@ -15,6 +15,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'btc_lightning.dart';
 import 'user_trade_btc.dart';
@@ -26,6 +27,29 @@ const int kMakerCompleteMs = 120000;
 
 /// A maker's firm offer is accepted only while at least this long is left before it lapses.
 const int kFirmMarginMs = 20000;
+
+/// Minutes after which a received trade still settling is said to be slow.
+const int kSlowSettleMin = 10;
+
+/// How long a quote may take from Review: every source worth asking for firm terms is asked at
+/// once, and one that has not answered by then is left out of the ticket (a late answer is let go
+/// of). The firm terms always get at least [kQuoteFirmMinMs] of it. The web wallet's QUOTE_FIRM_MS.
+const int kQuoteFirmMs = 8000;
+const int kQuoteFirmMinMs = 3000;
+
+/// How long a quote waits before it asks once more for firm terms that none gave.
+const int kFirmRetryMs = 3000;
+
+/// When the BTC desk is the only source a trade can take (buying or selling BTC), its firm terms (an
+/// offer and a Bitcoin invoice) are waited for this long: there is no other answer to take instead.
+const int kBtcOnlyFirmMs = 20000;
+
+/// How long a refresh asked to get coins ready for a resting order is waited on before it is asked
+/// again: its round, and the round's block being certified.
+const int kReadyingMs = 10 * 60000;
+
+/// The book's entries read while the amount was typed stand for the quote this long.
+const int kEntriesFreshMs = 8000;
 
 /// The most the operator's fee may be of a price, in millionths, in user mode.
 const int kMaxFeePpm = 10000;
@@ -111,18 +135,47 @@ class UserWords {
   static String freeing(String pay, [bool soon = false]) => soon
       ? 'Your $pay is being made ready to trade: it is ready in a minute or two. Nothing has moved.'
       : 'Your $pay is being made ready to trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.';
-  static const pricing = 'Finding the best price…';
+  // The amount not typed, while it follows the book's price now: an estimate, said as one.
+  static const about = 'about';
+  // Review, while the sources are asked for terms they hold to: the shown amount is the estimate.
+  static const pricing = 'Getting the exact price…';
+  // The best offers are orders resting in the tree that only coins expiring later can fill: the
+  // wallet refreshes its older coins in the next round, and prices the trade again once they are in.
+  static String readying(String pay, [bool soon = false]) => soon
+      ? 'Getting your $pay ready for this trade: it is ready in a minute or two. Nothing has moved.'
+      : 'Getting your $pay ready for this trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.';
+  static const opening = 'Your wallet is still opening: try again in a moment. Nothing has moved.';
+  static const noFirmOffer = 'Nobody could confirm a price for this just now. Nothing has moved: try again in a moment.';
+  // Held, and shown in the balance, but not where a trade pays from yet (just arrived, or still
+  // being moved in by the wallet), while too little of it is ready for any offer.
+  static String partReady(String ready, String pay, [bool soon = false]) => soon
+      ? 'Only $ready of your $pay can be traded now, too little for any offer: the rest is on its way, ready in a minute or two. Nothing has moved.'
+      : 'Only $ready of your $pay can be traded now, too little for any offer: the rest is ready once the next Bitcoin blocks settle it. Nothing has moved.';
+  // BTC held at the wallet's address, which a trade cannot pay from until the wallet has moved it
+  // where trades pay from: a move confirmed by [blocks] Bitcoin blocks (no time: Bitcoin's blocks
+  // keep none).
+  static String _blocks(int n) => n == 1 ? 'a Bitcoin block' : '$n Bitcoin blocks';
+  static String btcMoving(int blocks) =>
+      'Your BTC is being moved so it can be traded. It is ready after ${_blocks(blocks)}. Nothing has moved yet.';
+  static String btcMore(int blocks) => 'More of your BTC is being moved so it can be traded, ready after ${_blocks(blocks)}.';
   static const priceMoved = 'The price moved. Here is the new one.';
   static const sent = 'Sent';
   static const settled = 'Settled';
   static const waitingOther = 'Waiting for the other side. Nothing has left your wallet yet.';
-  static const receivedSettling = 'Received. Settled after the next Bitcoin blocks.';
-  static const receivedSoon = 'Received. Settled in a minute or two.';
+  // A sale for BTC whose asset is paid: the BTC comes once the other side pays it out.
+  static const btcOnItsWay = 'Paid. Your BTC is on its way.';
+  // What the trade brings is the wallet's; only its settling with the network is left. One word on
+  // every surface, with no time: how long settling takes is the network's, not the trade's.
+  static const received = 'Received, settling';
+  static const receivedSlow = 'Received, and yours to use. Settling with the network is taking longer than usual.';
   static String minutes(String word, int n) => '$word ($n min)';
   static const returned = 'Returned: nothing traded.';
   static String returnedFees(String fees) => 'Returned: nothing traded. Fees of $fees were paid.';
   static const returnedLapsed = 'Returned: nothing traded. The other side\'s offer ran out while the trade waited.';
-  static const working = 'Working…';
+  // A trade confirmed and being sent: the screen is free at once, the trade goes on in Open.
+  static const sending = 'Sending…';
+  // ⇅ between the two sides: the sides change places, each amount with its asset.
+  static const flip = 'Swap You pay and You receive';
   static const failed = 'This trade could not be made. Nothing moved.';
   static const recent = 'Your trades';
   static const openTrades = 'Open';
@@ -155,18 +208,30 @@ class UserWords {
     redoing('XT'),
     freeing('XT'),
     freeing('XT', true),
+    about,
     pricing,
+    noFirmOffer,
+    opening,
+    readying('XT'),
+    readying('XT', true),
+    partReady('1 XT', 'XT'),
+    partReady('1 XT', 'XT', true),
+    btcMoving(2),
+    btcMoving(1),
+    btcMore(2),
     priceMoved,
     sent,
     settled,
     waitingOther,
-    receivedSettling,
-    receivedSoon,
+    btcOnItsWay,
+    received,
+    receivedSlow,
     minutes(sent, 3),
     returned,
     returnedFees('1 XT'),
     returnedLapsed,
-    working,
+    sending,
+    flip,
     failed,
     recent,
   ];
@@ -183,14 +248,15 @@ bool heldAlready(Map r) {
 /// What the list of trades says of one: Sent, then Settled; a trade waiting on the other side or
 /// on its settling says so, with the minutes it has waited once it has waited one. Null for a
 /// trade returned with fees paid (the row names the fees). The web wallet's tradeStateWord().
-/// [soon]: the operator calls a coin settled once its block is certified (anchor depth 0).
-String? tradeStateWord(Map r, int nowMs, {bool soon = false}) {
+/// The same words in the Swap tab's Open trades, in History and on every other surface: none of them
+/// promises a time, the minutes waited being the only time shown.
+String? tradeStateWord(Map r, int nowMs) {
   final st = r['state'];
   if (st == 'settled') return UserWords.settled;
   if (st == 'returned' && ((r['feesPaid'] as List?) ?? const []).isNotEmpty) return null;
   if (st == 'returned' && r['whyKind'] == 'lapsed') return UserWords.returnedLapsed;
   if (st == 'returned' || st == 'failed') return UserWords.returned;
-  if (st == 'confirming') return UserWords.working;
+  if (st == 'confirming') return UserWords.sending;
   int since(Object? t) => ((nowMs - ((t as num?)?.toInt() ?? (r['at'] as num?)?.toInt() ?? nowMs)) / 60000).floor();
   // Buying with BTC: nothing has left the wallet until its asset is held for it.
   if (st == 'waiting') {
@@ -198,7 +264,13 @@ String? tradeStateWord(Map r, int nowMs, {bool soon = false}) {
     return m >= 1 ? UserWords.minutes(UserWords.waitingOther, m) : UserWords.waitingOther;
   }
   final m = since(r['sentAt']);
-  final word = heldAlready(r) ? (soon ? UserWords.receivedSoon : UserWords.receivedSettling) : UserWords.sent;
+  // Received, its settling still waiting with the network after [kSlowSettleMin] minutes: said so,
+  // the coins being the wallet's all along.
+  final held = heldAlready(r);
+  final slow = held && m >= kSlowSettleMin && ((r['settleState'] as List?) ?? const []).any((x) => x != null && x != 'released');
+  final word = held
+      ? (slow ? UserWords.receivedSlow : UserWords.received)
+      : (r['source'] == 'btc-gateway' && r['dir'] == 'sell' ? UserWords.btcOnItsWay : UserWords.sent);
   return m >= 1 ? UserWords.minutes(word, m) : word;
 }
 
@@ -489,11 +561,17 @@ class Ticket {
 }
 
 class QuoteResult {
-  QuoteResult.ok(this.ticket, this.choice) : why = null, soon = false;
-  QuoteResult.no(this.why, {this.soon = false}) : ticket = null, choice = null;
+  QuoteResult.ok(this.ticket, this.choice, {this.moving = false}) : why = null, soon = false, ready = null;
+  QuoteResult.no(this.why, {this.soon = false, this.ready, this.moving = false}) : ticket = null, choice = null;
   final Ticket? ticket;
   final Candidate? choice;
-  final String? why; // not-listed | not-offered | no-funds | not-ready | redoing | freeing | too-small
+  // not-listed | not-offered | no-funds | not-ready | redoing | freeing | readying | part-ready |
+  // btc-moving | too-small | no-firm-offer
+  final String? why;
+  /// part-ready: what can be paid now.
+  final BigInt? ready;
+  /// BTC: more of what the wallet holds at its address is being moved where trades pay from.
+  final bool moving;
   /// What is not ready yet is ready in a minute or two (the operator's anchor depth is 0).
   final bool soon;
   bool get ok => ticket != null;
@@ -532,12 +610,19 @@ class UserTradeDeps {
     this.btcOf,
     this.held,
     this.prepare,
+    this.leavesOpen,
     this.release,
     this.anchorDepth,
+    this.btcAtAddress,
+    this.btcMove,
+    this.btcMoveBlocks,
+    this.btcOnlyFirmMs,
+    int? quoteFirmMs,
     int Function()? now,
     void Function(String)? log,
     Future<void> Function(int ms)? sleep,
-  }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
+  }) : quoteFirmMs = quoteFirmMs ?? kQuoteFirmMs,
+       now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
        log = log ?? ((_) {}),
        sleep = sleep ?? ((ms) => Future.delayed(Duration(milliseconds: ms)));
   final Future<dynamic> Function(String command, Map<String, dynamic> args) run;
@@ -565,6 +650,10 @@ class UserTradeDeps {
   final Future<BigInt> Function(String asset)? held;
   final void Function(String asset)? prepare;
 
+  /// Whether the wallet's leaves are open and read (null: not said). While they are not, an asset
+  /// the balance shows is never "none": the wallet is still opening.
+  final bool Function()? leavesOpen;
+
   /// Asks the wallet to free [leaves], live coins of [asset] an open offline-refresh plan keeps, in
   /// its next round (`plan_release`), as a payment from them is. Optional: with it, a pay asset held
   /// only in such coins is 'freeing'.
@@ -574,6 +663,20 @@ class UserTradeDeps {
   /// be traded (the library's `info` `anchor_depth`), or null. Optional: at 0 a coin not ready yet
   /// is on its way, ready in a minute or two.
   final int? Function()? anchorDepth;
+
+  /// BTC the wallet holds at its own address, confirmed, which a trade cannot pay from until the
+  /// wallet moves it where trades pay its BTC from ([btc]); and a way to have at least `sats` of it
+  /// moved there now (default mode: a board of the Bitcoin ark, at most what one board may carry),
+  /// with the Bitcoin blocks such a move waits for. All optional: without them BTC at the address
+  /// counts for nothing here.
+  final Future<BigInt> Function()? btcAtAddress;
+  final void Function(BigInt sats)? btcMove;
+  final int Function()? btcMoveBlocks;
+
+  /// How long a quote may take ([kQuoteFirmMs]), and, when the BTC desk is the only source the trade
+  /// can take, how long it waits for its terms ([kBtcOnlyFirmMs]).
+  final int quoteFirmMs;
+  final int? btcOnlyFirmMs;
   final Future<String?> Function() read;
   final Future<void> Function(String value) write;
   final int Function() now;
@@ -629,6 +732,10 @@ class UserTradeEngine {
   }
   final UserTradeDeps d;
   late final BtcTrades _btcT;
+
+  /// Each asset's one figure as the balance shows it (on the chain, in the Ark, in a channel), set
+  /// by the screen that shows it: an asset the person sees they hold is never "You have no …".
+  BigInt Function(String asset)? figure;
   BtcLightning? get _btc => d.btc?.call();
 
   Future<dynamic> _run(String cmd, [Map<String, dynamic> args = const {}]) async {
@@ -789,6 +896,13 @@ class UserTradeEngine {
             r = s2.receive;
             continue;
           }
+        }
+        // Only coins expiring no earlier than the order's coin fill it, and the wallet's that do hold
+        // too little: noted, so a quote that finds no other offer gets those coins ready.
+        final old = RegExp(r"that expire no earlier than the order's coin \(median time (\d+)\) keep (\d+) past their checkpoints").firstMatch('$err');
+        if (old != null) {
+          final t = int.parse(old.group(1)!);
+          if (_tooOldFrom == null || t > _tooOldFrom!) _tooOldFrom = t;
         }
         d.log('[user trade] order_fill_resting_quote: $err');
         return null;
@@ -1044,12 +1158,20 @@ class UserTradeEngine {
     if (payAtoms != null) {
       if (payAtoms <= BigInt.zero) return const Estimate.no('too-small');
       ({BigInt receive, BigInt pay})? best;
+      BookEntry? bestE;
       for (final e in es) {
         final s = sizeEntry(e, payAtoms);
-        if (s != null && (best == null || s.receive > best.receive)) best = s;
+        if (s != null && (best == null || s.receive > best.receive)) {
+          best = s;
+          bestE = e;
+        }
       }
       if (best == null) return const Estimate.no('too-small');
-      return Estimate(pay: payAtoms, receive: best.receive, short: best.pay < payAtoms ? most : null);
+      // Short only when the source cannot take the whole amount (its size or its lot rules): what the
+      // price's rounding leaves of the amount, less than one atom of what is received, is not. The
+      // web wallet's rule.
+      final short = best.receive < (payAtoms * bestE!.rateDen) ~/ bestE.rateNum;
+      return Estimate(pay: payAtoms, receive: best.receive, short: short ? most : null);
     }
     final r = receiveAtoms ?? BigInt.zero;
     if (r <= BigInt.zero) return const Estimate.no('too-small');
@@ -1063,19 +1185,126 @@ class UserTradeEngine {
     return r > most!.receive ? Estimate(pay: most.pay, receive: most.receive, short: most) : const Estimate.no('too-small');
   }
 
+  /// The least expiry (median time) a resting order's coin asked of the wallet's coins in this quote,
+  /// when one refused them for expiring sooner; null otherwise.
+  int? _tooOldFrom;
+
+  /// When the wallet last asked a refresh of an asset's coins for a resting order, so a quote asked
+  /// again while that round runs says so rather than asking again.
+  final _readyingSince = <String, int>{};
+
+  /// Refreshes the wallet's live coins of [asset] that expire before median time [from], in the
+  /// operator's next round (planned ones through their release): its new coins expire later than any
+  /// order resting now. Whether coins are being made ready. The web wallet's `readyCoins`.
+  Future<bool> _readyCoins(String asset, int from) async {
+    final since = _readyingSince[asset];
+    if (since != null && d.now() - since < kReadyingMs) return true;
+    try {
+      final coins = [
+        for (final c in ((await _run('coins')) as List? ?? const []))
+          if (c is Map && c['asset'] == asset && c['state'] == 'live') c,
+      ];
+      final planned = plannedLeaves((await _run('plans')) as Map?);
+      final old = coins.where((c) => ((c['expiry'] as num?) ?? 0) < from).toList();
+      if (old.isEmpty) return false;
+      final kept = [for (final c in old) if (planned.contains('${c['leaf_id']}')) '${c['leaf_id']}'];
+      final free = [for (final c in old) if (!planned.contains('${c['leaf_id']}')) '${c['leaf_id']}'];
+      if (kept.isNotEmpty) d.release?.call(asset, kept);
+      if (free.isNotEmpty) {
+        final q = (await _run('quote', {'leaves': free, 'max_fee_ppm': kMaxFeePpm})) as Map?;
+        await _run('participate', {'leaves': free, 'max_fee_ppm': kMaxFeePpm, 'shown': q?['coins']});
+      }
+      _readyingSince[asset] = d.now();
+      d.log('[user trade] coins refreshed for a resting order: ${free.length + kept.length}');
+      return true;
+    } catch (e) {
+      d.log('[user trade] getting coins ready: $e');
+      return false;
+    }
+  }
+
+  /// A firm answer within [ms], or null: a source that answers later is let go of ([drop]), so the
+  /// offer it holds frees the maker's coins. The web wallet's `inTime`.
+  Future<Candidate?> _inTime(Future<Candidate?> f, int ms) {
+    var tooLate = false;
+    final settled = f.then<Candidate?>((c) {
+      if (tooLate) {
+        if (c != null) {
+          d.log('[user trade] a source answered after the quote, let go: ${c.source}');
+          drop(c);
+        }
+        return null;
+      }
+      return c;
+    }, onError: (Object e) {
+      d.log('[user trade] firm: $e');
+      return null;
+    });
+    return Future.any<Candidate?>([
+      settled,
+      Future.delayed(Duration(milliseconds: ms < 0 ? 0 : ms), () {
+        tooLate = true;
+        return null;
+      }),
+    ]);
+  }
+
+  /// What the wallet can pay of BTC for a trade now: what its Bitcoin Lightning holds.
+  Future<BigInt> _btcHave() async {
+    final b = _btc;
+    try {
+      return b == null ? BigInt.zero : await b.balance();
+    } catch (_) {
+      return BigInt.zero;
+    }
+  }
+
+  /// BTC at the wallet's own address, or on its way onto the ark, which it can move where trades pay from.
+  Future<BigInt> _btcAtAddress() async {
+    try {
+      return d.btcAtAddress == null ? BigInt.zero : await d.btcAtAddress!();
+    } catch (_) {
+      return BigInt.zero;
+    }
+  }
+
+  int get btcMoveBlocks {
+    try {
+      return d.btcMoveBlocks?.call() ?? 2;
+    } catch (_) {
+      return 2;
+    }
+  }
+
+  /// The ticket for paying [amount] of [pay] for [receive]: every source worth asking is asked for
+  /// firm terms at once, and the quote takes what has answered within [UserTradeDeps.quoteFirmMs] of
+  /// Review (the BTC desk alone, [kBtcOnlyFirmMs]); a late answer is let go of. The web wallet's
+  /// `quote`.
   Future<QuoteResult> quote({required String pay, required String receive, required BigInt amount}) async {
+    final started = DateTime.now().millisecondsSinceEpoch;
+    _tooOldFrom = null;
     if (amount <= BigInt.zero) return QuoteResult.no('too-small');
     final ad = await d.admitted();
     final sources = admittedSources(ad.pairs, ad.genesis, pay, receive);
     if (sources.isEmpty) return QuoteResult.no('not-listed');
-    // BTC is paid over the wallet's Bitcoin Lightning, never from a leaf.
+    final soonNow = soon;
+    // BTC is paid over the wallet's Bitcoin Lightning (in default mode its Bitcoin ark), never from a
+    // leaf. BTC the wallet holds at its address is moved there for the trade, by itself.
     BigInt have;
+    var moving = false;
     if (pay == kUserBtc) {
-      final b = _btc;
-      try {
-        have = b == null ? BigInt.zero : await b.balance();
-      } catch (_) {
-        have = BigInt.zero;
+      have = await _btcHave();
+      if (have < amount && d.btcMove != null) {
+        final atAddress = await _btcAtAddress();
+        if (atAddress > BigInt.zero) {
+          try {
+            d.btcMove!(amount - have);
+            moving = true;
+          } catch (e) {
+            d.log('[user trade] btc move: $e');
+          }
+          if (have <= BigInt.zero) return QuoteResult.no('btc-moving', moving: true);
+        }
       }
     } else {
       have = (await spendable())[pay] ?? BigInt.zero;
@@ -1084,15 +1313,22 @@ class UserTradeEngine {
       // What the wallet shows it holds, though no trade can pay from it now: the wallet is asked to
       // make it ready (default mode boards coins on the chain by itself).
       BigInt held = BigInt.zero;
-      if (pay != kUserBtc && d.held != null) {
+      if (d.held != null) {
         try {
           held = await d.held!(pay);
         } catch (_) {}
       }
+      try {
+        final f = figure?.call(pay);
+        if (f != null && f > held) held = f;
+      } catch (_) {}
+      // The leaves are not open yet (the app has just started): what they hold is not known to be
+      // payable or not, so the trade waits for them, priced again by itself.
+      if (held > BigInt.zero && pay != kUserBtc && d.leavesOpen != null && !d.leavesOpen!()) return QuoteResult.no('opening');
       if (held > BigInt.zero) {
         // Live coins an open offline-refresh plan keeps: the library pays them only in a round, so
         // the wallet gives them up in its next one for coins a trade can pay from.
-        if (pay != kUserBtc && await _freePlanned(pay)) return QuoteResult.no('freeing', soon: soon);
+        if (pay != kUserBtc && await _freePlanned(pay)) return QuoteResult.no('freeing', soon: soonNow);
         try {
           d.prepare?.call(pay);
         } catch (_) {}
@@ -1103,29 +1339,50 @@ class UserTradeEngine {
             if (coins.any((c) => c is Map && c['asset'] == pay && c['redoing'] == true)) return QuoteResult.no('redoing');
           } catch (_) {}
         }
-        return QuoteResult.no('not-ready', soon: soon);
+        return QuoteResult.no('not-ready', soon: soonNow);
       }
       return QuoteResult.no('no-funds');
     }
-    final es = await _entries(pay, receive, sources);
+    // The entries read for the estimate a moment ago stand: the firm terms are what the ticket shows.
+    final fresh = _estimates['$pay>$receive'];
+    final es = fresh != null && d.now() - fresh.at <= kEntriesFreshMs ? fresh.es : await _entries(pay, receive, sources);
     final limit = amount < have ? amount : have;
     final ind = [
       for (final e in es)
-        if (sizeEntry(e, limit) != null) (e: e, r: sizeEntry(e, limit)!.receive),
+        if ((e.source != 'btc-gateway' || _btc != null) && sizeEntry(e, limit) != null) (e: e, r: sizeEntry(e, limit)!.receive),
     ]..sort((a, b) => b.r.compareTo(a.r));
     // A maker quoting several levels of one pair is asked once, at the level that gives the most
     // for this size: each firm offer holds its coins.
     final seen = <String>{};
     ind.removeWhere((x) => x.e.maker != null && !seen.add('${x.e.maker}|${x.e.source}'));
-    // Firm terms of the best three that give them: an entry that cannot be firmed (a resting order
-    // the wallet's coins are too old for, a maker that ran short) makes way for the next.
+    // The amount would trade, but what the wallet can pay now is less than any offer takes: the rest
+    // of what it holds is not ready yet. Said so, never "too small".
+    if (ind.isEmpty && have < amount && es.any((e) => sizeEntry(e, amount) != null)) {
+      if (pay != kUserBtc && await _freePlanned(pay)) return QuoteResult.no('freeing', soon: soonNow);
+      if (pay == kUserBtc && moving) return QuoteResult.no('btc-moving', moving: true);
+      return QuoteResult.no('part-ready', ready: have, soon: soonNow);
+    }
+    // Firm terms of the best eight, all asked at once, within the quote's time: an entry that cannot
+    // be firmed, or that has not answered by then, is left out, and a late answer is let go of. When
+    // none gives firm terms and there is time left, they are asked once more a moment later.
+    final worth = ind.take(8).toList();
+    final btcOnly = worth.isNotEmpty && worth.every((x) => x.e.source == 'btc-gateway');
+    final window = btcOnly ? (d.btcOnlyFirmMs ?? kBtcOnlyFirmMs) : d.quoteFirmMs;
+    final w = math.max(window, d.quoteFirmMs);
+    // Wall-clock time: the person's wait (d.now may be a test's stand-in clock).
+    final int until = math.max(started + w, DateTime.now().millisecondsSinceEpoch + math.min(kQuoteFirmMinMs, w));
     final cands = <Candidate>[];
-    var tried = 0;
-    for (final x in ind) {
-      if (cands.length >= 3 || tried >= 8) break;
-      tried++;
-      final c = await _firm(x.e, pay, receive, amount, have);
-      if (c != null) cands.add(c);
+    for (var round = 0; round < 2 && cands.isEmpty; round++) {
+      if (round > 0) {
+        final left = until - DateTime.now().millisecondsSinceEpoch;
+        if (left < math.min(kFirmRetryMs + 2000, w ~/ 2)) break;
+        await d.sleep(kFirmRetryMs);
+      }
+      final got = await Future.wait(
+          worth.map((x) => _inTime(_firm(x.e, pay, receive, amount, have), until - DateTime.now().millisecondsSinceEpoch)));
+      for (final c in got) {
+        if (c != null) cands.add(c);
+      }
     }
     final best = chooseCandidate(cands);
     for (final c in cands) {
@@ -1133,8 +1390,14 @@ class UserTradeEngine {
     }
     // Less is free than the amount needs, and the rest is in coins an offline-refresh plan keeps:
     // those are freed through the wallet's next round, never called too small.
-    if (best == null && pay != kUserBtc && have < amount && await _freePlanned(pay)) return QuoteResult.no('freeing', soon: soon);
-    if (best == null) return QuoteResult.no(es.isEmpty ? 'not-offered' : 'too-small');
+    if (best == null && pay != kUserBtc && have < amount && await _freePlanned(pay)) return QuoteResult.no('freeing', soon: soonNow);
+    // No firm offer, and the resting orders refused the wallet's coins only for expiring before the
+    // order's coin: those are refreshed in the next round, and the trade is priced again once in.
+    if (best == null && _tooOldFrom != null && pay != kUserBtc && await _readyCoins(pay, _tooOldFrom!)) {
+      return QuoteResult.no('readying', soon: soonNow);
+    }
+    // Offered, but nobody gave firm terms: that is not the amount's fault.
+    if (best == null) return QuoteResult.no(es.isEmpty ? 'not-offered' : (ind.isNotEmpty ? 'no-firm-offer' : 'too-small'));
     return QuoteResult.ok(
       Ticket(
         payAsset: pay,
@@ -1146,6 +1409,7 @@ class UserTradeEngine {
         upTo: have < amount && best.give <= have ? have : null,
       ),
       best,
+      moving: moving,
     );
   }
 
@@ -1160,9 +1424,28 @@ class UserTradeEngine {
     }
   }
 
-  Future<Map<String, dynamic>> confirm(Candidate c, Ticket t) async {
+  /// Trades this engine is confirming now: their records read `confirming` while the step is taken,
+  /// and following them ([advance]) waits until it is.
+  final _confirmingNow = <String>{};
+  bool confirmingNow(Object? id) => _confirmingNow.contains('$id');
+
+  /// Confirms a ticket's choice. The record is written at once, so the trade shows in Open as
+  /// "Sending…" whatever the screen does next; [started] is told its id before the step is taken.
+  /// Answers the record once the one step is taken; [advance] follows it from there.
+  Future<Map<String, dynamic>> confirm(Candidate c, Ticket t, {void Function(String id)? started}) async {
     final id = '${d.now()}-${d.now().hashCode.toRadixString(16)}${(await records()).length}';
+    _confirmingNow.add(id);
     final rec = await _put({'id': id, 'at': d.now(), 'source': c.source, 'state': 'confirming', 'ticket': t.toJson()});
+    started?.call(id);
+    try {
+      return await _confirm(c, rec);
+    } finally {
+      _confirmingNow.remove(id);
+      _changes.add(null);
+    }
+  }
+
+  Future<Map<String, dynamic>> _confirm(Candidate c, Map<String, dynamic> rec) async {
     try {
       if (c.source == 'covenant-round') {
         rec['order'] = c.entry.id;
@@ -1300,6 +1583,8 @@ class UserTradeEngine {
 
   Future<Map<String, dynamic>> _advance(Map<String, dynamic> rec) async {
     if (['settled', 'returned', 'failed'].contains(rec['state'])) return rec;
+    // Its step is being taken here now: nothing to look for yet.
+    if (_confirmingNow.contains('${rec['id']}')) return rec;
     if (rec['state'] == 'confirming' && rec['source'] == 'btc-gateway') {
       if (rec['hash'] == null) {
         rec['state'] = 'failed';

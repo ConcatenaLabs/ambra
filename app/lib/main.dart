@@ -264,8 +264,21 @@ String _b64urlDecodeUtf8(String s) {
 
 /// Routes between boot, onboarding, lock, and the wallet shell based on the
 /// repository's state.
-class RootGate extends StatelessWidget {
+///
+/// Once the wallet has been opened, locking it covers the Shell with the lock screen rather than
+/// replacing it: the Shell stays mounted, hidden and not drawn, so whatever the person was doing (a
+/// trade being entered or priced, a form half filled) is there again when it is unlocked, as it is
+/// after any other trip to the background.
+class RootGate extends StatefulWidget {
   const RootGate({super.key});
+
+  @override
+  State<RootGate> createState() => _RootGateState();
+}
+
+class _RootGateState extends State<RootGate> {
+  /// The Shell has been shown in this run of the app (for the wallet now open).
+  bool _shellShown = false;
 
   @override
   Widget build(BuildContext context) {
@@ -274,9 +287,18 @@ class RootGate extends StatelessWidget {
       builder: (context, _) {
         final repo = WalletRepository.instance;
         if (repo.loading) return const _Boot();
-        if (!repo.hasWallet) return const WelcomeScreen();
-        if (!repo.unlocked) return const LockScreen();
-        return const Shell();
+        if (!repo.hasWallet) {
+          _shellShown = false;
+          return const WelcomeScreen();
+        }
+        if (repo.unlocked) _shellShown = true;
+        if (!_shellShown) return const LockScreen();
+        return Stack(fit: StackFit.expand, children: [
+          // Hidden while locked: not drawn, not reachable by touch or a screen reader, its
+          // animations paused.
+          Offstage(offstage: !repo.unlocked, child: TickerMode(enabled: repo.unlocked, child: const Shell(key: ValueKey('shell')))),
+          if (!repo.unlocked) const LockScreen(),
+        ]);
       },
     );
   }

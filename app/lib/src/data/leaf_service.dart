@@ -160,18 +160,24 @@ class LeafService extends ChangeNotifier {
       joined = false;
     }
     operator = await savedOperator();
+    debugPrint('[leaves] start: ${joined ? 'a leaf wallet is held' : 'none held yet'}');
     if (!joined) {
       notifyListeners();
       // User mode joins the default node's operator by itself, in the background.
       unawaited(autoJoin());
       return;
     }
+    final t0 = DateTime.now();
+    debugPrint('[leaves] opening');
     try {
       await leaves.leavesOpen(dir: dir, mnemonic: m, nodePassword: await nodePassword() ?? '');
       open = true;
       lastError = null;
+      debugPrint('[leaves] open in ${DateTime.now().difference(t0).inMilliseconds} ms');
+      await _setWatchtowers();
     } catch (e) {
       lastError = LeafRefusal.of(e);
+      debugPrint('[leaves] open refused after ${DateTime.now().difference(t0).inMilliseconds} ms: $e');
     }
     notifyListeners();
     if (open) {
@@ -639,6 +645,7 @@ class LeafService extends ChangeNotifier {
       open = true;
       lastError = null;
       info = out['info'] as Map<String, dynamic>?;
+      await _setWatchtowers();
       // Asked for, never waited on: the wallet goes on while the person answers.
       unawaited(Permission.notification.request().then((_) {}, onError: (_) {}));
       await _foreground(true);
@@ -650,6 +657,18 @@ class LeafService extends ChangeNotifier {
     } finally {
       busy = false;
       notifyListeners();
+    }
+  }
+
+  /// Gives the library the other operators' watchtowers ([Backend.defaultWatchtowers]) each time
+  /// the leaf wallet opens; a refusal changes nothing but that.
+  Future<void> _setWatchtowers() async {
+    final urls = Backend.defaultWatchtowers;
+    if (urls.isEmpty) return;
+    try {
+      await run('set_default_watchtowers', {'urls': urls});
+    } catch (e) {
+      debugPrint('[leaves] default watchtowers not set: $e');
     }
   }
 

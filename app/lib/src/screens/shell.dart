@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -82,6 +83,22 @@ class _ShellState extends State<Shell> {
     // either mode: its coins have dates to keep. User mode only hides the rail.
     DevMode.instance.addListener(_onMode);
     _loadMode();
+    _loadTab();
+  }
+
+  // The tab shown is kept, so an app the system closed in the background opens where the person
+  // left it (a trade being entered is on the Swap tab, kept by the composer itself).
+  static const _kTab = 'ambra.shell.tab';
+  Future<void> _loadTab() async {
+    try {
+      final t = (await SharedPreferences.getInstance()).getInt(_kTab);
+      if (t != null && t >= 0 && t <= 5 && mounted && _tab == 0) setState(() => _tab = t);
+    } catch (_) {}
+  }
+
+  void _setTab(int i) {
+    setState(() => _tab = i);
+    unawaited(SharedPreferences.getInstance().then((p) => p.setInt(_kTab, i)).catchError((_) => false));
   }
 
   Future<void> _loadMode() async {
@@ -167,12 +184,12 @@ class _ShellState extends State<Shell> {
       // first back press from Send/Swap/History/More.
       canPop: _tab == 0,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && mounted) setState(() => _tab = 0);
+        if (!didPop && mounted) _setTab(0);
       },
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: AmbraBackground(child: SafeArea(bottom: false, child: IndexedStack(index: _tab, children: tabs))),
-        bottomNavigationBar: _BottomBar(index: _tab, onTap: (i) => setState(() => _tab = i)),
+        bottomNavigationBar: _BottomBar(index: _tab, onTap: _setTab),
       ),
     );
   }

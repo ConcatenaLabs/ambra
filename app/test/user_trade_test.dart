@@ -69,6 +69,8 @@ class StandIn {
   }
 
   bool held = false;
+  int slowMs = 1500;
+  final slowReleased = <String>[];
 
   Future<Map<String, dynamic>> fetchJson(String url, {Map<String, dynamic>? post}) async {
     if (url.endsWith('/v1/quotes')) {
@@ -81,6 +83,18 @@ class StandIn {
     posts.add(url.split('/v1/').last);
     // The maker holds its coin for an offer until the offer is released, a moment after it is
     // asked to, and refuses a second offer meanwhile, as the live maker does.
+    // A second maker that answers a firm offer only after [slowMs].
+    if (url.startsWith('http://slow')) {
+      if (url.endsWith('/v1/release')) {
+        slowReleased.add('${post!['swap']}');
+        return {};
+      }
+      if (url.endsWith('/v1/firm')) {
+        await Future<void>.delayed(Duration(milliseconds: slowMs));
+        final give = BigInt.parse('${post!['give']}');
+        return {'swap': 'slow1', 'offer': 'swap-offer:$give:${give * BigInt.two}', 'give': '$give', 'want': '${give * BigInt.two}'};
+      }
+    }
     if (url.endsWith('/v1/release')) {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       held = false;
@@ -106,7 +120,7 @@ class StandIn {
   }
 
   UserTradeEngine engine({List<String> sources = const ['leaf-maker'], List<String> makers = const ['http://m'], required int Function() now,
-          Future<BigInt> Function(String)? held, void Function(String)? prepare, int? Function()? anchorDepth}) =>
+          Future<BigInt> Function(String)? held, void Function(String)? prepare, int? Function()? anchorDepth, int? quoteFirmMs}) =>
       UserTradeEngine(UserTradeDeps(
         run: run,
         fetchJson: fetchJson,
@@ -131,10 +145,62 @@ class StandIn {
         held: held,
         prepare: prepare,
         anchorDepth: anchorDepth,
+        quoteFirmMs: quoteFirmMs,
       ));
 }
 
 void main() {
+  // #163, #165: every source is asked at once, and one that has not answered by the quote's
+  // deadline is left out and let go of, never waited for.
+  test('quote: a source slower than the deadline is left out, the price comes from the others, and the late offer is released', () async {
+    final s = StandIn();
+    final eng = s.engine(makers: const ['http://m', 'http://slow'], now: () => DateTime.now().millisecondsSinceEpoch, quoteFirmMs: 400);
+    final t0 = DateTime.now();
+    final q = await eng.quote(pay: x, receive: y, amount: BigInt.from(400000));
+    final ms = DateTime.now().difference(t0).inMilliseconds;
+    expect(q.ok, isTrue, reason: q.why);
+    expect(ms, lessThan(1200), reason: 'the slow maker (1.5 s) was not waited for: $ms ms');
+    expect(s.slowReleased, isEmpty);
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
+    expect(s.slowReleased, ['slow1'], reason: 'its late offer is let go of, so its coins are free');
+  });
+
+  test('quote: nobody answers in time: a plain reason, within the deadline', () async {
+    final s = StandIn()..slowMs = 3000;
+    final eng = s.engine(makers: const ['http://slow'], now: () => DateTime.now().millisecondsSinceEpoch, quoteFirmMs: 300);
+    final t0 = DateTime.now();
+    final q = await eng.quote(pay: x, receive: y, amount: BigInt.from(400000));
+    expect(q.why, 'no-firm-offer');
+    expect(DateTime.now().difference(t0).inMilliseconds, lessThan(1500));
+    expect(forbiddenIn(UserWords.noFirmOffer), isEmpty);
+  });
+
+  // #165: a trade being confirmed is not looked for by a pass over open trades meanwhile (which
+  // would call it failed before its step is taken).
+  test('confirm: the record is there at once, and following it waits for its step', () async {
+    final s = StandIn();
+    var t = 0;
+    final eng = s.engine(now: () => t += 10);
+    final q = await eng.quote(pay: x, receive: y, amount: BigInt.from(400000));
+    String? id;
+    var wasConfirming = false;
+    Future<List<Map<String, dynamic>>>? passed;
+    final f = eng.confirm(q.choice!, q.ticket!, started: (i) {
+      id = i;
+      wasConfirming = eng.confirmingNow(i);
+      // A pass over open trades while the step is being taken.
+      passed = eng.resume();
+    });
+    final r = await f;
+    expect(wasConfirming, isTrue);
+    expect(r['state'], 'sent');
+    final seen = await passed!;
+    expect(seen.firstWhere((x) => x['id'] == id)['state'], 'confirming', reason: 'the pass left it alone');
+    expect(tradeStateWord(seen.firstWhere((x) => x['id'] == id), t), UserWords.sending);
+    expect((await eng.records()).firstWhere((x) => x['id'] == id)['state'], isNot('failed'));
+    expect(eng.confirmingNow(id), isFalse);
+  });
+
   test('no string the user composer shows names a rail or developer word', () {
     for (final w in UserWords.all()) {
       expect(forbiddenIn(w), isEmpty, reason: w);
@@ -266,12 +332,18 @@ void main() {
     expect(r.why, 'redoing');
     expect(UserWords.redoing('USDX'),
         'Your USDX is being redone after a Bitcoin reorganisation: it is still yours, and ready to trade again once that settles. Nothing has moved.');
-    for (final w in [UserWords.notReady('USDX', true), UserWords.freeing('GOLD', true), UserWords.redoing('USDX'), UserWords.receivedSoon]) {
+    for (final w in [UserWords.notReady('USDX', true), UserWords.freeing('GOLD', true), UserWords.redoing('USDX'), UserWords.received]) {
       expect(forbiddenIn(w), isEmpty, reason: w);
     }
     final rec = {'source': 'leaf-maker', 'state': 'sent', 'sentAt': 0, 'swapState': 'done'};
-    expect(tradeStateWord(rec, 30000, soon: true), UserWords.receivedSoon);
-    expect(tradeStateWord(rec, 30000), UserWords.receivedSettling);
+    // One word for a received trade on every surface, with no promise of a time (#167).
+    expect(tradeStateWord(rec, 30000), UserWords.received);
+    expect(tradeStateWord(rec, 3 * 60000), '${UserWords.received} (3 min)');
+    expect(tradeStateWord({...rec, 'settleState': ['pending']}, 12 * 60000), '${UserWords.receivedSlow} (12 min)');
+    for (final w in UserWords.all()) {
+      expect(w, isNot(contains('minute or two) ')), reason: w);
+      expect(w.contains('Settled after') || w.contains('Settled in'), isFalse, reason: w);
+    }
   });
 
   test('engine: a maker quoting levels of one pair is asked for one firm offer, at the level that gives the most', () async {

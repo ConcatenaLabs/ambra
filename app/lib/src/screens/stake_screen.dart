@@ -6,7 +6,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../data/dev_mode.dart';
+import '../data/leaf_service.dart';
+import '../data/on_chain_need.dart';
 import '../data/reward_convert.dart';
+import '../data/stake_words.dart';
 import '../rust/api/rewards.dart' as rewards_api;
 import 'package:http/http.dart' as http;
 
@@ -28,6 +32,10 @@ import '../widgets/widgets.dart';
 /// a stake of this wallet's key under either.
 final BigInt _minStakeAtoms = BigInt.from(40000) * BigInt.from(100000000);
 const int _unbondCsv = (1 << 22) | 2532;
+
+/// What is moved out of the Ark beyond the stake itself, for its network fee when that is paid in
+/// tSEQ (0.1 tSEQ: far above any fee the network takes for one stake).
+final BigInt _stakeFeeMargin = BigInt.from(10000000);
 
 class StakeScreen extends StatefulWidget {
   const StakeScreen({super.key});
@@ -125,13 +133,59 @@ class _StakeScreenState extends State<StakeScreen> {
 
   void _snack(String s) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
 
+  /// The tSEQ the wallet holds on the chain now.
+  Future<BigInt> _onChainTseq() async {
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m == null) return BigInt.zero;
+    final s = await core.syncWallet(mnemonic: m, esploraUrl: Backend.esplora);
+    var tseq = BigInt.zero;
+    for (final b in s.balances) {
+      if (b.assetId == SeqAssets.policy) tseq = BigInt.tryParse(b.atoms) ?? BigInt.zero;
+    }
+    if (mounted) setState(() => _tseq = tseq);
+    return tseq;
+  }
+
+  /// What the wallet holds of tSEQ wherever it is held: on the chain and in the Ark.
+  BigInt get _tseqHeld => _tseq + LeafService.instance.spendableAtoms(SeqAssets.policy);
+
+  String? _status;
+
   Future<void> _stake() async {
+    final plain = !DevMode.instance.on;
     final atoms = parseAtoms(_amount.text, 8);
-    if (atoms == null || atoms < _minStakeAtoms) return _snack('Minimum stake is 40,000 tSEQ');
+    if (atoms == null || atoms < _minStakeAtoms) return _snack(plain ? StakeWords.tooLittle('40,000') : 'Minimum stake is 40,000 tSEQ');
     if (atoms >= (BigInt.one << 64)) return _snack('Amount is too large');
     final key = _stakerKey;
     if (key == null) return _snack('Staker key not ready; try again');
-    if (_tseq <= atoms) {
+    // What the stake moves, and a margin for its fee when the fee is paid in tSEQ.
+    final need = atoms + _stakeFeeMargin;
+    if (plain) {
+      setState(() => _busy = true);
+      try {
+        await ensureOnChain(
+          asset: SeqAssets.policy,
+          ticker: 'tSEQ',
+          precision: 8,
+          need: need,
+          onChain: _onChainTseq,
+          purpose: StakeWords.purposeStake,
+          say: (t) {
+            if (mounted) setState(() => _status = t);
+          },
+        );
+      } on OnChainRefusal catch (e) {
+        if (mounted) setState(() => _status = e.message);
+        return;
+      } catch (e) {
+        if (mounted) setState(() => _status = friendlyError(e));
+        return;
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      if (!mounted) return;
+      setState(() => _status = null);
+    } else if (_tseq <= atoms) {
       return _snack('Not enough tSEQ. You need the staked amount plus a network fee.');
     }
 
@@ -139,12 +193,14 @@ class _StakeScreenState extends State<StakeScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: AmbraColors.panel,
-        title: const Text('Confirm stake', style: AmbraText.title),
+        title: Text(plain ? StakeWords.reviewTitle(formatAtoms(atoms.toString(), 8)) : 'Confirm stake', style: AmbraText.title),
         content: Text(
-          'Stake ${formatAtoms(atoms.toString(), 8)} tSEQ to staker key '
-          '${key.substring(0, 16)}…\n\n'
-          'Staked tSEQ counts in your balance but cannot be spent: it is locked for about 15 days. '
-          'After that you can unbond it here, and it returns to your wallet about two weeks later.',
+          plain
+              ? StakeWords.reviewBody
+              : 'Stake ${formatAtoms(atoms.toString(), 8)} tSEQ to staker key '
+                  '${key.substring(0, 16)}…\n\n'
+                  'Staked tSEQ counts in your balance but cannot be spent: it is locked for about 15 days. '
+                  'After that you can unbond it here, and it returns to your wallet about two weeks later.',
           style: AmbraText.muted,
         ),
         actions: [
@@ -173,7 +229,7 @@ class _StakeScreenState extends State<StakeScreen> {
           ));
       if (mounted) {
         _amount.clear();
-        _snack('Staked · ${txid.substring(0, 16)}…');
+        _snack(DevMode.instance.on ? 'Staked · ${txid.substring(0, 16)}…' : StakeWords.staked(formatAtoms(atoms.toString(), 8)));
         _load();
       }
     } catch (e) {
@@ -183,6 +239,61 @@ class _StakeScreenState extends State<StakeScreen> {
     }
   }
 
+  Widget _section(String title, String body, {Key? key}) => Padding(
+        key: key,
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text(title, style: AmbraText.title),
+          const SizedBox(height: 6),
+          Text(body, style: AmbraText.muted),
+        ]),
+      );
+
+  /// Default mode: what staking is for, how much, where, what it costs and how to get it back, then
+  /// the stake (step 1), the pool it makes blocks through (step 2), the stakes held, and rewards.
+  Widget _plainBody() {
+    return Column(children: [
+      Expanded(
+        child: ListView(key: const ValueKey('stakePlain'), padding: const EdgeInsets.all(20), children: [
+          _section(StakeWords.whatTitle, StakeWords.what, key: const ValueKey('stakeWhat')),
+          _section(StakeWords.howMuchTitle, StakeWords.howMuch('40,000', formatAtoms('$_tseqHeld', 8)), key: const ValueKey('stakeHowMuch')),
+          _section(StakeWords.whereTitle, StakeWords.where),
+          _section(StakeWords.costTitle, StakeWords.cost),
+          _section(StakeWords.backTitle, StakeWords.back),
+          const SizedBox(height: 8),
+          const Text(StakeWords.step1, style: AmbraText.title),
+          const SizedBox(height: 8),
+          AmbraField(label: StakeWords.amount, controller: _amount, hint: '40000'),
+          if (_status != null) ...[
+            const SizedBox(height: 10),
+            Text(_status!, key: const ValueKey('stakeStatus'), style: AmbraText.muted),
+          ],
+          const SizedBox(height: 12),
+          PrimaryButton(
+              key: const ValueKey('stakeReview'),
+              label: StakeWords.review,
+              busy: _busy,
+              icon: Icons.lock_outline,
+              onPressed: _busy ? null : _stake),
+          const SizedBox(height: 26),
+          const _PoolSection(plain: true),
+          const SizedBox(height: 26),
+          const StakesSection(plain: true),
+          const SizedBox(height: 26),
+          RewardsCard(
+            totals: _rewardTotals,
+            rows: _rewardRows,
+            maturity: _maturity,
+            onChanged: () async {
+              final m = await WalletRepository.instance.readMnemonic();
+              if (m != null) await _loadRewards(m);
+            },
+          ),
+        ]),
+      ),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -190,11 +301,13 @@ class _StakeScreenState extends State<StakeScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text('Stake', style: AmbraText.title),
+        title: const Text(StakeWords.title, style: AmbraText.title),
         iconTheme: const IconThemeData(color: AmbraColors.dim),
       ),
       body: AmbraBackground(
-        child: Column(children: [
+        child: !DevMode.instance.on
+            ? _plainBody()
+            : Column(children: [
           Expanded(
             child: ListView(padding: const EdgeInsets.all(20), children: [
               const Text(
@@ -267,7 +380,10 @@ class _Kv extends StatelessWidget {
 /// the wallet once the unbonding period has passed (2,016 Bitcoin blocks, counted
 /// from the Bitcoin block the unbond's own block anchors to).
 class StakesSection extends StatefulWidget {
-  const StakesSection({super.key, this.autoLoad = true});
+  const StakesSection({super.key, this.autoLoad = true, this.plain = false});
+
+  /// Default mode's words ([StakeWords]).
+  final bool plain;
 
   /// Read the stakes from the chain when shown (off in widget tests, which set
   /// [StakeHoldings] themselves).
@@ -343,7 +459,13 @@ class _StakesSectionState extends State<StakesSection> {
 
   Future<void> _step(core.StakeEntry s, {required bool unbond}) async {
     final amount = '${formatAtoms(s.value.toString(), 8)} tSEQ';
-    final ok = unbond
+    final plain = widget.plain;
+    final n = formatAtoms(s.value.toString(), 8);
+    final ok = plain
+        ? (unbond
+            ? await _confirm(StakeWords.takeBackTitle(n), StakeWords.takeBackBody, StakeWords.takeBack)
+            : await _confirm(StakeWords.returnTitle(n), StakeWords.returnBody, StakeWords.returnToWallet))
+        : unbond
         ? await _confirm(
             'Unbond $amount?',
             'It stops counting as stake once this confirms, and returns to your wallet about two '
@@ -367,7 +489,7 @@ class _StakesSectionState extends State<StakesSection> {
           : await core.buildUnbondClaim(
               mnemonic: m, esploraUrl: Backend.esplora, anchorUrl: Backend.anchorBase, txid: s.txid, vout: s.vout);
       final txid = await core.broadcastStakeStep(esploraUrl: Backend.esplora, txHex: raw);
-      _snack('${unbond ? 'Unbonding' : 'Returning to your wallet'} · ${txid.substring(0, 16)}…');
+      _snack(plain ? (unbond ? StakeWords.takeBack : StakeWords.returnToWallet) : '${unbond ? 'Unbonding' : 'Returning to your wallet'} · ${txid.substring(0, 16)}…');
       await _load();
     } catch (e) {
       _snack('Failed: ${friendlyError(e)}');
@@ -381,7 +503,7 @@ class _StakesSectionState extends State<StakesSection> {
     final list = _h.stakes;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
-        const Expanded(child: Text('Your stakes', style: AmbraText.title)),
+        Expanded(child: Text(widget.plain ? StakeWords.yours : 'Your stakes', style: AmbraText.title)),
         IconButton(
           onPressed: _loading ? null : _load,
           icon: const Icon(Icons.refresh, color: AmbraColors.dim, size: 20),
@@ -390,14 +512,14 @@ class _StakesSectionState extends State<StakesSection> {
       ]),
       const SizedBox(height: 8),
       if (_loading && list.isEmpty)
-        const Padding(padding: EdgeInsets.all(12), child: Text('Looking for your stakes…', style: AmbraText.muted))
+        const Padding(padding: EdgeInsets.all(12), child: Text(StakeWords.looking, style: AmbraText.muted))
       else if (list.isEmpty)
         Padding(
           padding: const EdgeInsets.all(12),
           child: Text(
               _h.error != null && _h.readAt == null
                   ? 'Could not read your stakes: ${friendlyError(_h.error!)}'
-                  : 'No stakes yet. A stake made with this recovery phrase in any Sequentia wallet appears here.',
+                  : StakeWords.none,
               style: AmbraText.muted),
         )
       else
@@ -412,14 +534,14 @@ class _StakesSectionState extends State<StakesSection> {
                   Expanded(
                       child: Text('${formatAtoms(s.value.toString(), 8)} tSEQ',
                           style: AmbraText.mono.copyWith(color: AmbraColors.txt, fontWeight: FontWeight.w700))),
-                  Text('${s.txid.substring(0, 8)}…', style: AmbraText.sub),
+                  if (!widget.plain) Text('${s.txid.substring(0, 8)}…', style: AmbraText.sub),
                 ]),
                 const SizedBox(height: 6),
-                Text(stakeStatusText(s, tip: _tip), style: AmbraText.sub),
+                Text(widget.plain ? plainStakeStatus(s, tip: _tip) : stakeStatusText(s, tip: _tip), style: AmbraText.sub),
                 if (s.state == 'unbondable' || s.state == 'claimable') ...[
                   const SizedBox(height: 10),
                   PrimaryButton(
-                    label: s.state == 'unbondable' ? 'Unbond' : 'Return to wallet',
+                    label: s.state == 'unbondable' ? (widget.plain ? StakeWords.takeBack : 'Unbond') : 'Return to wallet',
                     busy: _busy == s.txid,
                     icon: s.state == 'unbondable' ? Icons.lock_open : Icons.south_west,
                     onPressed: _busy != null ? null : () => _step(s, unbond: s.state == 'unbondable'),
@@ -483,7 +605,10 @@ class _Pool {
 /// producing them, which a phone cannot promise, so it lives only in the node
 /// wallet.
 class _PoolSection extends StatefulWidget {
-  const _PoolSection();
+  const _PoolSection({this.plain = false});
+
+  /// Default mode: plain words, each pool by whether it is producing and what it pays, no keys.
+  final bool plain;
   @override
   State<_PoolSection> createState() => _PoolSectionState();
 }
@@ -492,6 +617,10 @@ class _PoolSection extends StatefulWidget {
 /// a source of truth: a pool with no weight and no announced policy never
 /// appears on the board, so nothing else would remember its key.
 const _hintKey = StakeHoldings.hintKey;
+
+/// What a first membership needs of tSEQ on the chain: its small payment to the staking key and the
+/// network fee (0.1 tSEQ, far above both).
+final BigInt _joinNeed = BigInt.from(10000000);
 
 Future<List<String>> _loadHints() async {
   try {
@@ -597,30 +726,74 @@ class _PoolSectionState extends State<_PoolSection> {
     return null;
   }
 
+  String? _status;
+
   Future<void> _delegate() async {
+    final plain = widget.plain;
     final target = _selected;
-    if (target == null) return _snack('Choose a pool first');
+    if (target == null) return _snack(plain ? StakeWords.chooseFirst : 'Choose a pool first');
     final d = _deleg;
     if (d != null && d.signer == target) return _snack('You are already in that pool');
+    if (plain && StakeHoldings.instance.stakes.isEmpty) return _snack(StakeWords.noStakeYet);
 
     final moving = d != null;
+    // A first membership is a small payment of the wallet's own tSEQ on the chain: moved out of the
+    // Ark first when none is there.
+    if (plain && !moving) {
+      setState(() => _busy = true);
+      try {
+        await ensureOnChain(
+          asset: SeqAssets.policy,
+          ticker: 'tSEQ',
+          precision: 8,
+          need: _joinNeed,
+          onChain: () async {
+            final m = await WalletRepository.instance.readMnemonic();
+            if (m == null) return BigInt.zero;
+            final s = await core.syncWallet(mnemonic: m, esploraUrl: Backend.esplora);
+            for (final b in s.balances) {
+              if (b.assetId == SeqAssets.policy) return BigInt.tryParse(b.atoms) ?? BigInt.zero;
+            }
+            return BigInt.zero;
+          },
+          purpose: StakeWords.purposeJoin,
+          say: (t) {
+            if (mounted) setState(() => _status = t);
+          },
+        );
+        if (mounted) setState(() => _status = null);
+      } on OnChainRefusal catch (e) {
+        if (mounted) setState(() => _status = e.message);
+        return;
+      } catch (e) {
+        if (mounted) setState(() => _status = friendlyError(e));
+        return;
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      if (!mounted) return;
+    }
+    final name = StakeWords.poolName(target);
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: AmbraColors.panel,
-        title: Text(moving ? 'Move to this pool?' : 'Delegate to this pool?', style: AmbraText.title),
+        title: Text(plain ? (moving ? StakeWords.moveTitle(name) : StakeWords.joinTitle(name)) : (moving ? 'Move to this pool?' : 'Delegate to this pool?'),
+            style: AmbraText.title),
         content: Text(
-          'Your stake’s block-signing rights go to ${target.substring(0, 16)}…\n\n'
-          'Your coins do NOT move, and this pool can never spend them: only this wallet can. '
-          'You can take the rights back at any time, immediately, without the pool’s cooperation.\n\n'
-          'What you are trusting it for is the reward. Check what it has committed to paying.',
+          plain
+              ? StakeWords.joinBody
+              : 'Your stake’s block-signing rights go to ${target.substring(0, 16)}…\n\n'
+                  'Your coins do NOT move, and this pool can never spend them: only this wallet can. '
+                  'You can take the rights back at any time, immediately, without the pool’s cooperation.\n\n'
+                  'What you are trusting it for is the reward. Check what it has committed to paying.',
           style: AmbraText.muted,
         ),
         actions: [
           GhostButton(label: 'Cancel', onPressed: () => Navigator.pop(context, false)),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(moving ? 'Move' : 'Delegate',
+            child: Text(plain ? (moving ? StakeWords.move : StakeWords.join) : (moving ? 'Move' : 'Delegate'),
                 style: const TextStyle(color: AmbraColors.amber2, fontWeight: FontWeight.w700)),
           ),
         ],
@@ -642,10 +815,10 @@ class _PoolSectionState extends State<_PoolSection> {
             mnemonic: m, esploraUrl: Backend.esplora, rotateTo: target,
             probeSigners: await _probeSigners());
         final txid = await core.xchainSeqBroadcast(seqEsplora: Backend.esplora, txHex: raw);
-        _snack('Moving pool · ${txid.substring(0, 16)}…');
+        _snack(plain ? StakeWords.moved(name) : 'Moving pool · ${txid.substring(0, 16)}…');
       } else {
         final txid = await _join(target);
-        _snack('Delegated · ${txid.substring(0, 16)}…');
+        _snack(plain ? StakeWords.joined(name) : 'Delegated · ${txid.substring(0, 16)}…');
       }
       await _load();
     } catch (e) {
@@ -684,10 +857,12 @@ class _PoolSectionState extends State<_PoolSection> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: AmbraColors.panel,
-        title: const Text('Leave this pool?', style: AmbraText.title),
-        content: const Text(
-          'Your stake’s weight counts for you again from the next confirmation, and the pool loses it.\n\n'
-          'This does NOT unstake: your coins were never moved by delegating and are not moved now.',
+        title: Text(widget.plain ? StakeWords.leaveTitle : 'Leave this pool?', style: AmbraText.title),
+        content: Text(
+          widget.plain
+              ? StakeWords.leaveBody
+              : 'Your stake’s weight counts for you again from the next confirmation, and the pool loses it.\n\n'
+                  'This does NOT unstake: your coins were never moved by delegating and are not moved now.',
           style: AmbraText.muted,
         ),
         actions: [
@@ -709,7 +884,7 @@ class _PoolSectionState extends State<_PoolSection> {
           mnemonic: m, esploraUrl: Backend.esplora, rotateTo: null,
           probeSigners: await _probeSigners());
       final txid = await core.xchainSeqBroadcast(seqEsplora: Backend.esplora, txHex: raw);
-      _snack('Left the pool · ${txid.substring(0, 16)}…');
+      _snack(widget.plain ? StakeWords.left : 'Left the pool · ${txid.substring(0, 16)}…');
       await _load();
     } catch (e) {
       _snack('Failed: ${friendlyError(e)}');
@@ -768,8 +943,87 @@ class _PoolSectionState extends State<_PoolSection> {
     return ' · ${(pct.toInt() / 10).toStringAsFixed(1)}% of the network';
   }
 
+  /// Default mode's pool list: each pool by whether it is producing, its share of all stake and its
+  /// members, and what it pays, in words; none chosen until the person chooses.
+  Widget _plainBuild() {
+    final d = _deleg;
+    final open = _pools.where((p) => p.declared).toList();
+    final cur = _currentPool;
+    return Column(key: const ValueKey('poolsPlain'), crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        const Expanded(child: Text(StakeWords.step2, style: AmbraText.title)),
+        IconButton(
+          onPressed: _loading ? null : _load,
+          icon: const Icon(Icons.refresh, color: AmbraColors.dim, size: 20),
+          tooltip: 'Reload',
+        ),
+      ]),
+      if (d != null) ...[
+        AmbraCard(
+          padding: const EdgeInsets.all(14),
+          child: Text(
+              d.confirmed ? '${StakeWords.inPool} ${StakeWords.poolName(d.signer)}.' : StakeWords.joining,
+              key: const ValueKey('poolCurrent'),
+              style: AmbraText.body),
+        ),
+        if (cur?.pendingBlocks != null) ...[
+          const SizedBox(height: 8),
+          WarnCallout(StakeWords.changing(cur!.pendingBlocks!)),
+        ],
+        const SizedBox(height: 10),
+      ],
+      if (_status != null) ...[
+        Text(_status!, key: const ValueKey('poolStatus'), style: AmbraText.muted),
+        const SizedBox(height: 10),
+      ],
+      if (_loading && _pools.isEmpty)
+        const Padding(padding: EdgeInsets.all(12), child: Text('…', style: AmbraText.muted))
+      else if (open.isEmpty)
+        const Padding(padding: EdgeInsets.all(12), child: Text(StakeWords.noPools, style: AmbraText.muted))
+      else
+        for (final p in open)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: InkWell(
+              key: ValueKey('pool-${p.signer.substring(0, 8)}'),
+              onTap: () => setState(() => _selected = p.signer),
+              child: AmbraCard(
+                padding: const EdgeInsets.all(14),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Expanded(child: Text(StakeWords.poolName(p.signer), style: AmbraText.body)),
+                    if (_selected == p.signer || (d != null && d.signer == p.signer))
+                      const Icon(Icons.check_circle, color: AmbraColors.amber2, size: 18),
+                  ]),
+                  const SizedBox(height: 6),
+                  Text(poolVerdict(reliability: p.reliability, eligible: p.eligible, weight: p.weight),
+                      style: const TextStyle(color: AmbraColors.amber2, fontSize: 13, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  Text([?poolShare(p.weight, _networkWeight), StakeWords.members(p.delegators)].join(' · '), style: AmbraText.sub),
+                  const SizedBox(height: 4),
+                  Text(poolPayout(p.payout), style: AmbraText.sub),
+                ]),
+              ),
+            ),
+          ),
+      const SizedBox(height: 12),
+      PrimaryButton(
+        key: const ValueKey('poolJoin'),
+        label: d == null ? StakeWords.join : StakeWords.move,
+        busy: _busy,
+        icon: Icons.groups_outlined,
+        onPressed: _busy || _selected == null || (d != null && d.signer == _selected) ? null : _delegate,
+      ),
+      if (d != null) ...[
+        const SizedBox(height: 10),
+        GhostButton(label: StakeWords.leave, onPressed: _busy ? null : _leave),
+      ],
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (widget.plain) return _plainBuild();
     final d = _deleg;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Text('Staking pool', style: AmbraText.title),

@@ -151,8 +151,9 @@ class StandIn {
   }
 }
 
-UserTradeEngine engine(StandIn s, String pay, String receive, {bool btc = true}) {
-  final fb = FakeBtc(s);
+UserTradeEngine engine(StandIn s, String pay, String receive,
+    {bool btc = true, BtcLightning? withBtc, Future<BigInt> Function()? btcAtAddress, void Function(BigInt)? btcMove}) {
+  final fb = withBtc ?? FakeBtc(s);
   return UserTradeEngine(UserTradeDeps(
     run: s.run,
     fetchJson: s.fetchJson,
@@ -173,7 +174,18 @@ UserTradeEngine engine(StandIn s, String pay, String receive, {bool btc = true})
     read: () async => s.stored,
     write: (v) async => s.stored = v,
     btc: () => btc ? fb : null,
+    btcAtAddress: btcAtAddress,
+    btcMove: btcMove,
+    btcMoveBlocks: () => 2,
   ));
+}
+
+/// A [FakeBtc] holding [held] sats where a trade's BTC is paid from.
+class HeldBtc extends FakeBtc {
+  HeldBtc(super.s, this.held);
+  final BigInt held;
+  @override
+  Future<BigInt> balance() async => held;
 }
 
 /// A [FakeBtc] that notes which rail paid.
@@ -223,6 +235,34 @@ class RailBtc extends FakeBtc {
 }
 
 void main() {
+  // #162: BTC held at the wallet's address, none where trades pay BTC from, is never "no BTC": the
+  // wallet moves it there for the trade, and says so.
+  test('BTC at the address and none on the ark: moved for the trade, never "You have no BTC"', () async {
+    final s = StandIn()..makerSats = BigInt.from(50000);
+    final moved = <BigInt>[];
+    final eng = engine(s, 'BTC', x,
+        withBtc: HeldBtc(s, BigInt.zero), btcAtAddress: () async => BigInt.from(17700000000), btcMove: moved.add);
+    final q = await eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
+    expect(q.why, 'btc-moving');
+    expect(moved, [BigInt.from(50000)], reason: 'the trade asks for what it pays to be moved');
+    expect(UserWords.btcMoving(2), 'Your BTC is being moved so it can be traded. It is ready after 2 Bitcoin blocks. Nothing has moved yet.');
+    // Nothing at the address either: then, and only then, there is none.
+    final none = engine(s, 'BTC', x, withBtc: HeldBtc(s, BigInt.zero), btcAtAddress: () async => BigInt.zero, btcMove: moved.add);
+    expect((await none.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000))).why, 'no-funds');
+  });
+
+  test('BTC: part on the ark, more at the address: a ticket for what the ark pays, and the rest moved', () async {
+    final s = StandIn()..makerSats = BigInt.from(30000);
+    final moved = <BigInt>[];
+    final eng = engine(s, 'BTC', x,
+        withBtc: HeldBtc(s, BigInt.from(30000)), btcAtAddress: () async => BigInt.from(17700000000), btcMove: moved.add);
+    final q = await eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
+    expect(q.ok, isTrue, reason: q.why);
+    expect(q.moving, isTrue);
+    expect(q.ticket!.upTo, BigInt.from(30000));
+    expect(moved, [BigInt.from(20000)]);
+  });
+
   test('selling for BTC: the wallet\'s hash, its leaf pays first, and the preimage goes to the operator once the BTC came', () async {
     final s = StandIn();
     final eng = engine(s, x, 'BTC');
@@ -442,7 +482,7 @@ void main() {
     expect(tradeStateWord({'state': 'waiting', 'source': 'btc-gateway', 'waitingSince': t - 30000}, t), UserWords.waitingOther);
     expect(tradeStateWord({'state': 'waiting', 'source': 'btc-gateway', 'waitingSince': 0}, t), '${UserWords.waitingOther} (10 min)');
     expect(tradeStateWord({'state': 'sent', 'source': 'btc-gateway', 'dir': 'buy', 'preimage': p, 'receiveState': 'received', 'sentAt': t - 120000}, t),
-        '${UserWords.receivedSettling} (2 min)');
+        '${UserWords.received} (2 min)');
     expect(tradeStateWord({'state': 'sent', 'source': 'leaf-maker', 'sentAt': t}, t), UserWords.sent);
     expect(tradeStateWord({'state': 'returned', 'feesPaid': [{'asset': x, 'atoms': '1'}]}, t), isNull);
     expect(tradeStateWord({'state': 'settled'}, t), UserWords.settled);
