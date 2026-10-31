@@ -28,6 +28,9 @@ class DefaultWords {
   static String arriving(String amount, String ticker) => '$amount $ticker arriving';
   /// Held, spendable before, and taken back out of the chain with the Bitcoin block it rested on.
   static String redoing(String amount, String ticker) => '$amount $ticker being redone after a Bitcoin reorganisation';
+  /// Not refreshed while the wallet was away: taken on the chain under its own key before it could
+  /// be swept, and put back by itself once the wallet is open again. Part of the figure meanwhile.
+  static String keptSafe(String amount, String ticker) => '$amount $ticker moved out of the Ark to keep it safe while you were away';
   /// Held where it cannot be sent in seconds (a wallet made before), on its way to where it can.
   static String moving(String amount, String ticker) => 'Moving $amount $ticker so it can be sent in seconds.';
   static String received(String amount, String ticker) => 'Received $amount $ticker.';
@@ -66,7 +69,7 @@ class DefaultWords {
         receiveCode, receiveCodeLine, copyCode, codeCopied, newCode, amountInBtc,
         recipient, recipientHint, review('5', 'USDX'), reviewLine, sent('5', 'USDX', 1.2), stillArriving('USDX'),
         codeTakesAssets, addressNotNow, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)),
-        fee('5', 'USDX'), arriving('5', 'USDX'), redoing('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
+        fee('5', 'USDX'), arriving('5', 'USDX'), redoing('5', 'USDX'), keptSafe('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
         arrivesAfterBlock, noFees, btcSentAfterBlock('0.001'),
         btcUpTo('0.001'), couldNotSend, byAddress(arrivesAfterBlock), arrivesNextBlock, moving('0.001', 'BTC'),
         payWaiting, payCameBack, onItsWay, notPaid, cameBack,

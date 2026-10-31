@@ -20,6 +20,17 @@ void main() {
     expect(redoingAtomsOf(null), isEmpty);
   });
 
+  test('a coin kept safe while the wallet was away is read from the library balance', () {
+    final balance = {
+      'arca': {
+        'a': {'exiting': '2000000', 'kept_safe': '2000000'},
+        'b': {'live': '9'},
+      },
+    };
+    expect(keptSafeAtomsOf(balance), {'a': BigInt.from(2000000)});
+    expect(keptSafeAtomsOf(null), isEmpty);
+  });
+
   group('LeafRefusal.of', () {
     test('reads the library refusal in its own words', () {
       final r = LeafRefusal.of(_FrbLike(

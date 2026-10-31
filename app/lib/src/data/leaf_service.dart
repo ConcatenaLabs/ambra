@@ -524,6 +524,10 @@ class LeafService extends ChangeNotifier {
   /// then taken out of the chain with the Bitcoin block their round's block anchors to).
   Map<String, BigInt> redoingAtoms() => redoingAtomsOf(coins);
 
+  /// What was moved out to keep it safe while the wallet was away (the library's balance
+  /// `kept_safe`), until the library has put it back.
+  Map<String, BigInt> keptSafeAtoms() => keptSafeAtomsOf(balance);
+
   /// The operator's anchor depth as the library follows it (`info.anchor_depth`; 0: a coin is
   /// spendable once its block is certified), or null before the library has said.
   int? anchorDepth() {
@@ -1357,6 +1361,21 @@ Map<String, BigInt> redoingAtomsOf(List<dynamic>? coins) {
     if (c is! Map || c['redoing'] != true || c['asset'] == null) continue;
     final n = BigInt.tryParse('${c['value'] ?? 0}') ?? BigInt.zero;
     out['${c['asset']}'] = (out['${c['asset']}'] ?? BigInt.zero) + n;
+  }
+  return out;
+}
+
+/// What of each asset the library's [balance] counts as `kept_safe`: taken on the chain under its
+/// owner's key while the wallet was away, being put back. Still the wallet's, and counted.
+Map<String, BigInt> keptSafeAtomsOf(Map? balance) {
+  final out = <String, BigInt>{};
+  final arca = balance is Map ? balance['arca'] : null;
+  if (arca is! Map) return out;
+  for (final e in arca.entries) {
+    final states = e.value;
+    if (states is! Map) continue;
+    final n = BigInt.tryParse('${states['kept_safe'] ?? 0}') ?? BigInt.zero;
+    if (n > BigInt.zero) out['${e.key}'] = n;
   }
   return out;
 }
