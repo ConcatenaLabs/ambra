@@ -390,6 +390,7 @@ class _BalanceTabState extends State<BalanceTab> {
     // asset with nothing yet but something arriving still gets its row.
     final arriving = LeafService.instance.joined ? LeafService.instance.arrivingAtoms() : const <String, BigInt>{};
     final redoing = LeafService.instance.joined ? LeafService.instance.redoingAtoms() : const <String, BigInt>{};
+    final keptSafe = LeafService.instance.joined ? LeafService.instance.keptSafeAtoms() : const <String, BigInt>{};
     final onchainOf = {
       for (final b in onchainBalances ?? const <core.AssetBalance>[])
         b.assetId: LeafService.instance.onchainLessBoards(b.assetId, BigInt.tryParse(b.atoms) ?? BigInt.zero)
@@ -527,6 +528,7 @@ class _BalanceTabState extends State<BalanceTab> {
                     frozen: LeafService.instance.joined ? LeafService.instance.frozenAtoms(h) : BigInt.zero,
                     arriving: arriving[h],
                     redoing: redoing[h],
+                    keptSafe: keptSafe[h],
                     moving: moving[h],
                     channels: _lnChannels,
                     onChanged: _refresh,
@@ -563,6 +565,7 @@ class _AssetRow extends StatefulWidget {
       this.frozen,
       this.arriving,
       this.redoing,
+      this.keptSafe,
       this.moving,
       this.channels = const [],
       this.onChanged,
@@ -585,6 +588,9 @@ class _AssetRow extends StatefulWidget {
   /// User mode: of what is arriving, what a Bitcoin reorganisation took back out of the chain and
   /// is being redone: said apart, never as gone.
   final BigInt? redoing;
+
+  /// User mode: what was moved out to keep it safe while the wallet was away, until it is put back.
+  final BigInt? keptSafe;
 
   /// User mode: what of the asset is on its way from its channel to the tree.
   final BigInt? moving;
@@ -704,6 +710,15 @@ class _AssetRowState extends State<_AssetRow> {
             alignment: Alignment.centerLeft,
             child: Text(DefaultWords.redoing(formatAtoms(_redoing.toString(), label.precision), label.ticker),
                 key: Key('redoing-${label.ticker}'), style: AmbraText.sub),
+          ),
+        ),
+      if (!widget.dev && (widget.keptSafe ?? BigInt.zero) > BigInt.zero)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(DefaultWords.keptSafe(formatAtoms(widget.keptSafe.toString(), label.precision), label.ticker),
+                key: Key('kept-safe-${label.ticker}'), style: AmbraText.sub),
           ),
         ),
       if (!widget.dev && _open && parts.isNotEmpty)
