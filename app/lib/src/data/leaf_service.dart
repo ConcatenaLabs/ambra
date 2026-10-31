@@ -391,7 +391,7 @@ class LeafService extends ChangeNotifier {
     if (boarded) await refresh();
   }
 
-  /// User mode: every coin received out of round is given up in the operator's next round for a
+  /// User mode, when [refreshReceived] is on: every coin received out of round is given up in the operator's next round for a
   /// coin of the wallet's own (`refresh_received`), which ends what its senders could still do
   /// with it; at most once every [refreshEvery], never while something a person asked for runs.
   /// Until that round is final the coin counts as arriving. Nothing is said unless it goes wrong:
@@ -399,7 +399,12 @@ class LeafService extends ChangeNotifier {
   static const refreshEvery = Duration(minutes: 2);
   DateTime? _refreshedAt;
   Object? refreshError;
+  /// Off: a refresh the operator cannot fund at once waits in its queue, and the coins it holds
+  /// can be neither traded nor sent until it runs or expires. On again once the library puts a
+  /// coin into a refresh only where the operator can fund it and takes it back out of one that waits.
+  static const refreshReceived = false;
   Future<void> autoRefreshReceived() async {
+    if (!refreshReceived) return;
     if (!open || DevMode.instance.on || personBusy || _boarding) return;
     if (_refreshedAt != null && DateTime.now().difference(_refreshedAt!) < refreshEvery) return;
     _refreshedAt = DateTime.now();

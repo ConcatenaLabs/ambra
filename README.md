@@ -136,8 +136,7 @@ module that implements it.
 - In default mode a Sequentia transaction of the wallet's that has waited two blocks is sped up
   by itself, by a child that pays for both, the rate doubling at each further wait
   (`app/lib/src/data/speed_up_service.dart`); its row then reads "Taking longer than usual: the
-  wallet paid a little more to speed it up." A coin received out of round is refreshed at the next
-  round by itself (`autoRefreshReceived`, `app/lib/src/data/leaf_service.dart`).
+  wallet paid a little more to speed it up."
 - In developer mode, rescue actions on unconfirmed transactions (`app/lib/src/screens/rescue_screen.dart`):
   - **RBF bump**: re-send the same payment at a higher fee,
   - **RBF replace**: same inputs, brand-new recipient/asset/amount,
