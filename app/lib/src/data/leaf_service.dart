@@ -1,4 +1,5 @@
 import 'lightning_to_ark.dart';
+import 'speed_up_service.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -388,6 +389,35 @@ class LeafService extends ChangeNotifier {
       _boarding = false;
     }
     if (boarded) await refresh();
+  }
+
+  /// User mode: every coin received out of round is given up in the operator's next round for a
+  /// coin of the wallet's own (`refresh_received`), which ends what its senders could still do
+  /// with it; at most once every [refreshEvery], never while something a person asked for runs.
+  /// Until that round is final the coin counts as arriving. Nothing is said unless it goes wrong:
+  /// the refusal is kept for developer mode's eyes.
+  static const refreshEvery = Duration(minutes: 2);
+  DateTime? _refreshedAt;
+  Object? refreshError;
+  Future<void> autoRefreshReceived() async {
+    if (!open || DevMode.instance.on || personBusy || _boarding) return;
+    if (_refreshedAt != null && DateTime.now().difference(_refreshedAt!) < refreshEvery) return;
+    _refreshedAt = DateTime.now();
+    try {
+      final v = await run('refresh_received', const {}) as Map<String, dynamic>?;
+      refreshError = null;
+      final n = ((v?['refreshed'] as List?) ?? const []).length;
+      if (n > 0) {
+        debugPrint('[leaves] $n coin(s) received out of round given up in the next round');
+        await refresh();
+      }
+      for (final l in (v?['left'] as List?) ?? const []) {
+        debugPrint('[leaves] a received coin left as it is: ${(l as Map)['why']}');
+      }
+    } catch (err) {
+      refreshError = LeafRefusal.of(err);
+      debugPrint('[leaves] refreshing what was received: $err');
+    }
   }
 
   /// Hands the leaf wallet the keys the main wallet handed out, so its on-chain window covers
@@ -875,7 +905,9 @@ class LeafService extends ChangeNotifier {
     _ticking = false;
     notifyListeners();
     _plan(wait);
-    unawaited(autoBoard());
+    unawaited(autoBoard().then((_) => autoRefreshReceived()));
+    // What waits on the chain is sped up by itself in default mode (speed_up_service.dart).
+    unawaited(SpeedUpService.instance.tick());
     // A wallet from before its assets lived in the tree moves its Lightning balances here.
     unawaited(LightningToArk.instance.tickAssets());
   }

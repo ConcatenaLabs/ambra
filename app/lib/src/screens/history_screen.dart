@@ -16,6 +16,7 @@ import '../data/format.dart';
 import '../data/leaf_service.dart';
 import '../data/lightning_to_ark.dart';
 import '../data/price_service.dart';
+import '../data/speed_up_service.dart';
 import '../data/user_trade.dart';
 import '../data/wallet_cache.dart';
 import '../data/wallet_repository.dart';
@@ -603,7 +604,9 @@ class _TxRowView extends StatelessWidget {
       amount = '${neg ? '' : '+'}$formatted ${label.ticker}';
       amountColor = neg ? AmbraColors.amber2 : AmbraColors.green;
     }
-    final when = tx.height == null ? 'unconfirmed' : 'block ${tx.height}';
+    final when = tx.height == null
+        ? (!DevMode.instance.on && SpeedUpService.instance.isSpedUp(tx.txid) ? SpeedUpService.spedUp : 'unconfirmed')
+        : 'block ${tx.height}';
 
     return InkWell(
       onTap: () async {
@@ -803,7 +806,8 @@ class _TxDetailSheet extends StatelessWidget {
                     .showSnackBar(const SnackBar(content: Text('Transaction id copied')));
               },
             ),
-            if (!settled) ...[
+            // Developer mode offers the rescues; default mode speeds up by itself.
+            if (!settled && DevMode.instance.on) ...[
               const SizedBox(height: 10),
               PrimaryButton(
                 label: 'Speed up / bump fee',

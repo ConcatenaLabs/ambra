@@ -133,7 +133,12 @@ module that implements it.
 - Each trade of the Swap tab is one row at the top: "Swapped <pay> for <get>", its time and,
   until settled, its status, with the amounts as -/+ and the fee
   (`tradeHistoryRows`, `app/lib/src/screens/history_screen.dart`).
-- Rescue actions on unconfirmed transactions (`app/lib/src/screens/rescue_screen.dart`):
+- In default mode a Sequentia transaction of the wallet's that has waited two blocks is sped up
+  by itself, by a child that pays for both, the rate doubling at each further wait
+  (`app/lib/src/data/speed_up_service.dart`); its row then reads "Taking longer than usual: the
+  wallet paid a little more to speed it up." A coin received out of round is refreshed at the next
+  round by itself (`autoRefreshReceived`, `app/lib/src/data/leaf_service.dart`).
+- In developer mode, rescue actions on unconfirmed transactions (`app/lib/src/screens/rescue_screen.dart`):
   - **RBF bump**: re-send the same payment at a higher fee,
   - **RBF replace**: same inputs, brand-new recipient/asset/amount,
   - **CPFP**: pay a child fee, in any asset, to pull the parent in
