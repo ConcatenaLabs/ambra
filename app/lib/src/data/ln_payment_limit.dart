@@ -82,6 +82,28 @@ class LnPaymentLimit extends ChangeNotifier {
     return BigInt.from((p * 1e8).round());
   }
 
+  /// What the daily limit is worth in [asset] (an asset id; [kBtcKey] for Bitcoin), in its
+  /// atoms (sats for Bitcoin), or null when its rate cannot be read now.
+  Future<BigInt?> allowanceAtoms(String asset) async {
+    if (!_loaded) await load();
+    BigInt? rate;
+    if (asset == kBtcKey) {
+      rate = _btcRate();
+    } else {
+      try {
+        rate = feeRateFor(await ApiClient.feeRates(), asset);
+      } catch (_) {}
+    }
+    if (rate == null || rate <= BigInt.zero) return null;
+    return BigInt.from(_reference) * _atomsPerUnit * _atomsPerUnit ~/ rate;
+  }
+
+  /// Whether [e] is the device declining a payment over its limit.
+  static bool isRefusal(Object e) {
+    final s = e.toString();
+    return s.contains('Your device declined') || s.contains('invoice was declined') || s.contains('over the daily limit');
+  }
+
   /// The words a declined payment gets.
   String refusal() =>
       'This payment is over the daily limit your phone sets for Lightning payments '

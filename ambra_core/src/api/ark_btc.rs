@@ -105,3 +105,8 @@ pub fn ark_receive_status(hash: String, claim: bool) -> Result<String> {
 pub fn ark_catch_up() -> Result<String> {
     text(ark_btc::catch_up())
 }
+
+/// The wallet's movements, newest first, at most `limit`: what History lists of the ark.
+pub fn ark_history(limit: u32) -> Result<String> {
+    text(ark_btc::history(limit as usize))
+}

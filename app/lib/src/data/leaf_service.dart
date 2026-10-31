@@ -1,3 +1,4 @@
+import 'lightning_to_ark.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -365,7 +366,7 @@ class LeafService extends ChangeNotifier {
         if (refused != null && DateTime.now().difference(refused) < boardBackoff) continue;
         if (_asking > 0) break;
         try {
-          final done = await boardAll(run, asset: asset, held: held, min: min, stop: () => _asking > 0);
+          final done = await boardAll(_runKeepingBoards, asset: asset, held: held, min: min, stop: () => _asking > 0);
           if (done == null) {
             debugPrint('[leaves] board of ${asset.substring(0, 8)} left for the next pass: no fee leaves room for itself, or a person asked');
             continue;
@@ -463,6 +464,42 @@ class LeafService extends ChangeNotifier {
     }
     final v = onchain - b.spent;
     return v > BigInt.zero ? v : BigInt.zero;
+  }
+
+  static const _kBoardTxids = 'ambra.leaves.boardTxids';
+
+  /// The transactions of the wallet's own boards: a move within the wallet, which History's
+  /// default mode does not list as a payment.
+  Set<String> boardTxids = {};
+  bool _boardsRead = false;
+
+  /// [run], keeping the transaction of each board it makes ([boardTxids]).
+  Future<dynamic> _runKeepingBoards(String command, [Map<String, dynamic> args = const {}]) async {
+    final r = await run(command, args);
+    if (command == 'board' && r is Map && r['txid'] is String) await _keepBoards({r['txid'] as String});
+    return r;
+  }
+
+  Future<void> _keepBoards(Set<String> txids) async {
+    final p = await SharedPreferences.getInstance();
+    final had = (p.getStringList(_kBoardTxids) ?? const []).toSet();
+    boardTxids = {...had, ...boardTxids, ...txids};
+    if (boardTxids.length != had.length) await p.setStringList(_kBoardTxids, boardTxids.toList());
+  }
+
+  /// The wallet's board transactions, those it made before it kept them read once from the
+  /// operator (`boards`: each board's status names its transaction).
+  Future<Set<String>> boardTransactions() async {
+    await _keepBoards(const {});
+    if (_boardsRead || !open) return boardTxids;
+    try {
+      final bs = await run('boards');
+      _boardsRead = true;
+      await _keepBoards(boardTxidsOf(bs));
+    } catch (e) {
+      debugPrint('[leaves] boards not read: $e');
+    }
+    return boardTxids;
   }
 
   /// Logs why the automatic board did nothing, once per reason.
@@ -834,6 +871,8 @@ class LeafService extends ChangeNotifier {
     notifyListeners();
     _plan(wait);
     unawaited(autoBoard());
+    // A wallet from before its assets lived in the tree moves its Lightning balances here.
+    unawaited(LightningToArk.instance.tickAssets());
   }
 
   /// Plans the scheduled job from the library's schedule, so a pass runs whether
@@ -1403,3 +1442,11 @@ Future<int> coverReceiveKeys({
   if (n > 0) log?.call('[leaves] the leaf wallet reads its on-chain coins up to key ${had + n + 20} now ($n key(s) handed to it)');
   return n;
 }
+
+/// The transactions the library's `boards` names: each board's status from the operator
+/// (`server.txid`).
+Set<String> boardTxidsOf(Object? boards) => {
+      if (boards is List)
+        for (final b in boards.whereType<Map>())
+          if (b['server'] is Map && (b['server'] as Map)['txid'] is String) (b['server'] as Map)['txid'] as String,
+    };
