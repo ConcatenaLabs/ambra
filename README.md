@@ -414,9 +414,11 @@ module that implements it.
   named for an address the wallet handed out (it scans 20 past the wallet's next receive
   index, since the leaf wallet counts its keys apart from the main wallet); a claim taken
   up then counts in the asset's figure like any coin. It cancels each offline-refresh plan
-  whose coin moved, and signs a plan for every leaf of a round at the first `care` after
-  the leaf is made (`plan_within` set to plan every round leaf), two expiries ahead, so a
-  wallet closed across an expiry keeps the coin, whenever it closes. Each step's fee is at
+  whose coin moved, and signs a plan for a leaf of a round once the plan's first step
+  could run within ten days (the library's reach), two expiries ahead, so a wallet closed
+  across an expiry keeps the coin, and the leaf is free to trade and pay out of round
+  until then; a wallet closed earlier and kept away past the expiry has the coin repaid by
+  the operator, less the late-refresh fee. Each step's fee is at
   most 0.2% of the coin and is taken from the coin in its own asset, never another; a coin
   the operator will not plan in its asset stays unplanned, and the sync refreshes it while
   the app is open. A coin of no round (a board, or a coin received or taken up out of

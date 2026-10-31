@@ -721,7 +721,8 @@ class LeafService extends ChangeNotifier {
   /// starts, then at most every [careEvery] (the scheduled job keeps the same
   /// clock). It takes up every claim named by an address the wallet handed out (the
   /// scan reaches 20 past the wallet's next receive index), cancels each plan whose
-  /// coin moved, plans every leaf of a round, and refreshes into a round a coin no
+  /// coin moved, plans a leaf of a round once its first step could run within ten
+  /// days, and refreshes into a round a coin no
   /// plan can start from once that refresh could run within ten days. No prompt: it
   /// is what the wallet does by itself.
   Future<void> careIfDue({bool force = false}) async {
@@ -900,11 +901,6 @@ class LeafService extends ChangeNotifier {
 /// Whether `care` runs now: never yet ([last] null), or [LeafService.careEvery] since.
 bool careDue(DateTime? last, DateTime now) => last == null || now.difference(last) >= LeafService.careEvery;
 
-/// `care`'s planning reach: every leaf of a round is planned at the first care after it is
-/// made (the library's PLAN_EVERY_ROUND_LEAF). A coin of no round is still refreshed into
-/// a round only once its refresh could run within ten days, since that refresh costs a fee.
-const kPlanEveryRoundLeaf = 4294967295;
-
 /// A payment through a release: how often the wallet syncs while it waits for the round
 /// that frees the planned coins, how long it waits at most, and how many releases one
 /// payment may need (a release can fall short by the new leaf's own margins).
@@ -918,8 +914,10 @@ const kReleaseTimeout =
 
 /// `care`'s arguments: the scan reaches 20 past the kit wallet's next receive index, so a
 /// claim named by any address the wallet handed out is found (the leaf wallet's own
-/// index counter is separate from the kit's); and every leaf of a round is planned.
-Map<String, dynamic> careArgs(int kitNextIndex) => {'scan': kitNextIndex + 20, 'plan_within': kPlanEveryRoundLeaf};
+/// index counter is separate from the kit's). Its planning reach is the library's own: a
+/// leaf of a round is planned once its first step could run within ten days, so it stays
+/// free to trade and pay out of round for most of its life.
+Map<String, dynamic> careArgs(int kitNextIndex) => {'scan': kitNextIndex + 20};
 
 /// A payment waiting for the round that frees the planned coins it needs.
 class ReleaseWait {

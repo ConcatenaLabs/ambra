@@ -943,8 +943,9 @@ class _CareCardState extends State<_CareCard> {
         const Text(
             'At a sync (the first after the app starts, then at most every ten minutes, here and in the scheduled '
             'job) the wallet takes up every claim named for an address it handed out, cancels each plan whose coin '
-            'moved, and plans every leaf of a round, two expiries ahead, each step\'s fee at most 0.2% of the coin and '
-            'taken from it in its own asset, so a closed wallet keeps it across its expiry. A coin of no round (a '
+            'moved, and plans a leaf of a round once its refresh could run within ten days, two expiries ahead, each '
+            'step\'s fee at most 0.2% of the coin and taken from it in its own asset, so a closed wallet keeps it across '
+            'its expiry; until then the leaf is free to trade and pay. A coin of no round (a '
             'board, a coin received or taken up out of round) is free to pay, and is refreshed into a round once its '
             'refresh could run within ten days, then planned at a later sync. A coin the operator will not plan stays '
             'unplanned and is refreshed by the sync while the app is open. A planned leaf is paid out of round by no '
