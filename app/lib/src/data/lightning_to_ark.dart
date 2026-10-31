@@ -66,6 +66,21 @@ class LightningToArk extends ChangeNotifier {
   /// channel, its leaf not yet the wallet's.
   Map<String, BigInt> movingAssets = const {};
 
+  /// What each asset's channels held when its move began: while it moves, the asset's figure
+  /// counts the channels and the move together at no more than this, whether the channels were
+  /// read before the payment left them or after ([channelPart]).
+  final Map<String, BigInt> movingFrom = {};
+
+  /// The channels' part of [asset]'s figure, [read] as last read: with what is moving added,
+  /// at most what they held when the move began.
+  BigInt channelPart(String asset, BigInt read) {
+    final m = movingAssets[asset];
+    if (m == null) return read;
+    final from = movingFrom[asset];
+    final sum = read + m;
+    return from != null && sum > from ? from : sum;
+  }
+
   DateTime? _lastAssetTry;
   bool _assetsRunning = false;
   final Map<String, DateTime> _assetRefused = {};
@@ -159,7 +174,10 @@ class LightningToArk extends ChangeNotifier {
           continue;
         }
         final spendable = legLiquidity(channels, RailTarget.asset(hex: asset)).spendable;
-        if (spendable <= BigInt.zero) continue;
+        if (spendable <= BigInt.zero) {
+          _why('$a8: nothing to pay from a channel that is locked in');
+          continue;
+        }
         final min = minLeaves(leaves.info)[asset];
         final allowance = await LnPaymentLimit.instance.allowanceAtoms(asset);
         final amount = withinAllowance(amountToMove(spendable, min: min), allowance, min: min);
@@ -168,6 +186,7 @@ class LightningToArk extends ChangeNotifier {
           continue;
         }
         try {
+          movingFrom[asset] = legLiquidity(channels, RailTarget.asset(hex: asset)).balance;
           await _moveAsset(leaves, ln, asset, amount, spendable);
         } catch (e) {
           _assetRefused[asset] = DateTime.now();
@@ -268,6 +287,7 @@ class LightningToArk extends ChangeNotifier {
 
   Future<void> _setMoving(Map receives, List<dynamic> coins) async {
     final next = movingOf(receives, coins, await _paid());
+    movingFrom.removeWhere((a, _) => !next.containsKey(a));
     if (!mapEquals(next, movingAssets)) {
       movingAssets = next;
       notifyListeners();

@@ -397,8 +397,10 @@ class _BalanceTabState extends State<BalanceTab> {
     final chans = _lnChannels.cast<Map>();
     // What is on its way from a channel to the tree stays in the figure until its leaf counts.
     final moving = dev ? const <String, BigInt>{} : LightningToArk.instance.movingAssets;
-    BigInt lnOf(String id) =>
-        legLiquidity(chans, RailTarget.asset(hex: id, ticker: SeqAssets.labelFor(id).ticker)).balance + (moving[id] ?? BigInt.zero);
+    BigInt lnOf(String id) {
+      final read = legLiquidity(chans, RailTarget.asset(hex: id, ticker: SeqAssets.labelFor(id).ticker)).balance;
+      return dev ? read : LightningToArk.instance.channelPart(id, read);
+    }
     final stakedAtoms = StakeHoldings.instance.stakedAtoms;
     final staked = {if (stakedAtoms > BigInt.zero) SeqAssets.policy: stakedAtoms};
     final lnAssets = <String>{
