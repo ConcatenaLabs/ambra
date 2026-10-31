@@ -9,6 +9,17 @@ class _FrbLike {
 }
 
 void main() {
+  test('of what is arriving, the coins a Bitcoin reorganisation took back are counted apart', () {
+    final coins = [
+      {'asset': 'a', 'value': '700', 'state': 'pending', 'redoing': true},
+      {'asset': 'a', 'value': '300', 'state': 'pending', 'redoing': false},
+      {'asset': 'b', 'value': '5', 'state': 'pending', 'redoing': true},
+      {'asset': 'a', 'value': '9', 'state': 'live'},
+    ];
+    expect(redoingAtomsOf(coins), {'a': BigInt.from(700), 'b': BigInt.from(5)});
+    expect(redoingAtomsOf(null), isEmpty);
+  });
+
   group('LeafRefusal.of', () {
     test('reads the library refusal in its own words', () {
       final r = LeafRefusal.of(_FrbLike(

@@ -97,16 +97,27 @@ class UserWords {
   static String noFunds(String pay) => 'You have no $pay to trade.';
   // Held, and shown in the balance, but not where a trade can pay it from yet (just arrived, or
   // still being moved in by the wallet): never "you have none".
-  static String notReady(String pay) => 'Your $pay is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.';
+  // [soon]: the operator calls a coin ready once its block is certified (anchor depth 0), so it is
+  // ready in a minute or two.
+  static String notReady(String pay, [bool soon = false]) => soon
+      ? 'Your $pay is on its way: it is ready to trade in a minute or two. Nothing has moved.'
+      : 'Your $pay is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.';
+  // A coin that was ready, taken back out of the chain with its Bitcoin block: still the wallet's,
+  // and in its balance, while the network takes it in again.
+  static String redoing(String pay) =>
+      'Your $pay is being redone after a Bitcoin reorganisation: it is still yours, and ready to trade again once that settles. Nothing has moved.';
   // Kept by the wallet's plan to refresh it while the wallet is closed, which only a round can end:
   // the wallet gives it up in its next round for a coin it can trade.
-  static String freeing(String pay) => 'Your $pay is being made ready to trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.';
+  static String freeing(String pay, [bool soon = false]) => soon
+      ? 'Your $pay is being made ready to trade: it is ready in a minute or two. Nothing has moved.'
+      : 'Your $pay is being made ready to trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.';
   static const pricing = 'Finding the best price…';
   static const priceMoved = 'The price moved. Here is the new one.';
   static const sent = 'Sent';
   static const settled = 'Settled';
   static const waitingOther = 'Waiting for the other side. Nothing has left your wallet yet.';
   static const receivedSettling = 'Received. Settled after the next Bitcoin blocks.';
+  static const receivedSoon = 'Received. Settled in a minute or two.';
   static String minutes(String word, int n) => '$word ($n min)';
   static const returned = 'Returned: nothing traded.';
   static String returnedFees(String fees) => 'Returned: nothing traded. Fees of $fees were paid.';
@@ -140,13 +151,17 @@ class UserWords {
     tooSmall,
     noFunds('XT'),
     notReady('XT'),
+    notReady('XT', true),
+    redoing('XT'),
     freeing('XT'),
+    freeing('XT', true),
     pricing,
     priceMoved,
     sent,
     settled,
     waitingOther,
     receivedSettling,
+    receivedSoon,
     minutes(sent, 3),
     returned,
     returnedFees('1 XT'),
@@ -168,7 +183,8 @@ bool heldAlready(Map r) {
 /// What the list of trades says of one: Sent, then Settled; a trade waiting on the other side or
 /// on its settling says so, with the minutes it has waited once it has waited one. Null for a
 /// trade returned with fees paid (the row names the fees). The web wallet's tradeStateWord().
-String? tradeStateWord(Map r, int nowMs) {
+/// [soon]: the operator calls a coin settled once its block is certified (anchor depth 0).
+String? tradeStateWord(Map r, int nowMs, {bool soon = false}) {
   final st = r['state'];
   if (st == 'settled') return UserWords.settled;
   if (st == 'returned' && ((r['feesPaid'] as List?) ?? const []).isNotEmpty) return null;
@@ -182,7 +198,7 @@ String? tradeStateWord(Map r, int nowMs) {
     return m >= 1 ? UserWords.minutes(UserWords.waitingOther, m) : UserWords.waitingOther;
   }
   final m = since(r['sentAt']);
-  final word = heldAlready(r) ? UserWords.receivedSettling : UserWords.sent;
+  final word = heldAlready(r) ? (soon ? UserWords.receivedSoon : UserWords.receivedSettling) : UserWords.sent;
   return m >= 1 ? UserWords.minutes(word, m) : word;
 }
 
@@ -473,11 +489,13 @@ class Ticket {
 }
 
 class QuoteResult {
-  QuoteResult.ok(this.ticket, this.choice) : why = null;
-  QuoteResult.no(this.why) : ticket = null, choice = null;
+  QuoteResult.ok(this.ticket, this.choice) : why = null, soon = false;
+  QuoteResult.no(this.why, {this.soon = false}) : ticket = null, choice = null;
   final Ticket? ticket;
   final Candidate? choice;
-  final String? why; // not-listed | not-offered | no-funds | not-ready | freeing | too-small
+  final String? why; // not-listed | not-offered | no-funds | not-ready | redoing | freeing | too-small
+  /// What is not ready yet is ready in a minute or two (the operator's anchor depth is 0).
+  final bool soon;
   bool get ok => ticket != null;
 }
 
@@ -515,6 +533,7 @@ class UserTradeDeps {
     this.held,
     this.prepare,
     this.release,
+    this.anchorDepth,
     int Function()? now,
     void Function(String)? log,
     Future<void> Function(int ms)? sleep,
@@ -550,6 +569,11 @@ class UserTradeDeps {
   /// its next round (`plan_release`), as a payment from them is. Optional: with it, a pay asset held
   /// only in such coins is 'freeing'.
   final void Function(String asset, List<String> leaves)? release;
+
+  /// The Bitcoin blocks the operator waits for after a block is certified before a coin in it can
+  /// be traded (the library's `info` `anchor_depth`), or null. Optional: at 0 a coin not ready yet
+  /// is on its way, ready in a minute or two.
+  final int? Function()? anchorDepth;
   final Future<String?> Function() read;
   final Future<void> Function(String value) write;
   final int Function() now;
@@ -558,6 +582,15 @@ class UserTradeDeps {
 }
 
 class UserTradeEngine {
+  /// Whether the operator calls a coin ready once its block is certified (anchor depth 0).
+  bool get soon {
+    try {
+      return d.anchorDepth?.call() == 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
   UserTradeEngine(this.d) {
     _btcT = BtcTrades(
       run: _run,
@@ -1048,7 +1081,7 @@ class UserTradeEngine {
             ];
             if (kept.isNotEmpty) {
               d.release!(pay, kept);
-              return QuoteResult.no('freeing');
+              return QuoteResult.no('freeing', soon: soon);
             }
           } catch (e) {
             d.log('[user trade] release: $e');
@@ -1057,7 +1090,14 @@ class UserTradeEngine {
         try {
           d.prepare?.call(pay);
         } catch (_) {}
-        return QuoteResult.no('not-ready');
+        // Coins a Bitcoin reorganisation took back out of the chain, being redone: never a loss.
+        if (pay != kUserBtc) {
+          try {
+            final coins = (await _run('coins')) as List? ?? const [];
+            if (coins.any((c) => c is Map && c['asset'] == pay && c['redoing'] == true)) return QuoteResult.no('redoing');
+          } catch (_) {}
+        }
+        return QuoteResult.no('not-ready', soon: soon);
       }
       return QuoteResult.no('no-funds');
     }

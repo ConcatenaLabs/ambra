@@ -483,6 +483,17 @@ class LeafService extends ChangeNotifier {
   /// flight), shown under the asset's one figure until they are.
   Map<String, BigInt> arrivingAtoms() => arrivingAtomsOf(balance, schedule);
 
+  /// Of what is arriving, what is being redone: coins the library marks `redoing` (spendable once,
+  /// then taken out of the chain with the Bitcoin block their round's block anchors to).
+  Map<String, BigInt> redoingAtoms() => redoingAtomsOf(coins);
+
+  /// The operator's anchor depth as the library follows it (`info.anchor_depth`; 0: a coin is
+  /// spendable once its block is certified), or null before the library has said.
+  int? anchorDepth() {
+    final d = info?['anchor_depth'];
+    return d is num ? d.toInt() : null;
+  }
+
   /// The operator's round interval in whole minutes (`info.fills.round_interval_seconds`),
   /// or null when it publishes none: how long a payment to an address takes.
   int? roundMinutes() {
@@ -1301,6 +1312,18 @@ BigInt? boardFee(Object? quote) {
 /// balance's `arca` standing `pending`), and the coins the operator announced and has not
 /// handed over yet (the schedule's `pending_coins`, each `{asset, value}`), which no
 /// figure counts until they come.
+/// What of each asset the library marks `redoing` in [coins]: live once, then out of the chain
+/// with the Bitcoin block it rested on, being redone. Still the wallet's, and counted.
+Map<String, BigInt> redoingAtomsOf(List<dynamic>? coins) {
+  final out = <String, BigInt>{};
+  for (final c in coins ?? const []) {
+    if (c is! Map || c['redoing'] != true || c['asset'] == null) continue;
+    final n = BigInt.tryParse('${c['value'] ?? 0}') ?? BigInt.zero;
+    out['${c['asset']}'] = (out['${c['asset']}'] ?? BigInt.zero) + n;
+  }
+  return out;
+}
+
 Map<String, BigInt> arrivingAtomsOf(Map? balance, [Map? schedule]) {
   final out = <String, BigInt>{};
   void add(Object? asset, Object? v) {
