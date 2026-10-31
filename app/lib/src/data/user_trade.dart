@@ -582,6 +582,27 @@ class UserTradeDeps {
 }
 
 class UserTradeEngine {
+  /// Asks the wallet to free the live coins of [asset] an open offline-refresh plan keeps, in its
+  /// next round ([UserTradeDeps.release]): the library pays such a coin out of round only once a
+  /// round has freed it. Whether it asked.
+  Future<bool> _freePlanned(String asset) async {
+    if (d.release == null) return false;
+    try {
+      final coins = (await _run('coins')) as List? ?? const [];
+      final planned = plannedLeaves((await _run('plans')) as Map?);
+      final kept = [
+        for (final c in coins)
+          if (c is Map && c['asset'] == asset && c['state'] == 'live' && planned.contains('${c['leaf_id']}')) '${c['leaf_id']}',
+      ];
+      if (kept.isEmpty) return false;
+      d.release!(asset, kept);
+      return true;
+    } catch (e) {
+      d.log('[user trade] release: $e');
+      return false;
+    }
+  }
+
   /// Whether the operator calls a coin ready once its block is certified (anchor depth 0).
   bool get soon {
     try {
@@ -1071,22 +1092,7 @@ class UserTradeEngine {
       if (held > BigInt.zero) {
         // Live coins an open offline-refresh plan keeps: the library pays them only in a round, so
         // the wallet gives them up in its next one for coins a trade can pay from.
-        if (pay != kUserBtc && d.release != null) {
-          try {
-            final coins = (await _run('coins')) as List? ?? const [];
-            final planned = plannedLeaves((await _run('plans')) as Map?);
-            final kept = [
-              for (final c in coins)
-                if (c is Map && c['asset'] == pay && c['state'] == 'live' && planned.contains('${c['leaf_id']}')) '${c['leaf_id']}',
-            ];
-            if (kept.isNotEmpty) {
-              d.release!(pay, kept);
-              return QuoteResult.no('freeing', soon: soon);
-            }
-          } catch (e) {
-            d.log('[user trade] release: $e');
-          }
-        }
+        if (pay != kUserBtc && await _freePlanned(pay)) return QuoteResult.no('freeing', soon: soon);
         try {
           d.prepare?.call(pay);
         } catch (_) {}
@@ -1125,6 +1131,9 @@ class UserTradeEngine {
     for (final c in cands) {
       if (c != best) drop(c);
     }
+    // Less is free than the amount needs, and the rest is in coins an offline-refresh plan keeps:
+    // those are freed through the wallet's next round, never called too small.
+    if (best == null && pay != kUserBtc && have < amount && await _freePlanned(pay)) return QuoteResult.no('freeing', soon: soon);
     if (best == null) return QuoteResult.no(es.isEmpty ? 'not-offered' : 'too-small');
     return QuoteResult.ok(
       Ticket(

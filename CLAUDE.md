@@ -106,8 +106,8 @@ the faucet's leaf request, the developer-mode leaf panel and the user-mode Swap 
 (wired in `appTradeEngine`, `app/lib/src/screens/user_composer.dart`). On a refusal of kind
 `planned` it gives up the planned coins the library names in the next round
 (`plan_release`), syncs until that round is final, and asks again (`payThroughRelease`).
-`care` runs with `plan_within` set to plan every leaf of a round (`careArgs`), so without this
-path a payment out of planned coins is refused. Reads (`coins`, quotes shown before signing,
+`care` plans a leaf of a round once its refresh could run within ten days (`careArgs`), so
+without this path a payment out of such a planned coin is refused. Reads (`coins`, quotes shown before signing,
 `refusals`) may use `run`. Keep that one path.
 
 ## Three things that get forgotten

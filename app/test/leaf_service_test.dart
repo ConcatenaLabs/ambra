@@ -99,8 +99,7 @@ void main() {
     expect(careDue(null, t), isTrue, reason: 'never run: due');
     expect(careDue(t, t.add(const Duration(minutes: 9, seconds: 59))), isFalse);
     expect(careDue(t, t.add(const Duration(minutes: 10))), isTrue);
-    expect(careArgs(7), {'scan': 27, 'plan_within': 4294967295});
-    expect(kPlanEveryRoundLeaf, 4294967295, reason: 'every leaf of a round planned at its first care');
+    expect(careArgs(7), {'scan': 27}, reason: 'the library\'s own planning reach: a leaf stays free to trade until its refresh nears');
   });
 
   test('a care answer is counted part by part, refusals named', () {
