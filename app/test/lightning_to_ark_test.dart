@@ -86,4 +86,16 @@ void main() {
     expect(LightningToArk.withinAllowance(BigInt.from(37610), BigInt.from(4000)), isNull); // 3,600 < 5,000 sat
     expect(LightningToArk.withinAllowance(null, usdxLimit), isNull);
   });
+
+  test('a channel being moved counts once, whether read before the payment left it or after', () {
+    final l = LightningToArk.instance;
+    l.movingAssets = {'a': BigInt.from(900)};
+    l.movingFrom['a'] = BigInt.from(1980);
+    expect(l.channelPart('a', BigInt.from(1980)), BigInt.from(1980)); // read before: not 2,880
+    expect(l.channelPart('a', BigInt.from(1079)), BigInt.from(1979)); // read after (fee 1 gone)
+    expect(l.channelPart('b', BigInt.from(5)), BigInt.from(5));
+    l.movingFrom.clear();
+    expect(l.channelPart('a', BigInt.from(1079)), BigInt.from(1979)); // after a restart: as read
+    l.movingAssets = const {};
+  });
 }

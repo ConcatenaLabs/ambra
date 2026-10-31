@@ -160,6 +160,9 @@ class ArkBtcService extends ChangeNotifier {
       await autoBoard();
       // A wallet from before BTC lived on the ark moves its Lightning BTC here by itself.
       unawaited(LightningToArk.instance.tick());
+      // And its assets' channels into the tree: the leaf wallet's own pass can be far apart
+      // while nothing is on its way.
+      unawaited(LightningToArk.instance.tickAssets());
     } catch (e) {
       lastError = e;
       debugPrint('[ambra-ark] sync refused: $e');
