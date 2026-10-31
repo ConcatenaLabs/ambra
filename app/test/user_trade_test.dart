@@ -106,7 +106,7 @@ class StandIn {
   }
 
   UserTradeEngine engine({List<String> sources = const ['leaf-maker'], List<String> makers = const ['http://m'], required int Function() now,
-          Future<BigInt> Function(String)? held, void Function(String)? prepare}) =>
+          Future<BigInt> Function(String)? held, void Function(String)? prepare, int? Function()? anchorDepth}) =>
       UserTradeEngine(UserTradeDeps(
         run: run,
         fetchJson: fetchJson,
@@ -130,6 +130,7 @@ class StandIn {
         sleep: (_) async {},
         held: held,
         prepare: prepare,
+        anchorDepth: anchorDepth,
       ));
 }
 
@@ -247,6 +248,30 @@ void main() {
     expect((await none.quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'no-funds');
     expect(prepared, [x]);
     expect(UserWords.notReady('USDX'), 'Your USDX is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.');
+  });
+
+  test('engine: at anchor depth 0 a coin not ready yet is on its way; one a reorganisation took back is being redone', () async {
+    final s = StandIn();
+    s.coins.first['state'] = 'pending';
+    Future<BigInt> held(String a) async => a == x ? BigInt.from(500) : BigInt.zero;
+    final q0 = await s.engine(now: () => 0, held: held, anchorDepth: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000));
+    expect([q0.why, q0.soon], ['not-ready', true]);
+    expect(UserWords.notReady('USDX', q0.soon), 'Your USDX is on its way: it is ready to trade in a minute or two. Nothing has moved.');
+    for (final d in <int? Function()?>[() => 2, () => null, null]) {
+      final q = await s.engine(now: () => 0, held: held, anchorDepth: d).quote(pay: x, receive: y, amount: BigInt.from(400000));
+      expect([q.why, q.soon], ['not-ready', false]);
+    }
+    s.coins.first['redoing'] = true;
+    final r = await s.engine(now: () => 0, held: held, anchorDepth: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000));
+    expect(r.why, 'redoing');
+    expect(UserWords.redoing('USDX'),
+        'Your USDX is being redone after a Bitcoin reorganisation: it is still yours, and ready to trade again once that settles. Nothing has moved.');
+    for (final w in [UserWords.notReady('USDX', true), UserWords.freeing('GOLD', true), UserWords.redoing('USDX'), UserWords.receivedSoon]) {
+      expect(forbiddenIn(w), isEmpty, reason: w);
+    }
+    final rec = {'source': 'leaf-maker', 'state': 'sent', 'sentAt': 0, 'swapState': 'done'};
+    expect(tradeStateWord(rec, 30000, soon: true), UserWords.receivedSoon);
+    expect(tradeStateWord(rec, 30000), UserWords.receivedSettling);
   });
 
   test('engine: a maker quoting levels of one pair is asked for one firm offer, at the level that gives the most', () async {

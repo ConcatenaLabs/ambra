@@ -375,6 +375,7 @@ class _BalanceTabState extends State<BalanceTab> {
     // What is on its way (user mode shows "<amount> <TICKER> arriving" under the figure): an
     // asset with nothing yet but something arriving still gets its row.
     final arriving = LeafService.instance.joined ? LeafService.instance.arrivingAtoms() : const <String, BigInt>{};
+    final redoing = LeafService.instance.joined ? LeafService.instance.redoingAtoms() : const <String, BigInt>{};
     final onchainOf = {
       for (final b in onchainBalances ?? const <core.AssetBalance>[])
         b.assetId: LeafService.instance.onchainLessBoards(b.assetId, BigInt.tryParse(b.atoms) ?? BigInt.zero)
@@ -505,6 +506,7 @@ class _BalanceTabState extends State<BalanceTab> {
                     leavesJoined: LeafService.instance.joined,
                     frozen: LeafService.instance.joined ? LeafService.instance.frozenAtoms(h) : BigInt.zero,
                     arriving: arriving[h],
+                    redoing: redoing[h],
                     channels: _lnChannels,
                     onChanged: _refresh,
                     onHide: () async {
@@ -539,6 +541,7 @@ class _AssetRow extends StatefulWidget {
       this.leavesJoined = false,
       this.frozen,
       this.arriving,
+      this.redoing,
       this.channels = const [],
       this.onChanged,
       this.onHide});
@@ -556,6 +559,10 @@ class _AssetRow extends StatefulWidget {
 
   /// User mode: what of the asset is arriving (counted in the figure, not final yet).
   final BigInt? arriving;
+
+  /// User mode: of what is arriving, what a Bitcoin reorganisation took back out of the chain and
+  /// is being redone: said apart, never as gone.
+  final BigInt? redoing;
   final List<Map<dynamic, dynamic>> channels;
   final VoidCallback? onChanged;
   // Per-asset Hide control (quiet trailing icon). null = no control — the BTC row
@@ -567,6 +574,14 @@ class _AssetRow extends StatefulWidget {
 
 class _AssetRowState extends State<_AssetRow> {
   bool _open = false;
+
+  // Of what is arriving, what is being redone is said on its own line.
+  BigInt get _redoing {
+    final a = widget.arriving ?? BigInt.zero, r = widget.redoing ?? BigInt.zero;
+    return r > a ? a : r;
+  }
+
+  BigInt get _arrivingOnly => (widget.arriving ?? BigInt.zero) - _redoing;
 
   @override
   Widget build(BuildContext context) {
@@ -639,13 +654,22 @@ class _AssetRowState extends State<_AssetRow> {
                 key: Key('frozen-${label.ticker}'), style: const TextStyle(color: AmbraColors.amber2, fontSize: 12)),
           ),
         ),
-      if (!widget.dev && (widget.arriving ?? BigInt.zero) > BigInt.zero)
+      if (!widget.dev && _arrivingOnly > BigInt.zero)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Align(
             alignment: Alignment.centerLeft,
-            child: Text(DefaultWords.arriving(formatAtoms(widget.arriving.toString(), label.precision), label.ticker),
+            child: Text(DefaultWords.arriving(formatAtoms(_arrivingOnly.toString(), label.precision), label.ticker),
                 key: Key('arriving-${label.ticker}'), style: AmbraText.sub),
+          ),
+        ),
+      if (!widget.dev && _redoing > BigInt.zero)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(DefaultWords.redoing(formatAtoms(_redoing.toString(), label.precision), label.ticker),
+                key: Key('redoing-${label.ticker}'), style: AmbraText.sub),
           ),
         ),
       if (!widget.dev && _open && parts.isNotEmpty)

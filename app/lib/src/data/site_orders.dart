@@ -226,7 +226,9 @@ class SiteOrders {
         'not-listed' => UserWords.notListed(_tick(get), _tick(pay)),
         'not-offered' => UserWords.notOffered(_tick(get), _tick(pay)),
         'no-funds' => UserWords.noFunds(_tick(pay)),
-        'not-ready' => UserWords.notReady(_tick(pay)),
+        'not-ready' => UserWords.notReady(_tick(pay), q.soon),
+        'redoing' => UserWords.redoing(_tick(pay)),
+        'freeing' => UserWords.freeing(_tick(pay), q.soon),
         _ => UserWords.tooSmall,
       };
 

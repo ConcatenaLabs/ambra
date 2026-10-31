@@ -170,6 +170,8 @@ UserTradeEngine _newTradeEngine(String walletTag) {
     // The engine's own following of a trade (its syncs and reads) is not a person's action: it
     // keeps no board waiting, so coins arriving while a trade waits still move in.
     run: (cmd, args) => LeafService.instance.pay(cmd, args, true, !kFollowCommands.contains(cmd)),
+    // The operator's anchor depth: at 0 a coin not ready yet is on its way, ready in a minute or two.
+    anchorDepth: () => LeafService.instance.anchorDepth(),
     fetchJson: fetchJson,
     makers: () => [Backend.leafMaker, Backend.leafMakerBtc],
     relayBook: (pay, receive) async => [...await one(receive, pay), ...await one(pay, receive)],
@@ -428,8 +430,9 @@ class _UserComposerState extends State<UserComposer> {
           final p = widget.ticker(_pay!), g = widget.ticker(_get!);
           _error = switch (q.why) {
             'no-funds' => UserWords.noFunds(p),
-            'not-ready' => UserWords.notReady(p),
-            'freeing' => UserWords.freeing(p),
+            'not-ready' => UserWords.notReady(p, q.soon),
+            'redoing' => UserWords.redoing(p),
+            'freeing' => UserWords.freeing(p, q.soon),
             'too-small' => UserWords.tooSmall,
             'not-listed' => UserWords.notListed(g, p),
             _ => UserWords.notOffered(g, p),
@@ -504,7 +507,7 @@ class _UserComposerState extends State<UserComposer> {
     if (r['state'] == 'returned' && fees.isNotEmpty) {
       return UserWords.returnedFees([for (final f in fees) _amt('${(f as Map)['asset']}', BigInt.parse('${f['atoms']}'))].join(' and '));
     }
-    return tradeStateWord(r, DateTime.now().millisecondsSinceEpoch) ?? UserWords.returned;
+    return tradeStateWord(r, DateTime.now().millisecondsSinceEpoch, soon: widget.engine.soon) ?? UserWords.returned;
   }
 
   /// A picker: a button naming the asset chosen, which opens the wallet's one asset chooser.
