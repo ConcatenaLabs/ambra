@@ -46,6 +46,9 @@ class _HistoryTabState extends State<HistoryTab> {
     super.initState();
     _loadCached(); // show last-known history at once, refresh below
     _load(); // eager: load at launch (also reloads on activation)
+    // At launch History loads before the leaf wallet opens; once it is open the list is read
+    // again, so the wallet's own boards are known and left out.
+    LeafService.instance.addListener(_onLeaves);
     _loadSidecars(); // restricted-transfer tracker + Lightning history
     _loadTrades();
     // While History is there, pending payments are looked up again every half minute.
@@ -56,6 +59,7 @@ class _HistoryTabState extends State<HistoryTab> {
 
   @override
   void dispose() {
+    LeafService.instance.removeListener(_onLeaves);
     _paymentsTimer?.cancel();
     _tradesChanged?.cancel();
     super.dispose();
@@ -214,6 +218,13 @@ class _HistoryTabState extends State<HistoryTab> {
       _loadSidecars();
       _loadTrades();
     }
+  }
+
+  bool _loadedWithLeaves = false;
+  void _onLeaves() {
+    if (_loadedWithLeaves || !LeafService.instance.open || !mounted) return;
+    _loadedWithLeaves = true;
+    _load();
   }
 
   Future<void> _load() async {

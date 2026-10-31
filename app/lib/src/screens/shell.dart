@@ -213,7 +213,7 @@ class _BalanceTabState extends State<BalanceTab> {
     PriceService.instance.addListener(_onPrice);
     DevMode.instance.addListener(_onPrice);
     LeafService.instance.addListener(_onPrice);
-    LightningToArk.instance.addListener(_onPrice);
+    LightningToArk.instance.addListener(_onMove);
     ArkBtcService.instance.addListener(_onPrice);
     StakeHoldings.instance.addListener(_onPrice);
     // Asset labels can arrive after first paint (network registry); rebuild so
@@ -242,6 +242,18 @@ class _BalanceTabState extends State<BalanceTab> {
     if (widget.isActive && !oldWidget.isActive) _refresh();
   }
 
+  /// A move from a channel just ended (BTC to the ark, an asset to the tree): the channels are
+  /// read again with the rest, so what left one is not counted there and where it went at once.
+  bool _wasMoving = false;
+  void _onMove() {
+    final l = LightningToArk.instance;
+    final now = l.moving != null || l.movingAssets.isNotEmpty;
+    final ended = _wasMoving && !now;
+    _wasMoving = now;
+    _onPrice();
+    if (ended && mounted) unawaited(_refresh());
+  }
+
   void _onPrice() {
     if (!mounted) return;
     setState(() {});
@@ -261,7 +273,7 @@ class _BalanceTabState extends State<BalanceTab> {
     PriceService.instance.removeListener(_onPrice);
     DevMode.instance.removeListener(_onPrice);
     LeafService.instance.removeListener(_onPrice);
-    LightningToArk.instance.removeListener(_onPrice);
+    LightningToArk.instance.removeListener(_onMove);
     ArkBtcService.instance.removeListener(_onPrice);
     StakeHoldings.instance.removeListener(_onPrice);
     RegistryService.instance.removeListener(_onPrice);
