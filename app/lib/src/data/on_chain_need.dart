@@ -61,7 +61,11 @@ Future<bool> ensureOnChain({
   final least = minLeaves(leaves.info)[asset] ?? BigInt.zero;
   if (missing < least) missing = least;
   final can = leaves.spendableAtoms(asset);
-  if (can < missing) throw OnChainRefusal(StakeWords.notEnough(formatAtoms('${missing - can}', precision)));
+  if (can < missing) {
+    // What vests later is never moved: an action that needs it says from when it can be used.
+    throw OnChainRefusal(leaves.notVested(asset, missing, can, ticker: ticker, precision: precision) ??
+        StakeWords.notEnough(formatAtoms('${missing - can}', precision)));
+  }
   final m = await WalletRepository.instance.readMnemonic();
   if (m == null) throw OnChainRefusal(StakeWords.notMoved);
   final address = await core.receiveAddress(mnemonic: m);

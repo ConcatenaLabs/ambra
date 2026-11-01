@@ -126,6 +126,15 @@ class AmbraSites {
       read: () async => (await SharedPreferences.getInstance()).getString(key),
       write: (v) async => (await SharedPreferences.getInstance()).setString(key, v),
       list: _listOrder,
+      notVested: (asset, atoms) async {
+        var chain = BigInt.zero;
+        for (final b in await WalletCache.loadBalances() ?? const []) {
+          if (b.assetId == asset) chain = BigInt.tryParse(b.atoms) ?? BigInt.zero;
+        }
+        final l = SeqAssets.labelFor(asset);
+        return LeafService.instance.notVested(asset, atoms, chain + LeafService.instance.spendableAtoms(asset),
+            ticker: l.ticker, precision: l.precision);
+      },
       log: (m) => debugPrint(m),
     ));
   }

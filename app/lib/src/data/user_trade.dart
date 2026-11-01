@@ -90,6 +90,13 @@ const List<String> kUserModeForbiddenWords = [
   'lightning',
   'bridge',
   'gateway',
+  'claim',
+  'claims',
+  'distribution',
+  'distributions',
+  'lapse',
+  'lapses',
+  'locktime',
 ];
 
 List<String> forbiddenIn(String text) {

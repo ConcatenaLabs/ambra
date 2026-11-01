@@ -96,7 +96,9 @@ at most every five minutes and at once on the stake screen). What a payment may 
 still `spendable_units`. More > Mode is one setting, kept for each wallet
 (`ambra.mode.<fingerprint>`), user mode by default. User mode shows one figure per row
 and no rail and no Lightning control; a tap on a row shows what is staked, if any, and
-what is not final yet shows under it as "<amount> <TICKER> arriving". Developer mode shows the
+what is not final yet shows under it as "<amount> <TICKER> arriving", and what cannot move before
+a date (a vesting allocation) as "<amount> <TICKER> vests on <date>", counted in the figure and
+never in what can be spent. Developer mode shows the
 split beneath each row, "X on-chain · Y in leaves · Z on Lightning · W staked", with the
 Move to Lightning / Move to chain card. BTC's line says it has no leaves (a tree on
 Sequentia holds no BTC). User mode joins the default node's operator by itself (its key

@@ -78,7 +78,8 @@ module that implements it.
   channel reserve, `balance_units`, or `spendable_units` from an LSP that does not report
   it) and, for the Sequence token, what is staked (each bonded stake under either lock,
   each unbonding output not yet returned, and the delegation record; a stake returned to
-  the wallet is on-chain again and counted there once). User mode shows one figure per
+  the wallet is on-chain again and counted there once), and what the wallet holds that
+  cannot move before a date (see "What vests later" below). User mode shows one figure per
   row; a tap on the row shows what is staked, if any, and what is arriving shows under
   it. Developer mode shows the parts beside each row, with the Lightning controls (`app/lib/src/data/portfolio.dart`, `app/lib/src/data/stakes.dart`).
   What a payment can use is the spendable part, not the figure.
@@ -266,8 +267,22 @@ module that implements it.
     minutes.
   - Its words are the default-mode contract's (sequentia-web-wallet `docs/DEFAULT_MODE.md`), held in
     `app/lib/src/data/default_words.dart` and tested against the contract's forbidden words.
-    Default mode shows no rail: a row's details show only Staked, what is arriving, and a
-    freeze; the split by rail and the fee-rate fields are developer mode's.
+    Default mode shows no rail: a row's details show only Staked, what is arriving, what vests
+    later, and a freeze; the split by rail and the fee-rate fields are developer mode's.
+  - **What vests later.** A vesting distribution (a token sale whose tokens vest, for one) pays
+    a key of this wallet a coin nobody can move before its date. The wallet reads the leaf
+    library's `claims` (under the OpenAMP key and the on-chain receive keys care scans) at most
+    every two minutes and after each care, keeps the last reading so the balance shows it
+    offline and while syncing, and counts what vests in the asset's figure and the headline,
+    never in what can be spent: "100 ORNG vests on 3 November 2026" under the figure, one line
+    for each date, and an asset held only this way still has its row. Every Max leaves it out,
+    and Send, the Swap tab, Stake, a pool's membership, Mix and a site's sale refuse an amount
+    that needs it, before anything is signed: "100 ORNG of this vests on 3 November 2026, and
+    can be used from then. Nothing has moved." From that date the library's care takes it up by
+    itself (at once, when a reading shows it open), and it is then part of the figure, arriving
+    until final. Developer mode lists it with the rest of the claims on the Leaves screen and as
+    "in vesting claims" beside the row (`app/lib/src/data/vesting.dart`, the web wallet's
+    `default-arca.js`).
   - Receive shows the wallet's one **receive code** (`app/lib/src/data/pay_code.dart`, the
     web wallet's format): a BIP321 request,
     `BITCOIN:<ADDRESS>?ark=<BITCOIN ARK ADDRESS>&sequentia=<SQR1…>`. The address

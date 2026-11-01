@@ -2020,12 +2020,19 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
       draftKey: 'ambra.usercomposer.draft.$tag',
       // What the person can pay with: BTC always, and every other asset only once the wallet
       // holds it (a brand-new wallet lists BTC alone).
-      assets: () => <String>{kBtcSentinel, ..._payableAssets(), ...leaves().keys}
-          .where((h) => h == kBtcSentinel || held(h) > BigInt.zero)
+      // An asset the wallet holds only as what vests later is listed too, so a trade of it says
+      // from when it can be used.
+      assets: () => <String>{kBtcSentinel, ..._payableAssets(), ...leaves().keys, ...LeafService.instance.vestingAtoms().keys}
+          .where((h) => h == kBtcSentinel || held(h) > BigInt.zero || (LeafService.instance.vestingAtoms()[h] ?? BigInt.zero) > BigInt.zero)
           .toList(),
       // Each asset's one figure, as the balance row counts it: on-chain, leaves and Lightning
       // (BTC in the wallet's own Bitcoin node's channels and on the Bitcoin ark included).
       held: held,
+      // What vests later is never paid from: a trade that needs it says from when it can be used.
+      notVested: (h, atoms) => h == kBtcSentinel
+          ? null
+          : LeafService.instance.notVested(h, atoms, held(h),
+              ticker: SeqAssets.labelFor(h).ticker, precision: SeqAssets.labelFor(h).precision),
       onMoved: () => LeafService.instance.refresh(),
       ticker: (h) => h == kBtcSentinel ? 'BTC' : SeqAssets.labelFor(h).ticker,
       precision: (h) => h == kBtcSentinel ? 8 : SeqAssets.labelFor(h).precision,

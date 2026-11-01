@@ -6,14 +6,19 @@
 /// never a leaf (a tree on Sequentia holds no BTC) and never staked.
 class AssetFigure {
   AssetFigure(
-      {required this.id, required this.onchain, required this.leaves, required this.lightning, BigInt? staked})
-      : staked = staked ?? BigInt.zero;
+      {required this.id, required this.onchain, required this.leaves, required this.lightning, BigInt? staked, BigInt? vesting})
+      : staked = staked ?? BigInt.zero,
+        vesting = vesting ?? BigInt.zero;
   final String id;
   final BigInt onchain;
   final BigInt leaves;
   final BigInt lightning;
   final BigInt staked;
-  BigInt get total => onchain + leaves + lightning + staked;
+
+  /// What the wallet holds of the asset that cannot move before a date (a vesting allocation,
+  /// `vesting.dart`): part of the figure, never of what can be spent.
+  final BigInt vesting;
+  BigInt get total => onchain + leaves + lightning + staked + vesting;
 }
 
 /// Every Sequentia asset held anywhere, each with its figure. No asset comes first:
@@ -23,8 +28,9 @@ List<AssetFigure> assetFigures({
   Map<String, BigInt> leaves = const {},
   Map<String, BigInt> lightning = const {},
   Map<String, BigInt> staked = const {},
+  Map<String, BigInt> vesting = const {},
 }) {
-  final ids = <String>{...onchain.keys, ...leaves.keys, ...lightning.keys, ...staked.keys};
+  final ids = <String>{...onchain.keys, ...leaves.keys, ...lightning.keys, ...staked.keys, ...vesting.keys};
   return [
     for (final id in ids)
       AssetFigure(
@@ -33,19 +39,22 @@ List<AssetFigure> assetFigures({
         leaves: leaves[id] ?? BigInt.zero,
         lightning: lightning[id] ?? BigInt.zero,
         staked: staked[id] ?? BigInt.zero,
+        vesting: vesting[id] ?? BigInt.zero,
       ),
   ];
 }
 
 /// The parts of a figure in the plain words user mode shows one tap away, only the
-/// parts held: On-chain, Instant (leaves: paid in seconds), Lightning, Staked. User mode
-/// ([dev] false) shows Staked alone: the split by rail is developer mode's (the default-mode
-/// contract, sequentia-web-wallet `docs/DEFAULT_MODE.md`).
+/// parts held: On-chain, Instant (leaves: paid in seconds), Lightning, Staked, Vesting. User mode
+/// ([dev] false) shows Staked alone (the row adds a `Vests on <date>` part for each date): the
+/// split by rail is developer mode's (the default-mode contract, sequentia-web-wallet
+/// `docs/DEFAULT_MODE.md`).
 List<(String, BigInt)> splitParts(AssetFigure f, {bool dev = true}) => [
       ('On-chain', f.onchain),
       ('Instant', f.leaves),
       ('Lightning', f.lightning),
       ('Staked', f.staked),
+      ('Vesting', f.vesting),
     ].where((p) => p.$2 > BigInt.zero && (dev || p.$1 == 'Staked')).toList();
 
 /// The headline: every holding valued in the reference unit and summed, every asset

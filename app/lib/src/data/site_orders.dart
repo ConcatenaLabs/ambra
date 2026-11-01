@@ -130,6 +130,7 @@ class SiteOrderDeps {
     required this.read,
     required this.write,
     this.list,
+    this.notVested,
     int Function()? now,
     void Function(String)? log,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
@@ -150,6 +151,10 @@ class SiteOrderDeps {
 
   /// Lists an order placed here on the book once it rests; answers what to keep of the listing.
   final Future<Map<String, dynamic>> Function(Map<String, dynamic> order, Map<String, dynamic> rec)? list;
+
+  /// The sentence an order paying [atoms] of [asset] says when that needs what has not vested yet,
+  /// or null (`vesting.dart`). Nothing is priced or signed then.
+  final Future<String?> Function(String asset, BigInt atoms)? notVested;
   final int Function() now;
   final void Function(String) log;
 }
@@ -257,6 +262,11 @@ class SiteOrders {
       o = readOrderParams(params);
     } on ArgumentError catch (e) {
       throw SiteRefusal('${e.message}');
+    }
+    // A sale pays its amount: when that needs what has not vested yet, it says from when.
+    if (o.side == 'sell' && d.notVested != null) {
+      final nv = await d.notVested!(o.base, o.amount);
+      if (nv != null) throw SiteRefusal(nv);
     }
     final asked = (SiteWords.askedBy, origin);
     ({String pay, String get, QuoteResult q})? tq;

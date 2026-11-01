@@ -26,6 +26,7 @@ import '../data/lightning_service.dart';
 import '../data/ln_payment_limit.dart';
 import '../data/ln_rail.dart';
 import '../data/portfolio.dart';
+import '../data/vesting.dart';
 import '../data/lsp_client.dart';
 import '../data/node_config.dart';
 import '../data/openamp_service.dart';
@@ -408,6 +409,11 @@ class _BalanceTabState extends State<BalanceTab> {
     final arriving = LeafService.instance.joined ? LeafService.instance.arrivingAtoms() : const <String, BigInt>{};
     final redoing = LeafService.instance.joined ? LeafService.instance.redoingAtoms() : const <String, BigInt>{};
     final keptSafe = LeafService.instance.joined ? LeafService.instance.keptSafeAtoms() : const <String, BigInt>{};
+    // What cannot move before a date (a vesting allocation): in the figure and the headline, one
+    // line under the figure for each date, never in what can be spent. An asset held only this
+    // way still has its row.
+    final vestingLines = LeafService.instance.joined ? LeafService.instance.vesting() : const <VestingLot>[];
+    final vesting = vestingAtomsOf(vestingLines);
     final onchainOf = {
       for (final b in onchainBalances ?? const <core.AssetBalance>[])
         b.assetId: LeafService.instance.onchainLessBoards(b.assetId, BigInt.tryParse(b.atoms) ?? BigInt.zero)
@@ -432,6 +438,7 @@ class _BalanceTabState extends State<BalanceTab> {
             leaves: leafAtoms,
             lightning: {for (final id in {...onchainOf.keys, ...leafAtoms.keys, ...arriving.keys, ...lnAssets, ...moving.keys}) id: lnOf(id)},
             staked: staked,
+            vesting: vesting,
           );
     final figureOf = {for (final f in figures ?? const <AssetFigure>[]) f.id: f};
     final balances = figures == null
@@ -546,6 +553,7 @@ class _BalanceTabState extends State<BalanceTab> {
                     arriving: arriving[h],
                     redoing: redoing[h],
                     keptSafe: keptSafe[h],
+                    vesting: vestingFor(vestingLines, h),
                     moving: moving[h],
                     channels: _lnChannels,
                     onChanged: _refresh,
@@ -583,6 +591,7 @@ class _AssetRow extends StatefulWidget {
       this.arriving,
       this.redoing,
       this.keptSafe,
+      this.vesting = const [],
       this.moving,
       this.channels = const [],
       this.onChanged,
@@ -608,6 +617,10 @@ class _AssetRow extends StatefulWidget {
 
   /// User mode: what was moved out to keep it safe while the wallet was away, until it is put back.
   final BigInt? keptSafe;
+
+  /// What of the asset vests later, one entry for each date (counted in the figure, never in what
+  /// can be spent): user mode says `<amount> <TICKER> vests on <date>` under the figure.
+  final List<VestingLot> vesting;
 
   /// User mode: what of the asset is on its way from its channel to the tree.
   final BigInt? moving;
@@ -642,7 +655,11 @@ class _AssetRowState extends State<_AssetRow> {
     // restriction-disclosure detail sheet on tap.
     final restricted = OpenAmpService.instance.isRestricted(balance.assetId);
     final movable = !restricted;
-    final parts = figure == null ? const <(String, BigInt)>[] : splitParts(figure, dev: widget.dev);
+    final parts = [
+      if (figure != null) ...splitParts(figure, dev: widget.dev),
+      if (!widget.dev)
+        for (final l in widget.vesting) (DefaultWords.vestsOn(l.vests), l.atoms),
+    ];
     final VoidCallback? onTap = restricted
         ? () => showRestrictedAssetDetail(context, balance.assetId)
         : (!widget.dev && parts.isNotEmpty ? () => setState(() => _open = !_open) : null);
@@ -729,6 +746,16 @@ class _AssetRowState extends State<_AssetRow> {
                 key: Key('redoing-${label.ticker}'), style: AmbraText.sub),
           ),
         ),
+      if (!widget.dev)
+        for (final l in widget.vesting)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(DefaultWords.vests(formatAtoms(l.atoms.toString(), label.precision), label.ticker, l.vests),
+                  key: Key('vests-${label.ticker}-${l.vest}'), style: AmbraText.sub),
+            ),
+          ),
       if (!widget.dev && (widget.keptSafe ?? BigInt.zero) > BigInt.zero)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
@@ -748,6 +775,7 @@ class _AssetRowState extends State<_AssetRow> {
           leaves: widget.leavesJoined || figure.leaves > BigInt.zero ? figure.leaves : null,
           lightning: figure.lightning,
           staked: figure.staked,
+          vesting: figure.vesting,
         ),
       if (widget.dev && movable)
         _LnMeta(
@@ -1090,6 +1118,7 @@ class _RailLine extends StatelessWidget {
     required this.leaves,
     required this.lightning,
     this.staked,
+    this.vesting,
     this.btc = false,
     this.ark,
   });
@@ -1102,6 +1131,7 @@ class _RailLine extends StatelessWidget {
   final BigInt? leaves; // null: no leaf wallet joined, or BTC
   final BigInt lightning;
   final BigInt? staked; // shown when above zero
+  final BigInt? vesting; // vesting claims not taken up yet, shown when above zero
   final bool btc;
 
   @override
@@ -1113,6 +1143,7 @@ class _RailLine extends StatelessWidget {
       '${f(lightning)} on Lightning',
       if (ark != null && ark! > BigInt.zero) '${f(ark!)} on the Bitcoin ark',
       if (staked != null && staked! > BigInt.zero) '${f(staked!)} staked',
+      if (vesting != null && vesting! > BigInt.zero) '${f(vesting!)} in vesting claims',
     ];
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),

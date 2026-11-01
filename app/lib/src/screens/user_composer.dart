@@ -247,7 +247,7 @@ const Duration kMakerPostTimeout = Duration(minutes: 5);
 class UserComposer extends StatefulWidget {
   const UserComposer({super.key, required this.engine, required this.assets, required this.held, required this.ticker,
       required this.precision, this.admittedReceives, this.onMoved, this.known, this.isHidden, this.refValue, this.relay, this.marketGet,
-      this.draftKey});
+      this.draftKey, this.notVested});
   final UserTradeEngine engine;
   /// What can be paid: BTC always, and every other asset the wallet holds.
   final List<String> Function() assets;
@@ -270,6 +270,11 @@ class UserComposer extends StatefulWidget {
   /// was asked for), so it is there again after the app was in the background, locked or
   /// restarted. Null: nothing is kept.
   final String? draftKey;
+
+  /// The sentence a trade paying [atoms] of [asset] says when that needs what has not vested yet
+  /// (more than [held] can pay, the rest held until a date), or null. Nothing is priced or signed
+  /// then.
+  final String? Function(String asset, BigInt atoms)? notVested;
 
   @override
   State<UserComposer> createState() => _UserComposerState();
@@ -567,6 +572,11 @@ class _UserComposerState extends State<UserComposer> {
     }
     if (_get == null) return;
     final pay = _pay!, get = _get!;
+    final notVested = widget.notVested?.call(pay, atoms);
+    if (notVested != null) {
+      setState(() => _error = notVested);
+      return;
+    }
     setState(() {
       _busy = true;
       _reviewing = true;

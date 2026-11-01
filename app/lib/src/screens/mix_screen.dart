@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../data/coinjoin_protocol.dart';
 import '../data/coinjoin_service.dart';
+import '../data/dev_mode.dart';
+import '../data/leaf_service.dart';
+import '../data/wallet_cache.dart';
 import '../data/config.dart';
 import '../data/format.dart';
 import '../theme/theme.dart';
@@ -60,9 +63,27 @@ class _MixScreenState extends State<MixScreen> {
   String _ticker(String asset) => SeqAssets.labelFor(asset).ticker;
   int _precision(String asset) => SeqAssets.labelFor(asset).precision;
 
+  /// User mode: the sentence a mix says when it needs what has not vested yet (more than the wallet
+  /// holds, the rest held until a date), or null. Nothing is signed then.
+  Future<String?> _notVested(CoinjoinLane lane) async {
+    if (DevMode.instance.on || !LeafService.instance.joined) return null;
+    var chain = BigInt.zero;
+    for (final b in await WalletCache.loadBalances() ?? const []) {
+      if (b.assetId == lane.asset) chain = BigInt.tryParse(b.atoms) ?? BigInt.zero;
+    }
+    return LeafService.instance.notVested(lane.asset, lane.perDenomination * BigInt.from(_count),
+        chain + LeafService.instance.spendableAtoms(lane.asset),
+        ticker: _ticker(lane.asset), precision: _precision(lane.asset));
+  }
+
   Future<void> _run() async {
     final lane = _lane;
     if (lane == null) return;
+    final notVested = await _notVested(lane);
+    if (notVested != null) {
+      if (mounted) setState(() => _error = notVested);
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
