@@ -517,6 +517,16 @@ class BtcTrades {
       final r2 = (((await run('lightning_receives')) as Map?)?[hash] as Map?) ?? const {};
       rec['receiveState'] = r2['state'];
       if (r2['state'] != 'received') return put(rec);
+      // The coin the claim made is the one settled, named by its id: its value is the quote's only
+      // while the operator's fee rates hold, and a coin looked for by a value it no longer has is
+      // never found.
+      final targets = (rec['settleTargets'] as List?) ?? const [];
+      if (r2['leaf'] != null && targets.length == 1 && (targets[0] as Map)['leaf_id'] == null) {
+        rec['settleTargets'] = [
+          {...(targets[0] as Map), 'leaf_id': r2['leaf']},
+        ];
+        await put(rec);
+      }
       // The claimed coin is settled in the next round, at no more than the ticket's fee.
       if (await settleStep(rec)) {
         rec['state'] = 'settled';

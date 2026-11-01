@@ -63,8 +63,14 @@ class StandIn {
   bool expired = false;
   String? renew;
   int locks = 0;
+  // The library names the leaf its claim made (`leaf`), and [land] leaves the claimed coin as the
+  // library has it by the next command.
+  bool namesLeaf = false;
+  void Function(StandIn s, Map<String, dynamic> coin)? land;
+  final calls = <String>[];
 
   Future<dynamic> run(String cmd, Map<String, dynamic> a) async {
+    calls.add(cmd);
     switch (cmd) {
       case 'coins':
         return coins;
@@ -102,7 +108,10 @@ class StandIn {
       case 'lightning_receive_preimage':
         receives['${a['hash']}']!['preimage'] = a['preimage'];
         receives['${a['hash']}']!['state'] = 'received';
-        coins.add({'leaf_id': 'r1', 'asset': x, 'value': claimed, 'state': 'live'});
+        if (namesLeaf) receives['${a['hash']}']!['leaf'] = 'r1';
+        final coin = <String, dynamic>{'leaf_id': 'r1', 'asset': x, 'value': claimed, 'state': 'live'};
+        coins.add(coin);
+        land?.call(this, coin);
         return {};
       case 'quote':
         return {
@@ -326,6 +335,97 @@ void main() {
     }
     r = await eng.advance((await eng.records()).first);
     expect(r['state'], 'settled');
+  });
+
+  // A purchase whose claim landed as [land] leaves it: the engine, the trade under way past its BTC.
+  Future<UserTradeEngine> claimed(StandIn s) async {
+    s
+      ..makerSats = BigInt.from(50000)
+      ..claimed = '${100000 - 616 - 7}'
+      ..namesLeaf = true;
+    final eng = engine(s, 'BTC', x);
+    final q = await eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
+    expect(q.ok, isTrue, reason: q.why);
+    await eng.confirm(q.choice!, q.ticket!);
+    s.receives[h]!['state'] = 'issuing';
+    s.ready = true;
+    await eng.advance((await eng.records()).first);
+    return eng;
+  }
+
+  test('buying with BTC: the claimed coin, below the quote and given up to a refresh, is settled by that refresh', () async {
+    final pid = '9a' * 32;
+    // The library's refresh of received coins takes the claimed coin as soon as it lands.
+    final s = StandIn()
+      ..land = (s, c) {
+        c['state'] = 'given';
+        c['note'] = 'participation $pid';
+        s.parts = [
+          {'participation': pid, 'state': 'pending'}
+        ];
+      };
+    final eng = await claimed(s);
+    var r = await eng.advance((await eng.records()).first);
+    expect(r['settle'], {
+      'coins': ['r1'],
+      'participations': [pid]
+    }, reason: 'the refresh that took the coin is followed');
+    expect(s.calls.contains('participate'), isFalse, reason: 'no round of its own is asked for the coin');
+    r = await eng.advance((await eng.records()).first);
+    expect(r['state'], 'sent', reason: 'waiting while the refresh waits');
+    // Taken back: the coin is live again, and settled in a round of the trade's own.
+    s.parts.first['state'] = 'void';
+    final c = s.coins.firstWhere((x) => x['leaf_id'] == 'r1');
+    c['state'] = 'live';
+    c['note'] = '';
+    r = await eng.advance((await eng.records()).first);
+    r = await eng.advance((await eng.records()).first);
+    expect((r['settle'] as Map?)?['coins'], ['r1']);
+    expect(s.calls.contains('participate'), isTrue);
+    for (final pt in s.parts) {
+      pt['state'] = 'released';
+      pt['new_leaves'] = [
+        {'state': 'live'}
+      ];
+    }
+    r = await eng.advance((await eng.records()).first);
+    expect(r['state'], 'settled');
+  });
+
+  test('buying with BTC: a claimed coin already spent by its released refresh is settled', () async {
+    final pid = '7b' * 32;
+    final s = StandIn()
+      ..land = (s, c) {
+        c['state'] = 'spent';
+        c['spent_by'] = 'participation $pid';
+        s.parts = [
+          {
+            'participation': pid,
+            'state': 'released',
+            'new_leaves': [
+              {'state': 'live'}
+            ]
+          }
+        ];
+      };
+    final eng = await claimed(s);
+    var r = await eng.advance((await eng.records()).first);
+    if (r['state'] != 'settled') r = await eng.advance((await eng.records()).first);
+    expect(r['state'], 'settled');
+    expect(s.calls.contains('participate'), isFalse);
+  });
+
+  test('buying with BTC: a claimed coin paid on out of round leaves nothing to settle', () async {
+    final s = StandIn()
+      ..land = (s, c) {
+        c['state'] = 'spent';
+        c['spent_by'] = 'transfer ${'ab' * 32}';
+      };
+    final eng = await claimed(s);
+    var r = await eng.advance((await eng.records()).first);
+    if (r['state'] != 'settled') r = await eng.advance((await eng.records()).first);
+    expect(r['state'], 'settled');
+    expect(s.calls.contains('participate'), isFalse);
   });
 
   test('buying with BTC through another node: the route\'s fee on the ticket, its whole lock bounds the payment and the leaf', () async {

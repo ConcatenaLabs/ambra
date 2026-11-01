@@ -1753,51 +1753,88 @@ class UserTradeEngine {
 
   /// The coins a trade brings, or leaves as change on a reassignment, settled in the operator's
   /// next round at no more than the fees its ticket showed. True once every such round is final.
+  /// A coin the library has already given up to a round of its own (its refresh of received coins
+  /// takes a coin as soon as it lands) is settled by that round, followed under its own id; one
+  /// paid on out of round leaves nothing of the trade to settle.
   Future<bool> _settleStep(Map<String, dynamic> rec) async {
     final targets = ((rec['settleTargets'] as List?) ?? const []).cast<Map>();
     if (targets.isEmpty) return true;
     if (rec['settle'] == null) {
       final before = {...((rec['before'] as List?) ?? const []).map((e) => '$e')};
-      final fresh = ((await _run('coins')) as List? ?? const [])
+      final all = ((await _run('coins')) as List? ?? const [])
           .cast<Map>()
-          .where((c) => !before.contains('${c['leaf_id']}') && c['state'] == 'live')
+          .where((c) => !before.contains('${c['leaf_id']}'))
           .toList();
       final coins = <Map>[];
+      final targetOf = <String, Map>{};
+      final taken = <String, String>{};
+      final used = <Map>{};
       for (final t in targets) {
-        final c = fresh.where((x) => !coins.contains(x) && x['asset'] == t['asset'] && '${x['value']}' == '${t['value']}').firstOrNull;
-        if (c == null) return false;
-        coins.add(c);
-      }
-      final ids = [for (final c in coins) c['leaf_id']];
-      Map q;
-      try {
-        q = (await _run('quote', {'leaves': ids, 'max_fee_ppm': kMaxFeePpm})) as Map;
-      } catch (e) {
-        d.log('[user trade] settle quote: $e');
+        // A target that names its coin is that coin; otherwise the coin of its asset and value.
+        final id = t['leaf_id'];
+        final c = id != null
+            ? all.where((x) => x['leaf_id'] == id).firstOrNull
+            : all
+                .where((x) =>
+                    !used.contains(x) &&
+                    x['asset'] == t['asset'] &&
+                    '${x['value']}' == '${t['value']}' &&
+                    (x['state'] == 'live' || _roundOf(x) != null))
+                .firstOrNull;
+        if (c != null) used.add(c);
+        final pid = _roundOf(c);
+        if (pid != null) {
+          taken['${c!['leaf_id']}'] = pid;
+          continue;
+        }
+        if (c != null && c['state'] == 'live') {
+          coins.add(c);
+          targetOf['${c['leaf_id']}'] = t;
+          continue;
+        }
+        if (c != null && id != null && (c['state'] == 'spent' || c['state'] == 'given')) continue;
+        final why = id != null ? 'coin $id is not live yet' : 'no live coin of ${t['value']} of ${t['asset']} yet';
+        if (rec['settleWhy'] != why) {
+          rec['settleWhy'] = why;
+          d.log('[user trade] settle waits: $why');
+        }
         return false;
       }
-      for (final qc in ((q['coins'] as List?) ?? const []).cast<Map>()) {
-        final i = ids.indexOf(qc['leaf_id']);
-        if (i < 0 || _big(qc['fee']) > _big(targets[i]['fee'])) {
-          d.log('[user trade] a settle fee rose above the ticket');
+      if (coins.isEmpty && taken.isEmpty) return true;
+      final ids = [for (final c in coins) c['leaf_id']];
+      final parts = <String>[];
+      if (ids.isNotEmpty) {
+        Map q;
+        try {
+          q = (await _run('quote', {'leaves': ids, 'max_fee_ppm': kMaxFeePpm})) as Map;
+        } catch (e) {
+          d.log('[user trade] settle quote: $e');
           return false;
         }
+        for (final qc in ((q['coins'] as List?) ?? const []).cast<Map>()) {
+          final t = targetOf['${qc['leaf_id']}'];
+          if (t == null || _big(qc['fee']) > _big(t['fee'])) {
+            d.log('[user trade] a settle fee rose above the ticket');
+            return false;
+          }
+        }
+        Map r;
+        try {
+          r = (await _run('participate', {'leaves': ids, 'max_fee_ppm': kMaxFeePpm, 'shown': q['coins']})) as Map;
+        } catch (e) {
+          d.log('[user trade] participate: $e');
+          return false;
+        }
+        final ok = ((r['participations'] as List?) ?? const [])
+            .cast<Map>()
+            .where((p) => p['error'] == null && p['participation'] != null)
+            .toList();
+        if (ok.isEmpty) return false;
+        parts.addAll([for (final p in ok) '${p['participation']}']);
       }
-      Map r;
-      try {
-        r = (await _run('participate', {'leaves': ids, 'max_fee_ppm': kMaxFeePpm, 'shown': q['coins']})) as Map;
-      } catch (e) {
-        d.log('[user trade] participate: $e');
-        return false;
-      }
-      final parts = ((r['participations'] as List?) ?? const [])
-          .cast<Map>()
-          .where((p) => p['error'] == null && p['participation'] != null)
-          .toList();
-      if (parts.isEmpty) return false;
       rec['settle'] = {
-        'coins': ids,
-        'participations': [for (final p in parts) p['participation']],
+        'coins': [...ids, ...taken.keys],
+        'participations': {...parts, ...taken.values}.toList(),
       };
       await _put(rec);
       return false;
@@ -1807,6 +1844,17 @@ class UserTradeEngine {
     if (ps.every(_releasedLive)) return true;
     if (ps.any((p) => p != null && ['void', 'expired', 'refused', 'lost'].contains(p['state']))) rec['settle'] = null;
     return false;
+  }
+
+  /// The participation of the wallet's own that took coin [c]: named on a coin given up to it
+  /// (`refresh_waiting`, or the library's note `participation <id>`), and on one it spent once
+  /// released (`spent_by`).
+  static String? _roundOf(Map? c) {
+    if (c == null) return null;
+    String? named(Object? v) => RegExp(r'^participation ([0-9a-f]{64})$').firstMatch('${v ?? ''}')?.group(1);
+    if (c['state'] == 'given') return (c['refresh_waiting'] as String?) ?? named(c['note']);
+    if (c['state'] == 'spent') return named(c['spent_by']);
+    return null;
   }
 
   /// The assets the drill admitted against [pay] on this chain.
