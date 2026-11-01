@@ -138,7 +138,7 @@ module that implements it.
   (`app/lib/src/data/speed_up_service.dart`); its row then reads "Taking longer than usual: the
   wallet paid a little more to speed it up." A coin received out of round is refreshed at the next
   round by itself wherever the operator can fund it (`autoRefreshReceived`,
-  `app/lib/src/data/leaf_service.dart`), and still pays meanwhile.
+  `app/lib/src/data/leaf_service.dart`), and still pays and trades meanwhile.
 - In developer mode, rescue actions on unconfirmed transactions (`app/lib/src/screens/rescue_screen.dart`):
   - **RBF bump**: re-send the same payment at a higher fee,
   - **RBF replace**: same inputs, brand-new recipient/asset/amount,
