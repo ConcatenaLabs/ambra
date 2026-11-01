@@ -1,8 +1,9 @@
 //! The leaf service against a whole operator: a payment that arrives while the app
 //! is closed, an in-tree swap between two wallets, what `care` does by itself, and a
 //! payment out of planned coins made through a release, and a supervised asset's
-//! landing, freeze, exit and lift, a receive that rests on the operator's bond, and
-//! an issuer-operated asset's batch profile and supply. Runs against arca's long-running operator harness
+//! landing, freeze, exit and lift, a receive that rests on the operator's bond, an
+//! issuer-operated asset's batch profile and supply, and a vesting claim named under the
+//! staking key, listed with its date before it vests and taken up by care after. Runs against arca's long-running operator harness
 //! (`bark-cli/tests/arca_operator_for_browsers.rs` in ConcatenaLabs/arca), named by
 //! its control address:
 //!
@@ -10,7 +11,13 @@
 //! AMBRA_LEAVES_HARNESS=http://127.0.0.1:18640 cargo test --test leaves -- --nocapture
 //! ```
 //!
-//! Without `AMBRA_LEAVES_HARNESS` the test says so and passes without running.
+//! Without `AMBRA_LEAVES_HARNESS` the test says so and passes without running. The vesting
+//! test needs a harness building batches without a sweep, named apart (its collection a
+//! month after each round, so a claim is still served well past its vest date):
+//!
+//! ```sh
+//! AMBRA_LEAVES_NO_SWEEP_HARNESS=http://127.0.0.1:18641 cargo test --test leaves a_vesting_claim -- --nocapture
+//! ```
 //!
 //! The app's wallet (A) joins the operator, hands out a receive request and is
 //! closed. A second wallet (B, the payer) boards on-chain coins and pays the
@@ -695,4 +702,88 @@ fn an_issuer_operated_asset_shows_its_batch_profile_and_supply() {
     assert_eq!(report["checked_on_the_node"], json!(true), "{report}");
     drop(a);
     let _ = std::fs::remove_dir_all(&adir);
+}
+
+/// What the app reads for a vesting allocation: a distribution with a vest time names the
+/// holder's staking key (m/2/0, the key a site's staker sign-in knows the holder by), and
+/// the holder's `claims` lists it `vesting` with its asset, value and date in words; `care`
+/// takes nothing before the date and holds no coin for it; once the chain's median time has
+/// passed it, `care` takes it up by itself and the holder holds a coin of the asset.
+///
+/// A vest-1 leaf needs batches without a sweep, so this runs only against a harness
+/// started with `ARCA_OPERATOR_NO_SWEEP`, named by `AMBRA_LEAVES_NO_SWEEP_HARNESS` (the
+/// other tests here drive rounds with `/round`, which such a harness holds for forfeits).
+#[test]
+fn a_vesting_claim_shows_its_date_and_is_taken_up_once_it_vests() {
+    let Ok(h) = std::env::var("AMBRA_LEAVES_NO_SWEEP_HARNESS") else {
+        eprintln!("AMBRA_LEAVES_NO_SWEEP_HARNESS is not set: no harness without a sweep is running, nothing to test against");
+        return;
+    };
+    let state = control(&h, "/state", json!({}));
+    let x = state["x"].as_str().unwrap().to_string();
+    let config = harness_config(&state);
+    let median = || control(&h, "/rpc", json!({"method": "getblockchaininfo", "params": []}))["mediantime"].as_u64().unwrap();
+
+    // The holder's staking key, x-only, as a site that recovered it from a signature names it.
+    let holder = fresh_phrase();
+    let staker = ambra_core::api::staker_public_key(holder.clone()).expect("the staking key");
+    let key = staker[2..].to_string();
+
+    let (mut d, ddir) = boarded(&h, "vest-distributor", &config, &x, &x, 2_000_000);
+    let claims = json!([{"key": key, "amount": 700000}]);
+    let fee = ok(d.run("distribute_quote", &json!({"asset": x, "claims": claims})), "quote")["result"]["fee"].clone();
+    let fee = fee.as_str().map(|s| s.parse::<u64>().unwrap()).or_else(|| fee.as_u64()).unwrap();
+    let vest = median() + 900;
+    let dist = ok(d.run("distribute", &json!({"asset": x, "claims": claims, "shown": fee, "vest": vest, "deadline": vest + 7 * 86_400})), "distribute")["result"].clone();
+    eprintln!("distribution: {dist}");
+    assert_eq!(dist["vest"].as_u64(), Some(vest), "{dist}");
+    // A round without a sweep takes the payer's forfeit before it is broadcast.
+    eprintln!("build: {}", control(&h, "/build", json!({})));
+    ok(d.run("sync", &json!({})), "the distributor hands over its forfeit");
+    eprintln!("pass: {}", control(&h, "/pass", json!({})));
+    control(&h, "/produce", json!({}));
+    control(&h, "/bury", json!({}));
+    let mut released = Value::Null;
+    for _ in 0..30 {
+        ok(d.run("sync", &json!({})), "distributor sync");
+        released = ok(d.run("distributions", &json!({})), "distributions")["result"][0].clone();
+        if released["state"] == "released" {
+            break;
+        }
+        control(&h, "/bury", json!({}));
+    }
+    assert_eq!(released["state"], "released", "{released}");
+
+    // Before the vest time: listed with its asset, value and date; care takes nothing.
+    let hdir = dir("vest-holder");
+    ok(leaves::start(&hdir, &holder, Some(&config), None), "the holder joins");
+    let found = ok(leaves::run("claims", &json!({"scan": 20})), "claims")["result"].clone();
+    eprintln!("claims before the vest time: {found}");
+    let c = found.as_array().unwrap().iter().find(|c| c["distribution"] == dist["distribution"]).expect("the claim is found").clone();
+    assert_eq!(c["state"], "vesting", "{c}");
+    assert_eq!(c["named_as"], "staker", "{c}");
+    assert_eq!(c["asset"], json!(x), "{c}");
+    assert_eq!(c["value"].as_u64().or_else(|| c["value"].as_str().and_then(|s| s.parse().ok())), Some(700000), "{c}");
+    assert_eq!(c["vest"].as_u64(), Some(vest), "{c}");
+    assert_eq!(c["vests"], dist["vests"], "{c}");
+    assert!(c["held"].is_null(), "{c}");
+    let early = ok(leaves::run("care", &json!({"scan": 20})), "care before the vest time")["result"].clone();
+    eprintln!("care before the vest time: {}", early["claims"]);
+    assert!(ok(leaves::run("coins", &json!({})), "coins")["result"].as_array().unwrap().is_empty(), "nothing taken before the vest time");
+
+    // After it: open, and care takes it up by itself.
+    control(&h, "/advance", json!({"seconds": 1200}));
+    control(&h, "/produce", json!({}));
+    let open = ok(leaves::run("claims", &json!({"scan": 20})), "claims after the vest time")["result"].clone();
+    let c = open.as_array().unwrap().iter().find(|c| c["distribution"] == dist["distribution"]).unwrap().clone();
+    assert_eq!(c["state"], "open", "{c}");
+    let care = ok(leaves::run("care", &json!({"scan": 20})), "care after the vest time")["result"].clone();
+    eprintln!("care after the vest time: {}", care["claims"]);
+    assert!(care["claims"].as_array().unwrap().iter().any(|c| c["taken_up"].is_object()), "{care}");
+    let coins = ok(leaves::run("coins", &json!({})), "coins")["result"].clone();
+    assert!(coins.as_array().unwrap().iter().any(|c| c["asset"] == json!(x)), "the holder holds its coin: {coins}");
+    leaves::stop();
+    drop(d);
+    let _ = std::fs::remove_dir_all(&ddir);
+    let _ = std::fs::remove_dir_all(&hdir);
 }
