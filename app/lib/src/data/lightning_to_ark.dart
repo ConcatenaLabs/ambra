@@ -327,7 +327,9 @@ class LightningToArk extends ChangeNotifier {
             asset: btc ? null : kind,
             node: nodeKey,
             scid: scid.isEmpty ? null : scid,
-            unilateraltimeout: closeUnilateralSeconds);
+            unilateraltimeout: closeUnilateralSeconds,
+            // The service answers once the peer has signed, or after the unilateral timeout.
+            timeout: const Duration(seconds: closeUnilateralSeconds + 60));
         _closed[id] = {
           'at': DateTime.now().millisecondsSinceEpoch,
           'txid': r.closingTxid,
@@ -338,6 +340,11 @@ class LightningToArk extends ChangeNotifier {
         };
         closeWhy[id] = null;
         debugPrint('[ambra-ln-ark] closed $id: ${r.type ?? ''} ${r.closingTxid ?? ''}');
+      } on TimeoutException catch (e) {
+        // Asked, and not answered: the close may well be under way, so the channel is not asked
+        // again, and what it held stays in the figure, until [closePending] has passed.
+        closeWhy[id] = 'its close was asked and not answered yet';
+        debugPrint('[ambra-ln-ark] close of $id not answered: $e');
       } catch (e) {
         _closed.remove(id);
         closeWhy[id] = 'its close was refused now, and is tried again later: $e';
