@@ -98,4 +98,43 @@ void main() {
     expect(l.channelPart('a', BigInt.from(1079)), BigInt.from(1979)); // after a restart: as read
     l.movingAssets = const {};
   });
+
+  test('an emptied channel closes only when cheap and safe, and says why it stays', () {
+    final open = {'state': 'CHANNELD_NORMAL'};
+    final min = BigInt.from(LightningToArk.minMove);
+    BigInt b(int n) => BigInt.from(n);
+    expect(closeVerdict(channel: open, left: b(2000), spendable: b(0), fee: b(400), min: min).close, isTrue);
+    expect(closeVerdict(channel: open, left: b(2000), spendable: b(0), fee: b(400), min: min, moving: true).why,
+        'a move from it is still on its way');
+    expect(closeVerdict(channel: {'state': 'CHANNELD_AWAITING_LOCKIN'}, left: b(2000), spendable: b(0), fee: b(400), min: min).close,
+        isFalse);
+    expect(closeVerdict(channel: open, left: b(90000), spendable: b(80000), fee: b(400), min: min).why, 'it still holds enough to move');
+    expect(closeVerdict(channel: open, left: b(0), spendable: b(0), fee: b(400), min: min).close, isFalse);
+    expect(closeVerdict(channel: open, left: b(2000), spendable: b(0), fee: null, min: min).why, 'its closing fee cannot be priced now');
+    expect(closeVerdict(channel: open, left: b(1500), spendable: b(0), fee: b(400), min: min).why,
+        'closing it would cost too much of the 1500 left in it (about 400)');
+  });
+
+  test('a close stays in the figure until the scan counts it, once the channel has left the list', () {
+    final now = DateTime.fromMillisecondsSinceEpoch(10 * 3600 * 1000);
+    final at = now.millisecondsSinceEpoch - 60000;
+    final closed = <String, Map<String, dynamic>>{
+      '1x1x0': {'at': at, 'txid': 'aa', 'type': 'mutual', 'kind': 'BTC', 'left': '2000'},
+      '2x1x0': {'at': at, 'txid': 'bb', 'type': 'mutual', 'kind': 'BTC', 'left': '300', 'seen': at + 1},
+      '3x1x0': {'at': at, 'txid': 'cc', 'type': 'unilateral', 'kind': 'BTC', 'left': '700'},
+      '4x1x0': {'at': at, 'txid': 'dd', 'type': 'mutual', 'kind': 'abcd', 'left': '9'},
+    };
+    expect(closingOf(closed, 'BTC', const [], now), BigInt.from(2000));
+    // Still listed as open: the channel itself is in the figure.
+    expect(closingOf(closed, 'BTC', [{'state': 'CHANNELD_NORMAL', 'short_channel_id': '1x1x0'}], now), BigInt.zero);
+    // Listed as closing: no longer counted as a channel, so held here.
+    expect(closingOf(closed, 'BTC', [{'state': 'CLOSINGD_COMPLETE', 'short_channel_id': '1x1x0'}], now), BigInt.from(2000));
+    expect(closingOf(closed, 'abcd', const [], now), BigInt.from(9));
+    // Past the hold, nothing.
+    expect(closingOf(closed, 'BTC', const [], now.add(const Duration(hours: 3))), BigInt.zero);
+    // A close that never answered is held for its pending time only.
+    final pending = <String, Map<String, dynamic>>{'5x1x0': {'at': at, 'txid': null, 'type': 'closing', 'kind': 'BTC', 'left': '50'}};
+    expect(closingOf(pending, 'BTC', const [], now), BigInt.from(50));
+    expect(closingOf(pending, 'BTC', const [], now.add(const Duration(minutes: 20))), BigInt.zero);
+  });
 }

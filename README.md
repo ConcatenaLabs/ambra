@@ -363,6 +363,13 @@ module that implements it.
     runs. The payment leaves the wallet's own hosted node over whatever channel it has,
     to the ark server's Lightning node. Until it is paid the BTC stays spendable in the channel; meanwhile Balance says
     "Moving <amount> BTC so it can be sent in seconds." under BTC's figure.
+  - A channel these moves emptied (BTC or an asset) is closed cooperatively to the wallet's
+    own address when that is cheap and safe: locked in, nothing on its way from it, too
+    little left to move, and its close estimated at under a quarter of what comes back. What
+    it held stays in the figure until the wallet's scan counts the close's payment (at most
+    two hours), and is then boarded like any other coin. Otherwise the channel stays, and
+    developer mode says why under its Lightning part ("Channel <id> stays open: …"). The rules
+    are the web wallet's and Ambra browser's (`lightning-to-ark.js`).
   - Send pays out of the ark, chosen without asking: an ark address in seconds, a BTC
     invoice (`lntb…`) over Lightning, a Bitcoin address on the chain after a Bitcoin
     block. An address the ark cannot cover, or one it refuses, is paid as before. A code

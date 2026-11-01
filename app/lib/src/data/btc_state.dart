@@ -17,11 +17,19 @@ class BtcState extends ChangeNotifier {
   int _unifiedNext = 0;
   int get unifiedNext => _unifiedNext;
 
+  /// When the last scan of each chain finished: what a scan counts is current from then.
+  DateTime? btcScanAt;
+  DateTime? seqScanAt;
+
   /// Record a fresh scan and advance the unified index from both chains:
   /// [btc] (this scan's Bitcoin external next) and [seqNext] (the Sequentia
   /// wallet's next-unused index from `WalletSync.nextIndex`).
   void observe({core.BtcBalance? btc, int? seqNext}) {
-    if (btc != null) last = btc;
+    if (btc != null) {
+      last = btc;
+      btcScanAt = DateTime.now();
+    }
+    if (seqNext != null) seqScanAt = DateTime.now();
     final btcNext = btc?.externalNext ?? last?.externalNext ?? 0;
     final candidate = [btcNext, seqNext ?? 0, _unifiedNext].reduce((a, b) => a > b ? a : b);
     final changed = candidate != _unifiedNext || btc != null;
