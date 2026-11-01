@@ -844,8 +844,12 @@ class _SendTabState extends State<SendTab> {
     // leaves, the field says which part it can send.
     final elsewhere = _lnAtoms(_assetId) + _leafAtoms(_assetId) > BigInt.zero;
     // Nothing anywhere: no asset on any rail, and no BTC on the chain, in Lightning or on the ark.
-    final nothingHeld = !{...held, if (LeafService.instance.joined) ...LeafService.instance.leafAtoms().keys}
-            .any((id) => _totalOf(id) > BigInt.zero) &&
+    // What vests later is held too: a wallet holding only that is not told to get coins.
+    final nothingHeld = !{
+          ...held,
+          if (LeafService.instance.joined) ...LeafService.instance.leafAtoms().keys,
+          if (LeafService.instance.joined && !DevMode.instance.on) ...LeafService.instance.vestingAtoms().keys,
+        }.any((id) => _totalOf(id) > BigInt.zero) &&
         _totalOf(_btcId) == BigInt.zero;
     return Column(
       children: [
