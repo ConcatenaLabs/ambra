@@ -77,11 +77,11 @@ serde_json = "1"
 # (`src/ark_btc.rs`): `native` and `tls-webpki-roots` give it its gRPC
 # transport to the ark server, `sqlite` and `onchain-bdk` its store (Bark's
 # SQLite schema pulls in `bdk_wallet`, which needs bitcoin 0.32.8: SWK pins it).
-arca-wallet = { git = "https://github.com/ConcatenaLabs/arca", rev = "8bd6ec9d1bc152e6aadb14834b49954b611b3a54", default-features = false, features = ["arca-core", "native", "tls-webpki-roots", "onchain-bdk", "sqlite"] }
-arca-sequentia-ext = { git = "https://github.com/ConcatenaLabs/arca", rev = "8bd6ec9d1bc152e6aadb14834b49954b611b3a54", default-features = false }
+arca-wallet = { git = "https://github.com/ConcatenaLabs/arca", rev = "778235bbd2581554fe7544bed29a3b686ba1d06d", default-features = false, features = ["arca-core", "native", "tls-webpki-roots", "onchain-bdk", "sqlite"] }
+arca-sequentia-ext = { git = "https://github.com/ConcatenaLabs/arca", rev = "778235bbd2581554fe7544bed29a3b686ba1d06d", default-features = false }
 # The Bitcoin ark's exit commands (`bark-wasm/src/exit.rs`): the same code the web wallet and
 # the extension run, with no transport of its own (its arca-wallet features are the ones above).
-arca-bark-wasm = { git = "https://github.com/ConcatenaLabs/arca", rev = "8bd6ec9d1bc152e6aadb14834b49954b611b3a54", default-features = false }
+arca-bark-wasm = { git = "https://github.com/ConcatenaLabs/arca", rev = "778235bbd2581554fe7544bed29a3b686ba1d06d", default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 # The store's lock is flock(2): the standard library's `File::try_lock` is not
 # supported on Android.
