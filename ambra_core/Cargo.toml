@@ -77,8 +77,8 @@ serde_json = "1"
 # (`src/ark_btc.rs`): `native` and `tls-webpki-roots` give it its gRPC
 # transport to the ark server, `sqlite` and `onchain-bdk` its store (Bark's
 # SQLite schema pulls in `bdk_wallet`, which needs bitcoin 0.32.8: SWK pins it).
-arca-wallet = { git = "https://github.com/ConcatenaLabs/arca", rev = "5e17468c5e64198cda453445df733af69bc6c0fa", default-features = false, features = ["arca-core", "native", "tls-webpki-roots", "onchain-bdk", "sqlite"] }
-arca-sequentia-ext = { git = "https://github.com/ConcatenaLabs/arca", rev = "5e17468c5e64198cda453445df733af69bc6c0fa", default-features = false }
+arca-wallet = { git = "https://github.com/ConcatenaLabs/arca", rev = "7a248c89a638aa1bf2763de61758d0340bba6677", default-features = false, features = ["arca-core", "native", "tls-webpki-roots", "onchain-bdk", "sqlite"] }
+arca-sequentia-ext = { git = "https://github.com/ConcatenaLabs/arca", rev = "7a248c89a638aa1bf2763de61758d0340bba6677", default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 # The store's lock is flock(2): the standard library's `File::try_lock` is not
 # supported on Android.
