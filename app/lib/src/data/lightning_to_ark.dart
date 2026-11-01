@@ -1,7 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../rust/api.dart' as core;
+import 'api_client.dart';
+import 'btc_state.dart';
+import 'lsp_client.dart';
 
 import 'seqln_keys.dart' as lnkeys;
 import 'ark_btc_service.dart';
@@ -32,6 +39,12 @@ import 'wallet_repository.dart';
 /// to the channel. A move that fails is tried again after [retry]; one is never made while
 /// something a person asked for runs, nor in developer mode, where channels are the person's to
 /// use.
+///
+/// Once a channel is emptied and closing it is cheap and safe ([closeVerdict]), it is closed
+/// cooperatively to an address of the wallet ([_closeEmptied]), whose coins are then boarded by
+/// themselves; what it paid stays in the figure until the wallet's own scan counts it
+/// ([closing]). Otherwise it stays, and developer mode says why ([closeWhy]). The same rules as
+/// the web wallet's and Ambra browser's `lightning-to-ark.js`.
 class LightningToArk extends ChangeNotifier {
   LightningToArk._();
   static final LightningToArk instance = LightningToArk._();
@@ -103,6 +116,7 @@ class LightningToArk extends ChangeNotifier {
     final ark = ArkBtcService.instance;
     final ln = LightningService.instance;
     if (_running || DevMode.instance.on || !ark.open || !ln.configured || LeafService.instance.personBusy) return;
+    await _checkClosed();
     final last = _lastTry;
     if (last != null && DateTime.now().difference(last) < retry) return;
     final m = await WalletRepository.instance.readMnemonic();
@@ -111,10 +125,14 @@ class LightningToArk extends ChangeNotifier {
     try {
       final st = await ln.getStatus(nodes: [lnkeys.ownNodeKeyForBtc(m)]);
       // Only a channel locked in can pay: one still opening is counted in the figure, not paid from.
-      final channels = ((st.raw['channels'] as List?) ?? const []).whereType<Map>().where(channelLockedIn).toList();
+      final all = ((st.raw['channels'] as List?) ?? const []).whereType<Map>().toList();
+      final channels = all.where(channelLockedIn).toList();
       final spendable = legLiquidity(channels, RailTarget.btc()).spendable;
       final amount = withinAllowance(amountToMove(spendable), await LnPaymentLimit.instance.allowanceAtoms(LnPaymentLimit.kBtcKey));
-      if (amount == null) return;
+      if (amount == null) {
+        if (amountToMove(spendable) == null) await _closeEmptied(m, 'BTC', all, min: BigInt.from(minMove));
+        return;
+      }
       _lastTry = DateTime.now();
       final invoice = await ark.invoice(amount);
       await _markOwnInvoice(invoice);
@@ -124,6 +142,12 @@ class LightningToArk extends ChangeNotifier {
       final r = await ln.payInvoice(bolt11: invoice, asset: kLnBtc);
       debugPrint('[ambra-ln-ark] paid: ${r.paid}');
       await ark.refresh();
+      if (r.paid) {
+        moving = null;
+        final again = await ln.getStatus(nodes: [lnkeys.ownNodeKeyForBtc(m)]);
+        await _closeEmptied(m, 'BTC', ((again.raw['channels'] as List?) ?? const []).whereType<Map>().toList(),
+            min: BigInt.from(minMove));
+      }
     } catch (e) {
       // A payment over what the phone's daily limit leaves is tried again once the day has
       // moved on.
@@ -160,7 +184,9 @@ class LightningToArk extends ChangeNotifier {
       final givenUp = await _givenUp();
       final st = await ln.getStatus(nodes: nodes);
       // Only a channel locked in can pay: one still opening is counted in the figure, not paid from.
-      final channels = ((st.raw['channels'] as List?) ?? const []).whereType<Map>().where(channelLockedIn).toList();
+      final all = ((st.raw['channels'] as List?) ?? const []).whereType<Map>().toList();
+      final channels = all.where(channelLockedIn).toList();
+      await _checkClosed();
       for (final asset in legs) {
         if (leaves.personBusy) break;
         final a8 = asset.substring(0, 8);
@@ -174,11 +200,12 @@ class LightningToArk extends ChangeNotifier {
           continue;
         }
         final spendable = legLiquidity(channels, RailTarget.asset(hex: asset)).spendable;
+        final min = minLeaves(leaves.info)[asset];
+        if (amountToMove(spendable, min: min) == null) await _closeEmptied(m, asset, all, min: min ?? BigInt.one);
         if (spendable <= BigInt.zero) {
           _why('$a8: nothing to pay from a channel that is locked in');
           continue;
         }
-        final min = minLeaves(leaves.info)[asset];
         final allowance = await LnPaymentLimit.instance.allowanceAtoms(asset);
         final amount = withinAllowance(amountToMove(spendable, min: min), allowance, min: min);
         if (amount == null) {
@@ -200,6 +227,176 @@ class LightningToArk extends ChangeNotifier {
       _assetsRunning = false;
     }
   }
+
+  // ---- emptied channels: closed when that is cheap and safe, or kept with the reason ----
+
+  /// A close is made only when what comes back is at least this many times its fee.
+  static const closeWorth = 4;
+
+  /// How long what a close paid stays in the figure at most, waiting for the wallet's scan.
+  static const closeHold = Duration(hours: 2);
+
+  /// How long a close that never answered is held before the channel is looked at again.
+  static const closePending = Duration(minutes: 15);
+
+  /// How long the hosted node waits for the routing peer before closing unilaterally.
+  static const closeUnilateralSeconds = 600;
+
+  static const _kClosed = 'ambra.lnToArk.closed';
+
+  /// Why each emptied channel stays open (by short channel id), for developer mode; null once
+  /// it is closed.
+  final Map<String, String?> closeWhy = {};
+
+  /// The closes this wallet made, by short channel id: when, its transaction, its kind ('BTC' or
+  /// an asset id), what it held, and when the wallet's scan counted it. Kept across restarts.
+  Map<String, Map<String, dynamic>> _closed = {};
+  bool _closedLoaded = false;
+  bool _closing = false;
+
+  Future<void> _loadClosed() async {
+    if (_closedLoaded) return;
+    final p = await SharedPreferences.getInstance();
+    try {
+      final j = jsonDecode(p.getString(_kClosed) ?? '{}');
+      if (j is Map) _closed = {for (final e in j.entries) if (e.value is Map) '${e.key}': Map<String, dynamic>.from(e.value as Map)};
+    } catch (_) {}
+    _closedLoaded = true;
+  }
+
+  Future<void> _saveClosed() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    // Records past the hold are no longer needed for the figure; a day of them keeps a channel
+    // from being closed twice.
+    _closed.removeWhere((_, v) => now - ((v['at'] as num?)?.toInt() ?? 0) > const Duration(days: 1).inMilliseconds);
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_kClosed, jsonEncode(_closed));
+  }
+
+  /// What cooperative closes paid the wallet that its own scan does not count yet, in [kind]'s
+  /// atoms ('BTC' or an asset id): the channel has left [listed] (the channels as last read),
+  /// and its balance is on its way to the wallet's address.
+  BigInt closing(String kind, List<Map> listed) =>
+      closingOf(_closed, kind, listed, DateTime.now());
+
+  /// Closes each emptied channel of [kind] in [channels] when that is cheap and safe; otherwise
+  /// says why it stays ([closeWhy]). [min] is the least a move is in that kind.
+  Future<void> _closeEmptied(String mnemonic, String kind, List<Map> channels, {required BigInt min}) async {
+    if (_closing || DevMode.instance.on) return;
+    await _loadClosed();
+    final btc = kind == 'BTC';
+    final target = btc ? RailTarget.btc() : RailTarget.asset(hex: kind);
+    final moving = btc ? this.moving != null : movingAssets.containsKey(kind);
+    for (final c in channels) {
+      if ('${c['node_key'] ?? ''}'.isEmpty || !channelMatches(c, target)) continue;
+      final id = '${c['short_channel_id'] ?? c['scid'] ?? c['node_key']}';
+      final was = _closed[id];
+      if (was != null &&
+          !(was['type'] == 'closing' &&
+              DateTime.now().millisecondsSinceEpoch - ((was['at'] as num?)?.toInt() ?? 0) > closePending.inMilliseconds)) {
+        continue;
+      }
+      final left = _big(c['balance_units'] ?? c['spendable_units'] ?? 0);
+      BigInt? fee;
+      try {
+        fee = await _closeFee(kind);
+      } catch (_) {}
+      final v = closeVerdict(channel: c, left: left, spendable: _big(c['spendable_units'] ?? 0), fee: fee, min: min, moving: moving);
+      closeWhy[id] = v.why;
+      if (!v.close) {
+        _why('${kind.length > 8 ? kind.substring(0, 8) : kind} channel $id stays open: ${v.why}');
+        continue;
+      }
+      _closing = true;
+      // Held in the figure from the moment the channel leaves the service's list, before its
+      // close has answered.
+      _closed[id] = {'at': DateTime.now().millisecondsSinceEpoch, 'txid': null, 'type': 'closing', 'kind': kind, 'left': '$left'};
+      await _saveClosed();
+      notifyListeners();
+      try {
+        debugPrint('[ambra-ln-ark] closing the emptied ${btc ? 'BTC' : kind.substring(0, 8)} channel $id, $left left in it, fee about $fee');
+        final chain = btc ? 'btc' : 'seq';
+        final nodeKey = await LightningService.instance.connectNode(mnemonic, chain: chain, asset: btc ? null : kind);
+        final dest = (await core.receiveAddressAt(mnemonic: mnemonic, index: BtcState.instance.unifiedNext, confidential: false)).address;
+        // The device refuses a close of this side's balance to any script it was not told is ours.
+        await LightningService.instance.approveCloseDestination(nodeKey, await core.addressScriptPubkey(address: dest));
+        final scid = '${c['short_channel_id'] ?? c['scid'] ?? ''}';
+        final r = await LspClient.channelClose(
+            chain: chain,
+            destination: dest,
+            asset: btc ? null : kind,
+            node: nodeKey,
+            scid: scid.isEmpty ? null : scid,
+            unilateraltimeout: closeUnilateralSeconds);
+        _closed[id] = {
+          'at': DateTime.now().millisecondsSinceEpoch,
+          'txid': r.closingTxid,
+          'type': r.type,
+          'kind': kind,
+          'left': '$left',
+          'address': r.destination ?? dest,
+        };
+        closeWhy[id] = null;
+        debugPrint('[ambra-ln-ark] closed $id: ${r.type ?? ''} ${r.closingTxid ?? ''}');
+      } catch (e) {
+        _closed.remove(id);
+        closeWhy[id] = 'its close was refused now, and is tried again later: $e';
+        debugPrint('[ambra-ln-ark] close of $id refused: $e');
+      } finally {
+        await _saveClosed();
+        _closing = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  /// What closing a channel of [kind] costs this side, in its atoms: about 200 vB at the
+  /// default fee rate (2 sat/vB on testnet4; 2 of the policy unit per vB on Sequentia, valued in
+  /// the asset at the fee exchange rates). Null when the asset has no rate now.
+  Future<BigInt?> _closeFee(String kind) async {
+    if (kind == 'BTC') return BigInt.from(400);
+    final rates = await ApiClient.feeRates();
+    final rate = rates[kind] ?? rates[SeqAssets.labelFor(kind).ticker];
+    if (rate == null || rate <= BigInt.zero) return null;
+    final policy = BigInt.from(400) * BigInt.from(100000000);
+    return (policy + rate - BigInt.one) ~/ rate;
+  }
+
+  /// Asks the chain whether each close's payment is there, and marks it counted once the
+  /// wallet's own scan of that chain ran after it was first seen there.
+  Future<void> _checkClosed() async {
+    await _loadClosed();
+    var changed = false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final v in _closed.values) {
+      final txid = v['txid'];
+      if (txid is! String || txid.isEmpty || v['seen'] != null || v['type'] == 'unilateral') continue;
+      if (now - ((v['at'] as num?)?.toInt() ?? 0) >= closeHold.inMilliseconds) continue;
+      final btc = v['kind'] == 'BTC';
+      if (v['found'] == null) {
+        try {
+          final r = await http.get(Uri.parse('${btc ? Backend.testnet4 : Backend.esplora}/tx/$txid/status'), headers: Backend.authHeaders)
+              .timeout(const Duration(seconds: 15));
+          if (r.statusCode != 200) continue;
+        } catch (_) {
+          continue;
+        }
+        v['found'] = now;
+        changed = true;
+      }
+      final scanned = btc ? BtcState.instance.btcScanAt : BtcState.instance.seqScanAt;
+      if (scanned != null && scanned.millisecondsSinceEpoch > (v['found'] as num).toInt()) {
+        v['seen'] = scanned.millisecondsSinceEpoch;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await _saveClosed();
+      notifyListeners();
+    }
+  }
+
+  static BigInt _big(Object? v) => BigInt.tryParse('$v'.split('.').first) ?? BigInt.zero;
 
   final Set<String> _said = {};
 
@@ -354,3 +551,45 @@ Map<String, BigInt> movingOf(Map receives, List<dynamic> coins, Set<String> paid
 /// takes one still waiting for its funding to confirm, which counts in the figure but routes
 /// nothing.
 bool channelLockedIn(Map c) => '${c['state'] ?? ''}'.toUpperCase() == 'CHANNELD_NORMAL';
+
+/// Whether an emptied channel is closed now, and if not, why it stays (developer mode's words).
+/// [left]: this side's balance in it; [fee]: what its close is estimated to cost this side, or
+/// null when it cannot be priced; [min]: the least a move is. User mode never pays from a
+/// channel, so one that holds too little to move is emptied; one that holds nothing of the
+/// wallet's stays.
+({bool close, String? why}) closeVerdict(
+    {required Map channel, required BigInt left, required BigInt spendable, BigInt? fee, required BigInt min, bool moving = false}) {
+  if (moving) return (close: false, why: 'a move from it is still on its way');
+  if (!channelLockedIn(channel)) return (close: false, why: 'it is not open for payments now, so it cannot be closed cooperatively');
+  if (LightningToArk.amountToMove(spendable, min: min) != null) return (close: false, why: 'it still holds enough to move');
+  if (left <= BigInt.zero) return (close: false, why: 'nothing of this wallet’s is left in it');
+  if (fee == null) return (close: false, why: 'its closing fee cannot be priced now');
+  if (left < fee * BigInt.from(LightningToArk.closeWorth)) {
+    return (close: false, why: 'closing it would cost too much of the $left left in it (about $fee)');
+  }
+  return (close: true, why: null);
+}
+
+/// What the closes in [closed] paid that the wallet's scan does not count yet, in [kind]'s
+/// atoms. A channel still in [listed] is counted by the figure itself; a unilateral close pays
+/// the node's own address after its delay, not the wallet's, and is not held; a close that never
+/// answered is held only for [LightningToArk.closePending].
+BigInt closingOf(Map<String, Map<String, dynamic>> closed, String kind, List<Map> listed, DateTime now) {
+  final open = {
+    for (final c in listed)
+      if ('${c['state'] ?? ''}'.toUpperCase().startsWith('CHANNELD')) '${c['short_channel_id'] ?? c['scid'] ?? c['node_key']}',
+  };
+  final at = now.millisecondsSinceEpoch;
+  var n = BigInt.zero;
+  closed.forEach((id, v) {
+    if (v['kind'] != kind || v['type'] == 'unilateral' || v['seen'] != null) return;
+    final when = (v['at'] as num?)?.toInt() ?? 0;
+    if (at - when >= LightningToArk.closeHold.inMilliseconds) return;
+    final txid = v['txid'];
+    final answered = txid is String && txid.isNotEmpty;
+    if (!answered && at - when > LightningToArk.closePending.inMilliseconds) return;
+    if (open.contains(id)) return;
+    n += BigInt.tryParse('${v['left'] ?? ''}') ?? BigInt.zero;
+  });
+  return n;
+}

@@ -423,7 +423,8 @@ class _BalanceTabState extends State<BalanceTab> {
     final moving = dev ? const <String, BigInt>{} : LightningToArk.instance.movingAssets;
     BigInt lnOf(String id) {
       final read = legLiquidity(chans, RailTarget.asset(hex: id, ticker: SeqAssets.labelFor(id).ticker)).balance;
-      return dev ? read : LightningToArk.instance.channelPart(id, read);
+      // What an emptied channel's close paid stays in the figure until the wallet's scan counts it.
+      return (dev ? read : LightningToArk.instance.channelPart(id, read)) + LightningToArk.instance.closing(id, chans);
     }
     final stakedAtoms = StakeHoldings.instance.stakedAtoms;
     final staked = {if (stakedAtoms > BigInt.zero) SeqAssets.policy: stakedAtoms};
@@ -458,7 +459,7 @@ class _BalanceTabState extends State<BalanceTab> {
     // scan failed) plus Lightning. Its row comes first and is listed even at 0.
     final btcSatsStr = _btc?.balanceSats ?? _btcCachedSats;
     final btcOnchain = BigInt.tryParse(btcSatsStr ?? '0') ?? BigInt.zero;
-    final btcLn = legLiquidity(chans, RailTarget.btc()).balance;
+    final btcLn = legLiquidity(chans, RailTarget.btc()).balance + LightningToArk.instance.closing('BTC', chans);
     // User mode: what the Bitcoin ark holds and has on its way counts in BTC's one figure.
     final btcArk = ArkBtcService.instance.held;
     final btcTotal = btcOnchain + btcLn + btcArk;
@@ -1212,6 +1213,16 @@ class _LnMeta extends StatelessWidget {
         ]),
         const SizedBox(height: 6),
         Text(split, style: AmbraText.sub),
+        // Why a channel user mode emptied stays open (user mode closes one when that is cheap and safe).
+        for (final c in chans)
+          if (channelMatches(c, leg.target) && LightningToArk.instance.closeWhy['${c['short_channel_id'] ?? c['scid'] ?? c['node_key']}'] != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                  'Channel ${c['short_channel_id'] ?? ''} stays open: '
+                  '${LightningToArk.instance.closeWhy['${c['short_channel_id'] ?? c['scid'] ?? c['node_key']}']}.',
+                  style: AmbraText.sub),
+            ),
         const SizedBox(height: 8),
         Row(children: [
           Expanded(
