@@ -234,7 +234,9 @@ class LspClient {
   /// reclaimed funds to [destination] (a wallet address). Device-signed: the caller attaches the
   /// signer and names [destination]'s script to it first
   /// ([LightningService.approveCloseDestination]), or the device refuses the close. The LSP drives
-  /// the close but can't redirect the funds.
+  /// the close but can't redirect the funds. The service answers once the close is made: it waits
+  /// up to [unilateraltimeout] for the peer (60 s when not given) and 30 s more, so [timeout] must
+  /// outlast that.
   static Future<CloseResult> channelClose({
     required String chain,
     required String destination,
@@ -242,13 +244,14 @@ class LspClient {
     String? node,
     String? scid,
     int? unilateraltimeout,
+    Duration timeout = const Duration(seconds: 120),
   }) async {
     final body = <String, dynamic>{'chain': chain, 'destination': destination};
     if (asset != null) body['asset'] = asset;
     if (node != null) body['node'] = node;
     if (scid != null) body['scid'] = scid;
     if (unilateraltimeout != null) body['unilateraltimeout'] = unilateraltimeout;
-    return CloseResult.fromJson(_decode(await _postJson('/channel/close', body, timeout: const Duration(seconds: 120))));
+    return CloseResult.fromJson(_decode(await _postJson('/channel/close', body, timeout: timeout)));
   }
 
   /// The provisioned per-device hosted nodes (the dynamic "M" in "LN N/M").
