@@ -184,8 +184,23 @@ class _SendTabState extends State<SendTab> {
 
   /// What the wallet holds of [id] on every rail: on-chain, Lightning, leaves and, for BTC in
   /// user mode, the Bitcoin ark.
-  BigInt _totalOf(String id) =>
+  BigInt _heldOf(String id) =>
       (BigInt.tryParse(_balanceOf(id)) ?? BigInt.zero) + _lnAtoms(id) + _leafAtoms(id) + _arkSats(id);
+
+  /// User mode: what of [id] vests later (part of its figure, never of what can be sent).
+  BigInt _vestingOf(String id) =>
+      !DevMode.instance.on && LeafService.instance.joined ? (LeafService.instance.vestingAtoms()[id] ?? BigInt.zero) : BigInt.zero;
+
+  /// The asset's figure, as the balance shows it: what it holds and what vests later.
+  BigInt _totalOf(String id) => _heldOf(id) + _vestingOf(id);
+
+  /// User mode: the sentence a send of [atoms] of the picked asset says when it needs what has not
+  /// vested yet (nothing is signed then), or null.
+  String? _notVested(BigInt atoms) {
+    if (DevMode.instance.on || !LeafService.instance.joined) return null;
+    final label = SeqAssets.labelFor(_assetId);
+    return LeafService.instance.notVested(_assetId, atoms, _heldOf(_assetId), ticker: label.ticker, precision: label.precision);
+  }
 
   /// The picker's rows in the wallet's order: BTC first (listed even at 0), then every
   /// asset held on any rail, then every other asset the wallet can name, for the search.
@@ -193,6 +208,7 @@ class _SendTabState extends State<SendTab> {
     final candidates = <String>{
       for (final b in _balances) b.assetId,
       if (LeafService.instance.joined) ...LeafService.instance.leafAtoms().keys,
+      if (LeafService.instance.joined && !DevMode.instance.on) ...LeafService.instance.vestingAtoms().keys,
       for (final c in _lnChannels)
         if ('${c['leg'] ?? ''}' != 'btc' && '${c['asset'] ?? ''}'.isNotEmpty) '${c['asset']}',
     };
@@ -458,6 +474,8 @@ class _SendTabState extends State<SendTab> {
     if (addr.isEmpty) return _snack('Enter a recipient address');
     if (atoms == null || atoms <= BigInt.zero) return _snack('Enter a valid amount');
     if (atoms >= (BigInt.one << 64)) return _snack('Amount is too large.'); // u64 FFI guard
+    final notVested = _notVested(atoms);
+    if (notVested != null) return _snack(notVested);
     final bal = BigInt.tryParse(_selected?.atoms ?? '0') ?? BigInt.zero;
     // User mode: what the chain cannot cover the instant part pays, out to the address.
     if (atoms > bal && !DevMode.instance.on && LeafService.instance.open) {
@@ -726,6 +744,8 @@ class _SendTabState extends State<SendTab> {
     final atoms = parseAtoms(_amount.text, label.precision);
     if (atoms == null || atoms <= BigInt.zero) return _snack('Enter a valid amount');
     if (atoms >= (BigInt.one << 64)) return _snack('Amount is too large.');
+    final notVested = _notVested(atoms);
+    if (notVested != null) return _snack(notVested);
     final instant = _leafAtoms(_assetId) - LeafService.instance.frozenAtoms(_assetId);
     final amountStr = formatAtoms(atoms.toString(), label.precision);
     if (atoms > instant) {

@@ -17,6 +17,7 @@ import 'config.dart';
 import 'dev_mode.dart';
 import 'format.dart';
 import 'pay_code.dart' show expandRequest;
+import 'vesting.dart';
 import 'wallet_repository.dart';
 
 /// A refusal by the leaf wallet, in the library's own words.
@@ -133,6 +134,27 @@ class LeafService extends ChangeNotifier {
   // Whether care ran since the app started: the first sync after a start runs it.
   bool _caredThisRun = false;
 
+  /// The library's last `claims` answer (every claim named under a key of this wallet, a vesting
+  /// one with its asset, value and date) and when it was read: kept, so the wallet shows what
+  /// vests from the last reading while it is offline or syncing ([vesting]).
+  List<dynamic>? claims;
+  DateTime? claimsAt;
+  LeafRefusal? claimsError;
+  bool _readingClaims = false;
+  static const _kClaims = 'ambra.leaves.claims';
+
+  /// What the wallet holds that cannot move before a date, one line for each asset and day.
+  List<VestingLot> vesting() => vestingLots(claims);
+
+  /// What of each asset vests later, in atoms: part of the asset's figure, never of what can be
+  /// spent.
+  Map<String, BigInt> vestingAtoms() => vestingAtomsOf(vesting());
+
+  /// The sentence an action says when [asked] atoms of [asset] need what has not vested
+  /// ([notVestedSentence]), [spendable] what it can spend now; null when it does not.
+  String? notVested(String asset, BigInt asked, BigInt spendable, {required String ticker, required int precision}) =>
+      notVestedSentence(vesting(), asset, asked, spendable, ticker: ticker, precision: precision);
+
   static Future<String> dataDir() async => (await getApplicationSupportDirectory()).path;
 
   static Future<String?> nodePassword() => _storage.read(key: _kNodePassword);
@@ -160,6 +182,7 @@ class LeafService extends ChangeNotifier {
       joined = false;
     }
     operator = await savedOperator();
+    await _loadClaims();
     debugPrint('[leaves] start: ${joined ? 'a leaf wallet is held' : 'none held yet'}');
     if (!joined) {
       notifyListeners();
@@ -236,6 +259,9 @@ class LeafService extends ChangeNotifier {
     lastCare = null;
     lastCareAt = null;
     careError = null;
+    claims = null;
+    claimsAt = null;
+    claimsError = null;
     bond = null;
     bondError = null;
     lastWatch = null;
@@ -771,6 +797,7 @@ class LeafService extends ChangeNotifier {
           await notifyArrived(a, channel: _channel);
     }
     await careIfDue();
+    await readClaims();
     await refresh();
     return r;
   }
@@ -798,7 +825,55 @@ class LeafService extends ChangeNotifier {
     lastCareAt = at;
     await setCareClock(at);
     notifyListeners();
+    await readClaims(force: true);
     await watchBond();
+  }
+
+  /// Reads the library's `claims` (under the keys care scans) at most every [kClaimsEvery], or
+  /// now with [force] (after each care), and keeps the answer. A claim whose vest date has passed
+  /// and that is not taken up yet runs care at once, so it becomes a coin by itself.
+  Future<void> readClaims({bool force = false}) async {
+    if (!open || _readingClaims) return;
+    final at = claimsAt;
+    if (!force && at != null && DateTime.now().difference(at) < kClaimsEvery) return;
+    _readingClaims = true;
+    try {
+      final c = await run('claims', careArgs(await scanNext()));
+      claims = c is List ? c : const [];
+      claimsAt = DateTime.now();
+      claimsError = null;
+      await _keepClaims();
+    } catch (e) {
+      claimsError = LeafRefusal.of(e);
+    } finally {
+      _readingClaims = false;
+    }
+    notifyListeners();
+    if (!force && vestedOpen(claims)) await careIfDue(force: true);
+  }
+
+  Future<void> _keepClaims() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kClaims, jsonEncode({'at': claimsAt?.millisecondsSinceEpoch, 'claims': claims}));
+    } catch (_) {}
+  }
+
+  Future<void> _loadClaims() async {
+    if (claims != null) return;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final s = p.getString(_kClaims);
+      if (s == null) return;
+      final j = jsonDecode(s);
+      if (j is Map && j['claims'] is List) {
+        claims = j['claims'] as List;
+        final t = j['at'];
+        // The reading kept is shown, and read again at the first sync.
+        claimsAt = null;
+        if (t is int) debugPrint('[leaves] claims as of ${DateTime.fromMillisecondsSinceEpoch(t)}');
+      }
+    } catch (_) {}
   }
 
   /// The operator's bond as this wallet last read it (`bond`: state, asset, value,
@@ -876,6 +951,7 @@ class LeafService extends ChangeNotifier {
       final p = await SharedPreferences.getInstance();
       await p.remove(_kCareAt);
       await p.remove(_kScanNext);
+      await p.remove(_kClaims);
     } catch (_) {}
   }
 
@@ -918,6 +994,8 @@ class LeafService extends ChangeNotifier {
         }
         if (arrivals(mb).isNotEmpty) await refresh();
       }
+      // What vests later, read at its own pace (at most every two minutes).
+      await readClaims();
       lastError = null;
       wait = nextAsk(schedule, inFlight(coins, participations));
       // User mode: a receive code handed out lately is read for every few seconds, so a
@@ -1278,6 +1356,8 @@ const kUpdateRefusal = 'This wallet is out of date for this: update it, then try
 /// operator's bond, and a frozen holding, said plainly; every other refusal as the
 /// library says it.
 LeafRefusal plainRefusal(LeafRefusal e) {
+  final vesting = vestingRefusal(e.code, e.message);
+  if (vesting != null) return LeafRefusal(e.kind, vesting, code: e.code, status: e.status, plain: true);
   if (e.code == 'declined' && RegExp(r'\bupdate the wallet\b', caseSensitive: false).hasMatch(e.message)) {
     return LeafRefusal(e.kind, kUpdateRefusal, code: e.code, status: e.status, plain: true);
   }

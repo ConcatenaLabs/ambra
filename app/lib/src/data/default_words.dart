@@ -34,6 +34,16 @@ class DefaultWords {
   /// Held where it cannot be sent in seconds (a wallet made before), on its way to where it can.
   static String moving(String amount, String ticker) => 'Moving $amount $ticker so it can be sent in seconds.';
   static String received(String amount, String ticker) => 'Received $amount $ticker.';
+  /// What the wallet holds that nothing can move before a date (a vesting allocation): part of the
+  /// figure, one line under it for each date, never counted as what can be spent ([vestingLots]).
+  static String vests(String amount, String ticker, String date) => '$amount $ticker vests on $date';
+  static String vestsOn(String date) => 'Vests on $date';
+  /// Any action asked for more than can be spent now, the rest of it held until a date.
+  static String notVested(String amount, String ticker, String date) =>
+      '$amount $ticker of this vests on $date, and can be used from then. Nothing has moved.';
+  /// The same, refused by the network, which names only the date.
+  static String vestingRefused(String date) => 'Part of this vests on $date, and can be used from then. Nothing has moved.';
+  static const notVestedYet = 'Part of this has not vested yet, and can be used once it has. Nothing has moved.';
   static const btcFee = 'The fee is paid in BTC.';
   static String feeIn(String ticker) => 'Fee paid in $ticker.';
 
@@ -75,6 +85,7 @@ class DefaultWords {
     'rail', 'round', 'leaf', 'operator', 'tree', 'board', 'covenant', 'expiry', 'atom', 'sat', 'forfeit',
     'checkpoint', 'reassignment', 'exit', 'unroll', 'anchor', 'channel', 'node', 'room', 'relay', 'maker',
     'hash', 'preimage', 'HTLC', 'submarine', 'LSP', 'bridge', 'gateway', 'on-chain', 'Lightning',
+    'claim', 'distribution', 'lapse', 'locktime',
   ];
 
   /// Every sentence above, filled with sample values: what the test reads.
@@ -88,5 +99,7 @@ class DefaultWords {
         payWaiting, payCameBack, onItsWay, notPaid, cameBack,
         exitStarted('0.0015', '0.00002'), exitMoving('0.0015'), exitArrived('0.0015', '0.00002'), exitArrived('0.0015', null),
         exitNeedsFees('0.0015', '0.00002'), exitNotWorth('0.00002'),
+        vests('100', 'ORNG', '3 November 2026'), vestsOn('3 November 2026'), notVested('100', 'ORNG', '3 November 2026'),
+        vestingRefused('3 November 2026'), notVestedYet,
       ];
 }
