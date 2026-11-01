@@ -405,10 +405,10 @@ class LeafService extends ChangeNotifier {
   static const refreshEvery = Duration(minutes: 2);
   DateTime? _refreshedAt;
   Object? refreshError;
-  /// Off: a refresh the operator cannot fund at once waits in its queue, and the coins it holds
-  /// can be neither traded nor sent until it runs or expires. On again once the library puts a
-  /// coin into a refresh only where the operator can fund it and takes it back out of one that waits.
-  static const refreshReceived = false;
+  /// On: the library gives a coin up only with an operator that takes back a refresh that waits,
+  /// and only as much of each asset as the operator can fund now; a refresh that still waits is
+  /// taken back after two minutes, and a payment or a trade that needs its coins takes it back first.
+  static const refreshReceived = true;
   Future<void> autoRefreshReceived() async {
     if (!refreshReceived) return;
     if (!open || DevMode.instance.on || personBusy || _boarding) return;
