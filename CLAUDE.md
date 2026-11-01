@@ -60,11 +60,13 @@ SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test stake_records -- --nocaptu
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test contracts -- --nocapture
 SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test issuance -- --nocapture
 AMBRA_LEAVES_HARNESS=http://127.0.0.1:18640 cargo test --test leaves -- --nocapture
+AMBRA_LEAVES_NO_SWEEP_HARNESS=http://127.0.0.1:18641 cargo test --test leaves a_vesting_claim -- --nocapture
 ```
 
 The `leaves` test drives the leaf service against arca's long-running operator harness
 (`bark-cli/tests/arca_operator_for_browsers.rs` in the arca repo); without the variable it
-passes without running.
+passes without running. Its vesting case needs a harness started with
+`ARCA_OPERATOR_NO_SWEEP=2592000` and is named by its own variable.
 
 A bare `cargo test` runs the network tests too, and fails `stake_records`, `contracts` and `issuance` unless
 `SEQUENTIAD_EXEC` points at a `sequentiad` (it starts one on a private

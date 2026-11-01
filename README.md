@@ -744,6 +744,11 @@ SEQUENTIAD_EXEC=/path/to/sequentiad cargo test --test contracts -- --nocapture
 # (bark-cli/tests/arca_operator_for_browsers.rs in the arca repo) at its control
 # address; without the variable the test says so and passes without running.
 AMBRA_LEAVES_HARNESS=http://127.0.0.1:18640 cargo test --test leaves -- --nocapture
+
+# A vesting claim named under the staking key: listed with its date before it vests, taken
+# up by care after. Needs a second harness started with ARCA_OPERATOR_NO_SWEEP=2592000
+# (batches without a sweep, each collected a month after its round).
+AMBRA_LEAVES_NO_SWEEP_HARNESS=http://127.0.0.1:18641 cargo test --test leaves a_vesting_claim -- --nocapture
 ```
 
 A bare `cargo test` runs the network tests too, and fails `stake_records` and
