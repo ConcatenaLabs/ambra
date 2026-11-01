@@ -324,6 +324,17 @@ void main() {
       expect(o.plain, isFalse);
     });
 
+    test('an operator that asks for the wallet to be updated is said so in user mode, in the web wallet\'s words', () {
+      final d = plainRefusal(LeafRefusal('server_refused',
+          'the server refused submit_participation (422 declined): this wallet hands over its forfeits only after a round is broadcast, and this operator builds batches without a sweep, whose rounds go out only once every forfeit is in: update the wallet to refresh, offboard or pay out here. Nothing was taken: the coins given up are still yours',
+          code: 'declined', status: 422));
+      expect(d.message, 'This wallet is out of date for this: update it, then try again. Nothing was taken.');
+      expect(d.message, kUpdateRefusal);
+      expect(d.plain, isTrue);
+      expect(d.code, 'declined');
+      expect(forbiddenIn(kUpdateRefusal), isEmpty);
+    });
+
     test('a payment the operator declines reads plainly in user mode, in the words the three wallets share', () {
       final d = plainRefusal(LeafRefusal('server_refused',
           'the server refused cosign_transfer (422 declined): the signer: the signer declined: policy: …',

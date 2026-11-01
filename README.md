@@ -478,8 +478,10 @@ module that implements it.
 - A payment the operator declines: the operator's signer refuses what it asks, and would
   refuse it again however often it were asked (the server's code `declined`), so the
   payment is refused for good. The library puts the coins back at once and sends nothing
-  again; user mode reads "This payment was declined; nothing was sent.", and developer
-  mode shows the operator's own words, which name the code. An operator that cannot be
+  again; user mode reads "This payment was declined; nothing was sent.", or, when the
+  operator declines because the wallet needs updating, "This wallet is out of date for this:
+  update it, then try again. Nothing was taken.", and developer mode shows the operator's own
+  words, which name the code. An operator that cannot be
   reached is no refusal: the payment stands, and the next sync sends it again.
 - The operator's bond: the operator posts an equivocation bond, which two different
   messages its key signs under one coin's salt burn whole. At `care`'s pace, in either

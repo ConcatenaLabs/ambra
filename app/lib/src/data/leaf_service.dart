@@ -1268,10 +1268,19 @@ const kFrozenRefusal = 'This asset is frozen by its issuer for this wallet: noth
 /// library has put the coins back.
 const kDeclinedRefusal = 'This payment was declined; nothing was sent.';
 
-/// A refusal in user mode's words: one the operator declines, a refusal of the
+/// User mode's words when the operator declines what an out-of-date wallet asks (one that
+/// hands its forfeits over only after a round is broadcast, to an operator building batches
+/// without a sweep) and says to update it: in its words, plainly, as the web wallet says it.
+const kUpdateRefusal = 'This wallet is out of date for this: update it, then try again. Nothing was taken.';
+
+/// A refusal in user mode's words: one the operator declines (asking for the wallet to be
+/// updated, or not), a refusal of the
 /// operator's bond, and a frozen holding, said plainly; every other refusal as the
 /// library says it.
 LeafRefusal plainRefusal(LeafRefusal e) {
+  if (e.code == 'declined' && RegExp(r'\bupdate the wallet\b', caseSensitive: false).hasMatch(e.message)) {
+    return LeafRefusal(e.kind, kUpdateRefusal, code: e.code, status: e.status, plain: true);
+  }
   if (e.code == 'declined') return LeafRefusal(e.kind, kDeclinedRefusal, code: e.code, status: e.status, plain: true);
   if (bondRefusal(e)) return LeafRefusal(e.kind, kBondRefusal, code: e.code, status: e.status, plain: true);
   if (e.code == 'frozen' || RegExp(r'\bfrozen\b|\bpaused\b', caseSensitive: false).hasMatch(e.message)) {
