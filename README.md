@@ -370,6 +370,14 @@ module that implements it.
     (`schedule_refreshes`), so a phone left closed keeps its BTC renewed on time; the
     renewed coin is taken in at the next open, and the maintenance that renews coins
     near their expiry leaves a coin with a renewal scheduled to the server.
+  - When the ark's server refuses the wallet or stops answering and a coin worth its
+    exit is within a day of expiry, the wallet takes it to the chain alone: the same
+    rule as the web wallet, bark-wasm's `exit_auto` (`ambra_core` `ark_exit`), in both
+    modes. Bark broadcasts the coin's pre-signed exit, pays each step's fee from the
+    wallet's own Bitcoin address (the phrase's BIP84 coins, given to Bark as its onchain
+    wallet), and claims the coin to that address. BTC's row says what happened and what
+    it cost; nothing is moved into the ark meanwhile. Developer mode adds **Exit…**,
+    which prices each coin and refuses one not worth its exit.
   - BTC's one figure counts the ark; what is on its way in shows as "<amount> BTC
     arriving". Developer mode opens the ark wallet too and counts it (its split reads
     "… on the Bitcoin ark"), but moves nothing into it or out of it by itself.

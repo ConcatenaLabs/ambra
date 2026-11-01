@@ -92,19 +92,16 @@ pub fn open(dir: &Path, mnemonic: &str, net: &str, server: &str, esplora: &str) 
     config.server_address = server.to_string();
     config.esplora_address = Some(esplora.to_string());
     config.bitcoind_address = None;
-    let w = runtime()
-        .block_on(Wallet::open(
-            network,
-            seed,
-            config,
-            OpenWalletArgs {
-                datadir: Some(dd),
-                create_if_not_exists: true,
-                run_daemon: false,
-                ..Default::default()
-            },
-        ))
-        .map_err(err)?;
+    let mut args = OpenWalletArgs {
+        datadir: Some(dd),
+        create_if_not_exists: true,
+        run_daemon: false,
+        ..Default::default()
+    };
+    // The phrase's BIP84 account, the kit's own BTC at the shared address, as Bark's onchain
+    // wallet: it pays an exit's fees ([`exit`]).
+    runtime().block_on(arca_bark_wasm::exit::attach_funding(&mut args, network, mnemonic)).map_err(err)?;
+    let w = runtime().block_on(Wallet::open(network, seed, config, args)).map_err(err)?;
     let props = runtime().block_on(w.properties()).map_err(err)?;
     let out = json!({
         "fingerprint": props.fingerprint.to_string(),
@@ -175,15 +172,40 @@ pub fn sync() -> Result<Value, Value> {
         w.sync().await;
         let claimed = w.try_claim_all_lightning_receives(false).await.map(|v| v.len()).unwrap_or(0);
         let scheduled = match w.schedule_refreshes().await {
-            Ok(s) => s.iter().map(|r| r.vtxos.len()).sum::<usize>(),
+            Ok(s) => {
+                arca_bark_wasm::exit::note_server(&w, false);
+                s.iter().map(|r| r.vtxos.len()).sum::<usize>()
+            }
             Err(e) => {
                 log::warn!("scheduling renewals: {:#}", e);
+                // A refusal is what [`exit`]'s `exit_auto` acts on.
+                arca_bark_wasm::exit::note_server(&w, true);
                 0
             }
         };
         let maintained = w.maintenance().await.map(|_| true).unwrap_or(false);
         Ok(json!({"lightning_receives": claimed, "renewals_scheduled": scheduled, "maintained": maintained}))
     })
+}
+
+/// Taking coins out of the ark without its server: bark-wasm's exit commands
+/// (`exit_estimate`, `exit_start`, `exit_progress`, `exit_claim`, `exit_status`,
+/// `exit_auto`), the same the web wallet and the extension run. The fees come
+/// from the phrase's own BIP84 coins and a coin is claimed to its first address.
+/// `exit_auto` is default mode's one rule: only when the server refused the last
+/// renewal or cannot be reached, for coins worth their exit within a day of
+/// expiry. `args` is the command's JSON object as text.
+pub fn exit(command: &str, args: &str) -> Result<Value, Value> {
+    if !arca_bark_wasm::exit::COMMANDS.contains(&command) {
+        return Err(refusal(format!("no exit command {:?}", command)));
+    }
+    let w = wallet()?;
+    let a: Value = if args.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(args).map_err(|e| refusal(format!("the arguments are not JSON: {}", e)))?
+    };
+    runtime().block_on(arca_bark_wasm::exit::run(&w, command, &a)).map_err(err)
 }
 
 /// Brings the store up to date with what other wallets of the same phrase did
