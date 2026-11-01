@@ -956,6 +956,27 @@ class _BtcRowState extends State<_BtcRow> {
             );
           },
         ),
+      // BTC leaving the Bitcoin ark alone: what happened and what it cost, in both modes.
+      ListenableBuilder(
+        listenable: ArkBtcService.instance,
+        builder: (context, _) {
+          final note = ArkBtcService.instance.exitNote;
+          if (note == null) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Align(alignment: Alignment.centerLeft, child: Text(note, key: const Key('exit-BTC'), style: AmbraText.sub)),
+          );
+        },
+      ),
+      if (widget.dev && ArkBtcService.instance.open && ArkBtcService.instance.held > BigInt.zero)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            key: const Key('exit-btc-button'),
+            onPressed: () => showDialog<void>(context: context, builder: (_) => const _BtcExitDialog()),
+            child: const Text('Exit…'),
+          ),
+        ),
       if (widget.dev && _open && parts.isNotEmpty) _SplitLine(ticker: 'BTC', precision: 8, parts: parts),
       if (widget.dev)
         _RailLine(
@@ -981,6 +1002,81 @@ class _BtcRowState extends State<_BtcRow> {
           onChanged: widget.onChanged,
         ),
     ]);
+  }
+}
+
+/// Developer mode: Bark's unilateral exit of BTC on the Bitcoin ark, by hand. Each coin is priced
+/// alone and a coin not worth its exit says why; the fees are paid from the wallet's Bitcoin
+/// address, and each coin is claimed to it when its exit is done.
+class _BtcExitDialog extends StatefulWidget {
+  const _BtcExitDialog();
+  @override
+  State<_BtcExitDialog> createState() => _BtcExitDialogState();
+}
+
+class _BtcExitDialogState extends State<_BtcExitDialog> {
+  Map<String, dynamic>? _est;
+  String? _said;
+  bool _busy = true;
+
+  @override
+  void initState() {
+    super.initState();
+    ArkBtcService.instance.exitEstimate().then((e) {
+      if (mounted) setState(() { _est = e; _busy = false; });
+    }, onError: (Object e) {
+      if (mounted) setState(() { _said = 'The exit could not be priced: $e'; _busy = false; });
+    });
+  }
+
+  String _b(Object? v) => ArkBtcService.formatSats(BigInt.tryParse('${v ?? 0}') ?? BigInt.zero);
+
+  @override
+  Widget build(BuildContext context) {
+    final e = _est, w = e?['worth'] as Map?;
+    final coins = (e?['coins'] as List?) ?? const [];
+    return AlertDialog(
+      title: const Text('Exit from the Bitcoin ark'),
+      content: SingleChildScrollView(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          const Text('Takes coins to your Bitcoin address without the ark server: every transaction above each coin is '
+              'broadcast, a block at a time, its fee paid from your Bitcoin address\'s confirmed BTC, and after the exit '
+              'delay the coin is claimed to your address. While the ark answers, sending to your Bitcoin address costs far less.'),
+          const SizedBox(height: 8),
+          if (_busy) const Text('Pricing each coin…'),
+          for (final k in coins.cast<Map>())
+            Text('${_b(k['amount'])} BTC, ${k['blocks_left']} blocks to expiry, exit costs '
+                '${k['cost'] == null ? 'unknown' : '${_b(k['cost'])} BTC'}${k['worth'] == true ? '' : ' — ${k['why_not'] ?? 'not worth its exit'}'}'),
+          if (e != null && coins.isEmpty) const Text('No coin in the ark to exit.'),
+          if (w != null)
+            Text('Together: ${_b(w['cost'])} BTC in fees (${w['transactions']} transactions), paid from ${e!['address']}, which holds '
+                '${_b(e['funding_confirmed'])} BTC confirmed.${w['fundable'] == true ? '' : ' That is not enough for the whole walk: receive more BTC there first.'}'),
+          if (_said != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_said!)),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+        if (w != null && w['fundable'] == true)
+          TextButton(
+            key: const Key('exit-btc-start'),
+            onPressed: _busy
+                ? null
+                : () async {
+                    setState(() => _busy = true);
+                    try {
+                      final r = await ArkBtcService.instance.exitStart([for (final v in (w['vtxos'] as List)) '$v']);
+                      _said = 'Exit started for ${(r['started'] as List).length} coin(s): ${_b(r['amount'])} BTC to ${e!['address']}, '
+                          'about ${_b(r['cost'])} BTC in fees. It moves on by itself while the app runs.';
+                    } catch (err) {
+                      _said = '$err';
+                      _busy = false;
+                    }
+                    if (mounted) setState(() {});
+                  },
+            child: const Text('Exit the coins worth it'),
+          ),
+      ],
+    );
   }
 }
 

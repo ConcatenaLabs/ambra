@@ -26,6 +26,13 @@ Future<String> arkOpen({
   esplora: esplora,
 );
 
+/// One of the ark's exit commands (`exit_estimate`, `exit_start`, `exit_progress`,
+/// `exit_claim`, `exit_status`, `exit_auto`) with its JSON arguments as text: coins
+/// taken out of the ark without its server, the fees paid from the phrase's own
+/// Bitcoin coins.
+Future<String> arkExit({required String command, required String args}) =>
+    RustLib.instance.api.crateApiArkBtcArkExit(command: command, args: args);
+
 /// Closes the open ark wallet.
 void arkClose() => RustLib.instance.api.crateApiArkBtcArkClose();
 

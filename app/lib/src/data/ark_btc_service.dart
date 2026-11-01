@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import '../rust/api.dart' as core;
 import '../rust/api/ark_btc.dart' as ark;
 import 'btc_state.dart';
+import 'default_words.dart';
 import 'config.dart';
 import 'dev_mode.dart';
 import 'leaf_service.dart';
@@ -87,6 +88,115 @@ class ArkBtcService extends ChangeNotifier {
   DateTime? _boardRefusedAt;
 
   BigInt _sats(String k) => BigInt.tryParse('${balance?[k] ?? 0}') ?? BigInt.zero;
+
+  // ---- leaving the ark alone (bark-wasm's exit commands, `ambra_core` `ark_exit`) ----
+
+  /// How often the wallet asks its one rule whether a coin must leave the ark alone
+  /// (`exit_auto`), and how often while one is leaving.
+  static const exitEvery = Duration(minutes: 5);
+  static const exitMovingEvery = Duration(minutes: 1);
+
+  /// What the BTC row says about BTC leaving the ark alone, in both modes; null when nothing.
+  String? exitNote;
+  String? _exitKind;
+
+  /// While a coin leaves, or needs the address's BTC to pay its way out, nothing is boarded.
+  bool exitHolds = false;
+  bool _exitPending = false;
+  DateTime? _exitAt;
+  String? _exitCost, _exitAmount, _exitSaid;
+
+  /// One of the exit commands, its answer decoded.
+  Future<Map<String, dynamic>> exitRun(String command, [Map<String, dynamic> args = const {}]) async =>
+      Map<String, dynamic>.from(jsonDecode(await ark.arkExit(command: command, args: jsonEncode(args))) as Map);
+
+  static const _leaving = ['starting', 'on_its_way', 'waiting_out_its_delay', 'claimable'];
+  static bool leaving(Map? r) =>
+      ((r?['progress'] as Map?)?['exits'] as List? ?? const []).any((e) => _leaving.contains((e as Map)['state']));
+  static String _btc(Object? sats) => formatSats(BigInt.tryParse('${sats ?? 0}') ?? BigInt.zero);
+  static String formatSats(BigInt n) {
+    final w = n ~/ BigInt.from(100000000), f = (n % BigInt.from(100000000)).toString().padLeft(8, '0').replaceAll(RegExp(r'0+$'), '');
+    return f.isEmpty ? '$w' : '$w.$f';
+  }
+
+  /// What default mode says about `exit_auto`'s answer [r]: the web wallet's exitNoteOf.
+  /// -> (kind, text) or null.
+  static (String, String)? exitNoteOf(Map? r, {BigInt? pendingSats, String? lastCost, String? lastAmount}) {
+    if (r == null) return null;
+    final progress = r['progress'] as Map?;
+    final claimed = progress?['claimed'] as Map?;
+    if (claimed != null) return ('arrived', DefaultWords.exitArrived(_btc(claimed['amount']), lastCost == null ? null : _btc(lastCost)));
+    final started = r['started'] as Map?;
+    if (r['action'] == 'started' && started != null) return ('started', DefaultWords.exitStarted(_btc(started['amount']), _btc(started['cost'])));
+    if (leaving(r)) {
+      final p = pendingSats ?? BigInt.zero;
+      final amount = p > BigInt.zero ? p : (BigInt.tryParse(lastAmount ?? '') ?? BigInt.zero);
+      if (amount > BigInt.zero) return ('moving', DefaultWords.exitMoving(formatSats(amount)));
+    }
+    if (r['action'] == 'cannot_start') {
+      final need = r['needed'] == null ? null : (BigInt.tryParse('${r['needed']}') ?? BigInt.zero) - (BigInt.tryParse('${r['available'] ?? 0}') ?? BigInt.zero);
+      if (need != null && need > BigInt.zero) return ('needs', DefaultWords.exitNeedsFees(_btc(r['amount']), formatSats(need)));
+      return null;
+    }
+    var small = BigInt.zero;
+    for (final c in (r['not_worth'] as List? ?? const [])) {
+      small += BigInt.tryParse('${(c as Map)['amount']}') ?? BigInt.zero;
+    }
+    if (r['ark'] != null && r['ark'] != 'answering' && small > BigInt.zero) return ('not-worth', DefaultWords.exitNotWorth(formatSats(small)));
+    return null;
+  }
+
+  /// Asks the one rule (`exit_auto`) every [exitEvery], every [exitMovingEvery] while a coin
+  /// leaves; [force] asks now.
+  Future<Map?> exitCheck({bool force = false}) async {
+    if (!open) return null;
+    final last = _exitAt;
+    if (!force && last != null && DateTime.now().difference(last) < (_exitPending ? exitMovingEvery : exitEvery)) return null;
+    _exitAt = DateTime.now();
+    try {
+      final r = await exitRun('exit_auto');
+      final said = '${r['action']} (${r['ark']})';
+      if (said != _exitSaid) debugPrint('[ambra-ark] exit rule: $said');
+      _exitSaid = said;
+      final started = r['started'] as Map?;
+      if (r['action'] == 'started' && started != null) {
+        _exitCost = '${started['cost']}';
+        _exitAmount = '${started['amount']}';
+        debugPrint('[ambra-ark] leaving alone: ${started['started']} cost ${started['cost']}');
+      }
+      await refresh();
+      final pending = BigInt.tryParse('${balance?['pending_exit'] ?? 0}') ?? BigInt.zero;
+      _exitPending = leaving(r) || (((r['progress'] as Map?)?['pending'] as num?) ?? 0) > 0;
+      final note = exitNoteOf(r, pendingSats: pending, lastCost: _exitCost, lastAmount: _exitAmount);
+      if (note != null && note.$1 == 'arrived' && !leaving(r)) _exitCost = _exitAmount = null;
+      // What arrived stays said until something else happens; a coin too small to leave is said after it.
+      if (_exitKind == 'arrived' && (note == null || note.$1 == 'not-worth')) {
+        if (note != null) exitNote = '${exitNote!.split(' The service holding').first} ${note.$2}';
+      } else {
+        _exitKind = note?.$1;
+        exitNote = note?.$2;
+      }
+      exitHolds = _exitPending || r['action'] == 'started' || r['action'] == 'cannot_start';
+      notifyListeners();
+      return r;
+    } catch (e) {
+      debugPrint('[ambra-ark] leaving alone: $e');
+      return null;
+    }
+  }
+
+  /// Developer mode: each coin priced alone, and the start of the exit of [vtxos].
+  Future<Map<String, dynamic>> exitEstimate() => exitRun('exit_estimate');
+  Future<Map<String, dynamic>> exitStart(List<String> vtxos) async {
+    final r = await exitRun('exit_start', {'vtxos': vtxos});
+    _exitCost = '${r['cost']}';
+    _exitAmount = '${r['amount']}';
+    _exitPending = true;
+    exitHolds = true;
+    _exitAt = null;
+    notifyListeners();
+    return r;
+  }
 
   /// BTC in the ark now, spendable at once.
   BigInt get spendable => _sats('spendable');
@@ -189,6 +299,7 @@ class ArkBtcService extends ChangeNotifier {
       final last = _caughtUpAt;
       if (last == null || DateTime.now().difference(last) >= catchUpEvery) await catchUp();
       await refresh();
+      await exitCheck();
       await autoBoard();
       // A wallet from before BTC lived on the ark moves its Lightning BTC here by itself.
       unawaited(LightningToArk.instance.tick());
@@ -209,7 +320,7 @@ class ArkBtcService extends ChangeNotifier {
   /// it (the payment spends the address's coins), never below [minBoard], and after a
   /// refusal not again for ten minutes.
   Future<void> autoBoard({BigInt? onchainSats, bool asked = false}) async {
-    if (!open || _boarding || DevMode.instance.on || (!asked && LeafService.instance.personBusy)) return;
+    if (!open || _boarding || exitHolds || DevMode.instance.on || (!asked && LeafService.instance.personBusy)) return;
     // One board at a time: a board in progress still holds the coins it spends until it is
     // seen on the chain, and the address's balance does not show them spent before then. A
     // board whose transaction the network never took (its broadcast failed) holds nothing, and

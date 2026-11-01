@@ -25,6 +25,14 @@ pub fn ark_open(dir: String, mnemonic: String, network: String, server: String, 
     text(ark_btc::open(Path::new(&dir), &mnemonic, &network, &server, &esplora))
 }
 
+/// One of the ark's exit commands (`exit_estimate`, `exit_start`, `exit_progress`,
+/// `exit_claim`, `exit_status`, `exit_auto`) with its JSON arguments as text: coins
+/// taken out of the ark without its server, the fees paid from the phrase's own
+/// Bitcoin coins.
+pub fn ark_exit(command: String, args: String) -> Result<String> {
+    text(ark_btc::exit(&command, &args))
+}
+
 /// Closes the open ark wallet.
 #[flutter_rust_bridge::frb(sync)]
 pub fn ark_close() {

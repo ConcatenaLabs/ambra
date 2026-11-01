@@ -44,6 +44,19 @@ class DefaultWords {
   static String btcUpTo(String amount) => 'You can send up to $amount BTC this way now.';
   static const couldNotSend = 'This payment could not be made. Nothing was sent.';
 
+  /// When the service holding BTC for instant payments stops renewing it and it would soon need
+  /// renewing, the wallet moves it to its own Bitcoin address by itself (the web wallet's words).
+  static String exitStarted(String amount, String fee) =>
+      'The service holding $amount BTC for instant payments stopped renewing it, so it is moving to your Bitcoin address. Bitcoin network fees: about $fee BTC, paid from your Bitcoin address.';
+  static String exitMoving(String amount) => 'Moving $amount BTC to your Bitcoin address, one Bitcoin block at a time.';
+  static String exitArrived(String amount, String? fee) =>
+      '$amount BTC arrived at your Bitcoin address, moved there because the service holding it for instant payments stopped renewing it.'
+      '${fee == null ? '' : ' Bitcoin network fees: about $fee BTC.'}';
+  static String exitNeedsFees(String amount, String need) =>
+      'The service holding $amount BTC for instant payments stopped renewing it, and it needs renewing within a day. To move it to your Bitcoin address yourself, first receive about $need BTC at your Bitcoin address: it pays the Bitcoin network fees once confirmed.';
+  static String exitNotWorth(String amount) =>
+      'The service holding $amount BTC for instant payments stopped renewing it. Moving that out alone would cost more than it holds, so it stays there and is renewed once the service answers again.';
+
   /// An invoice whose payee holds the payment and has not taken it yet (a hold invoice): not
   /// paid until they do, and it comes back if they never do. The web wallet's words.
   static const payWaiting = 'On its way: waiting for the other side to accept it.';
@@ -73,5 +86,7 @@ class DefaultWords {
         arrivesAfterBlock, noFees, btcSentAfterBlock('0.001'),
         btcUpTo('0.001'), couldNotSend, byAddress(arrivesAfterBlock), arrivesNextBlock, moving('0.001', 'BTC'),
         payWaiting, payCameBack, onItsWay, notPaid, cameBack,
+        exitStarted('0.0015', '0.00002'), exitMoving('0.0015'), exitArrived('0.0015', '0.00002'), exitArrived('0.0015', null),
+        exitNeedsFees('0.0015', '0.00002'), exitNotWorth('0.00002'),
       ];
 }
