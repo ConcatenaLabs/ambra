@@ -445,6 +445,12 @@ void main() {
     expect(released, ['k1', 'k2']);
     expect(UserWords.freeing('USDX'), 'Your USDX is being made ready to trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.');
     expect(spendableFrom([{'leaf_id': 'k2', 'asset': x, 'value': '5', 'state': 'live'}], {'plans': [{'coin': 'old', 'state': 'open', 'steps': [{'leaf_id': 'k2'}]}]}), isEmpty);
+    // A coin given up in a refresh that waits pays: the trade takes the refresh back first.
+    expect(spendableFrom([
+      {'leaf_id': 'a', 'asset': x, 'value': '100', 'state': 'live'},
+      {'leaf_id': 'r', 'asset': x, 'value': '600', 'state': 'given', 'refresh_waiting': 'p1'},
+      {'leaf_id': 'o', 'asset': x, 'value': '40', 'state': 'given'},
+    ], {'plans': []})[x], BigInt.from(700));
   });
 
   test('quote: a small free coin beside a planned one frees the planned coin, never too small', () async {

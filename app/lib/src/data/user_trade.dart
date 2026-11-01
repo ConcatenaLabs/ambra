@@ -301,8 +301,6 @@ List<String> pickerOrder(Iterable<String> assets, BigInt Function(String) held, 
   return [kUserBtc, ...h, ...o];
 }
 
-/// What the library can pay now, per asset: live coins, less the coin of every open
-/// offline-refresh plan.
 /// The coins open offline-refresh plans keep: each plan's coin and the leaf its last step made.
 Set<String> plannedLeaves(Map? plans) {
   final planned = <String>{};
@@ -316,11 +314,16 @@ Set<String> plannedLeaves(Map? plans) {
   return planned;
 }
 
+/// What the library can pay now, per asset, out of round: its live coins, less those an open
+/// offline-refresh plan keeps, and every coin given up in a refresh still waiting for a round
+/// (`refresh_waiting`): the trade takes that refresh back first and pays with the coin, and its
+/// quote prices it so.
 Map<String, BigInt> spendableFrom(List coins, Map? plans) {
   final planned = plannedLeaves(plans);
   final out = <String, BigInt>{};
   for (final c in coins) {
-    if (c is! Map || c['state'] != 'live' || planned.contains('${c['leaf_id']}')) continue;
+    if (c is! Map || planned.contains('${c['leaf_id']}')) continue;
+    if (c['state'] != 'live' && !(c['state'] == 'given' && c['refresh_waiting'] != null)) continue;
     out['${c['asset']}'] = (out['${c['asset']}'] ?? BigInt.zero) + _big(c['value']);
   }
   return out;
