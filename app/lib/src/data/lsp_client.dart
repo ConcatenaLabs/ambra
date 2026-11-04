@@ -133,6 +133,11 @@ class LspClient {
   static Future<http.Response> _get(String path, {Duration timeout = const Duration(seconds: 20)}) =>
       client.get(Uri.parse('${Backend.lsp}$path'), headers: _headers()).timeout(timeout);
 
+  /// A GET against the service with its usual headers, for a reader kept in its own file
+  /// (the unified book, `unified_book.dart`).
+  static Future<http.Response> getPath(String path, {Duration timeout = const Duration(seconds: 20)}) =>
+      _get(path, timeout: timeout);
+
   /// One call whose refusal keeps its HTTP status ([LspHttpException]): a caller that must tell a
   /// payment refused before anything was sent (400, 403) from one whose outcome is unknown needs it.
   static Future<Map<String, dynamic>> call(String path, {Map<String, dynamic>? post, Duration timeout = const Duration(seconds: 30)}) async {

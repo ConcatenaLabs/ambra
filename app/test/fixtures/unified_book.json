@@ -1,0 +1,141 @@
+{
+ "ok": true,
+ "asset": "c8eccacf0953e1931cd31e434d8319101cc36e6c38b0e2104d8687552fae3e40",
+ "quote": "BTC",
+ "asks": [
+  {
+   "side": "ask",
+   "rail": "onchain",
+   "assetAtoms": 13297391012,
+   "btcSats": 64571,
+   "price": 4.8559149642007985e-06,
+   "minFill": 524309017,
+   "indivisible": false,
+   "id": "780eb79f495c1c6b773f3ba97c4307cd",
+   "maker": "02c91f15c1763b63eb8f0e1f6ddbc425627c6d83c7d6e28c8f89bb2049d9c7e2f5"
+  },
+  {
+   "side": "ask",
+   "rail": "pureln",
+   "assetAtoms": 5560855593768,
+   "btcSats": 26998240,
+   "price": 4.855051447524852e-06,
+   "minFill": 0,
+   "indivisible": false,
+   "id": "0098ca2daf80aefcdc8adf4765db0c46",
+   "maker": "02cbd9a9e0776c84005fe00f3516fc086480bfb333e9631c8e471bc4aca6b7d5f1"
+  },
+  {
+   "side": "ask",
+   "rail": "pureln",
+   "assetAtoms": 3707237062512,
+   "btcSats": 17954253,
+   "price": 4.8430280279498265e-06,
+   "minFill": 0,
+   "indivisible": false,
+   "id": "30f4e9b75a76e42cefe931eb97f0868c",
+   "maker": "0383f460133f351c820d5a7f4c52cb056a3e92d88b5f87f03dc953abaa7cb1090b"
+  },
+  {
+   "side": "ask",
+   "rail": "onchain",
+   "assetAtoms": 13297391012,
+   "btcSats": 64252,
+   "price": 4.83192529587322e-06,
+   "minFill": 526912120,
+   "indivisible": false,
+   "id": "643a3227eb83378d4c4f36cab452f756",
+   "maker": "02c33b026560a8fc705dc58b2034fbea4a2afb6a7e6c32cdedecf094dd0e8f73b9"
+  },
+  {
+   "side": "ask",
+   "rail": "pureln",
+   "assetAtoms": 2471491375008,
+   "btcSats": 11939786,
+   "price": 4.83100451846058e-06,
+   "minFill": 0,
+   "indivisible": false,
+   "id": "0877362153b55a45f4399b009131682a",
+   "maker": "02c5a999b4ff8335c423e41b6cccc456ef1175d79c9de8b526c234cbf75e9304b7"
+  },
+  {
+   "side": "ask",
+   "rail": "pureln",
+   "assetAtoms": 1647660916672,
+   "btcSats": 7940047,
+   "price": 4.818981211278331e-06,
+   "minFill": 0,
+   "indivisible": false,
+   "id": "3677397ff63c5c3e196426d43677ac83",
+   "maker": "0298abe3b7368b04bb4dd108e0aa01bdc7e6f11039c4a194c2952a858037802d55"
+  }
+ ],
+ "bids": [
+  {
+   "side": "bid",
+   "rail": "pureln",
+   "assetAtoms": 5560855593768,
+   "btcSats": 26490101,
+   "price": 4.763673602617413e-06,
+   "minFill": 0,
+   "indivisible": false,
+   "id": "bc3ed0048906513dca3b7d15e50a4736",
+   "maker": "02accb30dc576dc954efc2f43062ec66089330a0beede66bd2f728beff4cbb9949"
+  },
+  {
+   "side": "bid",
+   "rail": "onchain",
+   "assetAtoms": 13297971210,
+   "btcSats": 63384,
+   "price": 4.766441361546608e-06,
+   "minFill": 534151122,
+   "indivisible": false,
+   "id": "469f5db32bbb7adeba2bb7cfa60748e5",
+   "maker": "02b6c9850219b641911913947f3a65967a88648556e7ecac169a83f4a18cf0e688"
+  },
+  {
+   "side": "bid",
+   "rail": "pureln",
+   "assetAtoms": 3707237062512,
+   "btcSats": 17704640,
+   "price": 4.7756967524497744e-06,
+   "minFill": 0,
+   "indivisible": false,
+   "id": "8637155626708e8c17e8b00ab2592e70",
+   "maker": "03a98fd7837a350a63ad0b9e4bfabe73a3f75a3a45d18c75a44bdeeeb204af9829"
+  },
+  {
+   "side": "bid",
+   "rail": "pureln",
+   "assetAtoms": 2471491375008,
+   "btcSats": 11832809,
+   "price": 4.7877201270676896e-06,
+   "minFill": 0,
+   "indivisible": false,
+   "id": "8e749123a581d74a4619706441867883",
+   "maker": "023db615680f6042e32aa81061cd148a43d79bcfeb876d83053f2a3bf8cd495863"
+  },
+  {
+   "side": "bid",
+   "rail": "onchain",
+   "assetAtoms": 13297391012,
+   "btcSats": 63740,
+   "price": 4.793421502193847e-06,
+   "minFill": 531144612,
+   "indivisible": false,
+   "id": "abade03794b81949a45f79abbb3e2587",
+   "maker": "0387fc72a2469e1d1390c748405356e2fa7860424aa5a5084599fcdd90f79c012e"
+  },
+  {
+   "side": "bid",
+   "rail": "pureln",
+   "assetAtoms": 1647660916672,
+   "btcSats": 7908350,
+   "price": 4.799743636556936e-06,
+   "minFill": 0,
+   "indivisible": false,
+   "id": "4c903f334b3f325e9d1d22b253efcb9d",
+   "maker": "0321e28e02ad9595a7c4cd776286ef96d715d86830d8a08897607dafde0f5dcf7a"
+  }
+ ]
+}

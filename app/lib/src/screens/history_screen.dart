@@ -320,7 +320,7 @@ class _HistoryTabState extends State<HistoryTab> {
 // Restricted-transfer (OpenAMP) tracker — locally-tracked sent transfers, with
 // a pending/confirmed chip, an explorer link, and a Bitcoin anchor-depth chip.
 // openampd has no per-holder history endpoint, so the wallet follows its OWN
-// sends until confirmed. Nothing is labelled final at 0-conf.
+// sends until confirmed. A confirmed transfer is final once its Bitcoin anchor is buried.
 // ---------------------------------------------------------------------------
 class _OampHistoryCard extends StatelessWidget {
   const _OampHistoryCard({required this.xfers});
@@ -359,7 +359,7 @@ class _OampRow extends StatelessWidget {
     final ts = '${when.year}-${two(when.month)}-${two(when.day)} ${two(when.hour)}:${two(when.minute)}';
     final aidShort = x.recipientAid.length > 10 ? '${x.recipientAid.substring(0, 10)}…' : x.recipientAid;
     final status = pending
-        ? 'pending, not final at 0-conf'
+        ? 'pending, not yet confirmed'
         : (x.anchorDepth != null ? 'Bitcoin anchor depth ${x.anchorDepth}' : 'confirmed, anchor depth pending');
 
     return InkWell(
