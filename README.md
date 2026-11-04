@@ -213,10 +213,16 @@ module that implements it.
   there for the whole amount. A trade is finished on the rail it was priced on. Either way the
   wallet pays the maker's invoice only once the asset it receives is held for good, its fee
   and lock capped at the ones the ticket showed. The screens below are developer mode's.
+- **One book, every rail**: developer mode's composer matches against the unified order
+  book, every relay's offers for the pair merged by price (the hosted-node service's
+  `/book/unified`, the book the web wallet reads; `app/lib/src/data/unified_book.dart`).
+  Its best offer on the side taken shows under the price, with where it rests, and stays
+  the same whichever rails are chosen: the rails decide how the trade settles, never which
+  offer it matches.
 - **Same-chain atomic swap**: pay one Sequentia asset, receive another, settled in a
   single atomic transaction against the SeqDEX daemon's order book
   (`app/lib/src/screens/swap_screen.dart`). The review sheet states finality honestly:
-  settles in ~1 block, anchor-bound to Bitcoin (reverts only if Bitcoin reverts).
+  it confirms in about one block and is final once its Bitcoin anchor is buried.
 - **Cross-chain buy**: buy a Sequentia asset by locking BTC in a testnet4 HTLC
   (`app/lib/src/screens/xchain_swap_screen.dart`). The preimage reveal is hard-gated on
   verifying the Sequentia leg's Bitcoin anchor; in-flight swaps persist across restarts

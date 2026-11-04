@@ -235,7 +235,7 @@ class _SubmarineSwapScreenState extends State<SubmarineSwapScreen> {
             ['Fund-safety', 'Your device VERIFIES the on-chain $_tk is locked to YOUR key on the secret hash (right '
                 'asset, amount, timeout), that the invoice it pays is bound to the SAME secret hash and price, and that '
                 'the $_tk is anchor-buried under Bitcoin — ALL before it pays. The only way to learn the secret is to pay.'],
-            ['Finality', 'Anchored to Bitcoin (reverts only if Bitcoin reverts), so not the instant finality of a pure-Lightning swap.'],
+            ['Finality', 'The on-chain leg confirms in ~1 block and is final once its Bitcoin anchor is buried, so not the instant finality of a pure-Lightning swap.'],
             ['If it stalls', 'Nothing is lost · you never pay until the $_tk HTLC is verified + anchor-buried, and once paid you claim it before its timeout.'],
           ]
         : <List<String>>[

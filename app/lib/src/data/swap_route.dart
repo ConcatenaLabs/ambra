@@ -92,8 +92,8 @@ class SwapRoute {
   String get timing {
     switch (kind) {
       case SwapRouteKind.same:
-        return 'Same-chain covenant swap. Settles in about one block, anchor-bound to Bitcoin '
-            '(reverts only if Bitcoin reverts).';
+        return 'Same-chain covenant swap. Confirms in about one block, final once its Bitcoin anchor '
+            'is buried.';
       case SwapRouteKind.cross:
         return 'On-chain cross-chain swap. Both legs settle on-chain (about one block each), '
             'anchor-bound to Bitcoin.';
@@ -109,9 +109,9 @@ class SwapRoute {
           // BTC leg over Lightning + asset leg on-chain -> the peer-to-peer submarine taker.
           return payIsBtc
               ? 'Submarine swap. You pay Bitcoin over Lightning and receive the asset on-chain, '
-                  'bound by one secret. Anchored to Bitcoin (reverts only if Bitcoin reverts).'
+                  'bound by one secret. The on-chain leg is final once its Bitcoin anchor is buried.'
               : 'Submarine swap. You pay the asset on-chain and receive Bitcoin over Lightning, '
-                  'bound by one secret. Anchored to Bitcoin (reverts only if Bitcoin reverts).';
+                  'bound by one secret. The on-chain leg is final once its Bitcoin anchor is buried.';
         }
         // Asset leg over Lightning + BTC leg on-chain -> the sub-asset rail.
         return payIsBtc

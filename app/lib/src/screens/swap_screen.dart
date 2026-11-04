@@ -18,6 +18,7 @@ import '../data/hidden_assets.dart';
 import '../data/lightning_service.dart';
 import '../data/ln_rail.dart';
 import '../data/leaf_rail.dart';
+import '../data/unified_book.dart';
 import '../data/leaf_service.dart';
 import '../data/dev_mode.dart';
 import '../data/ln_take_service.dart';
@@ -223,6 +224,15 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
   // (paying the asset, receiving SBTC) and pegs the SBTC out to real BTC. Loaded alongside _crossOffers.
   List<SeqObOffer> _peggedOffers = const [];
 
+  // The pair's UNIFIED book (every relay merged, rail as metadata), the book the web wallet reads.
+  // The composer's match is its best price on the side taken, whatever rails are chosen: rails
+  // decide how a trade settles, never which offer it matches. Keyed by [_unifiedKey]; refreshed
+  // at most every 12 s, like the web wallet's cache. Null until read, or when unreachable.
+  UnifiedBook? _unified;
+  String? _unifiedKey;
+  DateTime _unifiedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _unifiedUnreachable = false;
+
   bool _loading = true;
   bool _bookLoading = false;
   String? _error;
@@ -386,6 +396,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     if (!mounted || !_appActive || _refreshing) return;
     if (_loading || _bookLoading) return; // a full load / pair-change fetch owns it
     final pay = _payAsset, recv = _receiveAsset;
+    if (pay != null && recv != null && pay != recv) unawaited(_fetchUnified());
     if (pay == null || recv == null || pay == recv || _isCrossPair) return; // BTC pairs have no covenant book
     _refreshing = true;
     try {
@@ -976,6 +987,86 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
 
   // --- book ------------------------------------------------------------------
 
+  /// The unified book's (asset, quote) for the current pair: the non-BTC asset against BTC for a BTC
+  /// pair, else the pair's canonical base against its quote (the display flip does not change it).
+  ({String asset, String quote})? _unifiedPair() {
+    final pay = _payAsset, recv = _receiveAsset;
+    if (pay == null || recv == null || pay == recv) return null;
+    if (_isCrossPair) return (asset: pay == kBtcSentinel ? recv : pay, quote: 'BTC');
+    final ra = _quoteRank(pay), rb = _quoteRank(recv);
+    final canon = ra != rb
+        ? (ra > rb ? (base: recv, quote: pay) : (base: pay, quote: recv))
+        : (pay.compareTo(recv) < 0 ? (base: pay, quote: recv) : (base: recv, quote: pay));
+    return (asset: canon.base, quote: canon.quote);
+  }
+
+  /// The side the user takes in the unified book: receiving its asset is a buy (lifts the lowest ask),
+  /// paying it is a sell (hits the highest bid).
+  String? _unifiedSide() {
+    final up = _unifiedPair();
+    if (up == null) return null;
+    return _receiveAsset == up.asset ? 'buy' : 'sell';
+  }
+
+  /// The composer's match: the unified book's best price on the side taken. Reads no rail.
+  UnifiedEntry? _unifiedMatch() {
+    final up = _unifiedPair(), side = _unifiedSide(), book = _unified;
+    if (up == null || side == null || book == null || _unifiedKey != '${up.asset}/${up.quote}') return null;
+    return book.bestFor(side);
+  }
+
+  Future<void> _fetchUnified({bool force = false}) async {
+    final up = _unifiedPair();
+    if (up == null) return;
+    final key = '${up.asset}/${up.quote}';
+    if (!force && _unifiedKey == key && DateTime.now().difference(_unifiedAt) < const Duration(seconds: 12)) return;
+    _unifiedAt = DateTime.now();
+    if (_unifiedKey != key) {
+      setState(() {
+        _unified = null;
+        _unifiedKey = key;
+      });
+    }
+    final book = await fetchUnifiedBook(up.asset, quote: up.quote);
+    final now = _unifiedPair();
+    if (!mounted || now == null || '${now.asset}/${now.quote}' != key) return;
+    setState(() {
+      // An unreachable read keeps the last good book for this pair rather than blanking the match.
+      if (book != null) _unified = book;
+      _unifiedUnreachable = book == null;
+    });
+  }
+
+  /// The match line under the price: the best offer on the side taken, its price and size, and where
+  /// it rests. The same on every rail choice, because nothing in it reads a rail.
+  Widget _matchLine() {
+    final up = _unifiedPair(), side = _unifiedSide();
+    if (up == null || side == null) return const SizedBox.shrink();
+    final m = _unifiedMatch();
+    final String text;
+    if (m == null) {
+      text = _unified == null
+          ? (_unifiedUnreachable ? 'Best offer · the order book is unreachable, retrying.' : 'Best offer · reading the order book…')
+          : 'Best offer · no offers resting here yet.';
+    } else {
+      final aprec = SeqAssets.labelFor(up.asset).precision;
+      final qprec = up.quote == 'BTC' ? 8 : SeqAssets.labelFor(up.quote).precision;
+      final atk = _tk(up.asset), qtk = up.quote == 'BTC' ? 'BTC' : _tk(up.quote);
+      final perUnit = m.price * _pow10(aprec) / _pow10(qprec);
+      final where = m.overLightning ? 'rests over Lightning' : 'rests on-chain';
+      text = 'Best offer · ${side == 'buy' ? 'sells' : 'buys'} ${formatAtoms(m.assetAtoms.toString(), aprec)} $atk '
+          'at ${_fmtPrice(perUnit)} $qtk per $atk · $where. Your rails decide how it settles, not which offer you get.';
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.join_inner, size: 15, color: AmbraColors.dim),
+        const SizedBox(width: 8),
+        Expanded(child: Text(text, key: const ValueKey('swap-match-line'), style: AmbraText.sub)),
+      ]),
+    );
+  }
+
   /// The book for the current direction: resting covenant SELLs of the receive
   /// asset (base) for the pay asset (quote) — the offers a TAKE lifts.
   Future<void> _fetchBook() async {
@@ -988,9 +1079,12 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
         _peggedOffers = const [];
         _trades = const [];
         _stats = null;
+        _unified = null;
+        _unifiedKey = null;
       });
       return;
     }
+    unawaited(_fetchUnified(force: true));
     // A BTC pair is not on the same-chain covenant book: show the RELAY cross order book (the durable
     // BTC<->asset offers) instead, so the user sees real cross depth for the pair.
     if (_isCrossPair) {
@@ -1853,6 +1947,13 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
       final asset = pay == kBtcSentinel ? recv : pay;
       final aprec = SeqAssets.labelFor(asset).precision;
       double perUnit(double perAtom) => perAtom * _pow10(aprec) / 1e8; // BTC-sats/atom -> BTC per whole unit
+      // The unified book's match first (every rail's offers merged, as the web wallet prices it); the
+      // on-chain cross book only while the unified book has not been read.
+      final um = _unifiedMatch();
+      if (um != null) {
+        final btcPerAsset = perUnit(um.price);
+        if (btcPerAsset > 0) return dir.base == asset ? btcPerAsset : 1 / btcPerAsset;
+      }
       final asks = _crossOffers.where((o) => o.makerSellsAsset).toList()
         ..sort((a, b) => a.btcPerAssetAtom.compareTo(b.btcPerAssetAtom));
       final bids = _crossOffers.where((o) => !o.makerSellsAsset).toList()
@@ -1996,6 +2097,22 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
   }
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(ambraSnack(m));
+
+  /// The best offer rests its asset over Lightning, so a crossing with an on-chain asset leg cannot
+  /// settle against it. Permanent for that offer, so it never says "try again" (the web wallet's words).
+  String _lnAssetRefusal(String tk, bool buy) => buy
+      ? 'The best $tk offer delivers over Lightning, and this wallet cannot turn that into an on-chain receipt. '
+          'Switch Receive to Lightning to take it · trying again later will not change this.'
+      : 'The best $tk offer settles over Lightning, and this wallet cannot pay it from your on-chain balance. '
+          'Switch Pay to Lightning to take it · trying again later will not change this.';
+
+  /// The best offer needs the hosted-node service to bridge the Lightning leg on the receiving side,
+  /// which this app does not build: the on-chain receive takes the same offer.
+  String _bridgeRefusal(String tk, bool buy) => buy
+      ? 'Taking the best $tk offer this way needs a Lightning bridge this app does not have. '
+          'Switch Pay to On-chain to take it.'
+      : 'Taking the best $tk offer this way needs a Lightning bridge this app does not have. '
+          'Switch Receive to On-chain to take it.';
 
   // User mode's Swap tab: the user composer (user_composer.dart), three inputs and one button.
   UserTradeEngine? _userEngine;
@@ -2249,6 +2366,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
       _refLine(_recvAmount, _receiveAsset), // ≈ reference-currency valuation (spec §6.2)
       const SizedBox(height: 14),
       _priceField(), // editable limit price / read-only market estimate — IDENTICAL on every pair (§6.4)
+      _matchLine(), // the unified book's best offer on the side taken: the same on every rail choice
       const SizedBox(height: 4),
       // Both settlement rails, chosen by the user in developer mode (spec §5/§6.5); in user mode the
       // wallet chooses them ([_userModeRails]) and says nothing of them.
@@ -3281,9 +3399,10 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     // amount (submarine offers are whole-offer: prefer the cheapest offer that COVERS it, else closest).
     final cands = _crossOffers.where((o) => buy ? o.makerSellsAsset : !o.makerSellsAsset).toList();
     if (cands.isEmpty) {
-      _snack(buy
-          ? 'No resting BTC→$tk offer that settles over Lightning right now · this rail needs a resting maker. Try again shortly, or set the pay leg to On-chain.'
-          : 'No resting $tk→BTC offer that settles over Lightning right now · this rail needs a resting maker. Try again shortly, or set the receive leg to On-chain.');
+      // The match is the unified book's, whatever the rails: with nothing on this side of it, nothing
+      // rests here at all; otherwise the best offer rests its asset over Lightning, which this crossing
+      // (an on-chain asset leg) cannot settle against. Neither changes by waiting.
+      _snack(_unifiedMatch() == null ? 'No offers resting here yet.' : _lnAssetRefusal(tk, buy));
       return;
     }
     if (reqAtoms != null && reqAtoms > BigInt.zero) {
@@ -3327,11 +3446,9 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
     if (viable.isEmpty) {
       // Nothing any built path serves: the existing honest refusals, keyed on WHY the best was refused.
       if (bestUnusable?.path == SettlementPath.unsupported) {
-        _snack('The best $tk offer rests over Lightning, so this rail crossing has no on-chain $tk leg to '
-            'settle against right now · try again shortly, or switch the $tk leg to On-chain.');
+        _snack(_lnAssetRefusal(tk, buy));
       } else {
-        _snack('No resting $tk offer that settles this Lightning crossing right now · try again shortly, '
-            'or set the crossed leg to On-chain.');
+        _snack(_bridgeRefusal(tk, buy));
       }
       return;
     }
@@ -3392,15 +3509,13 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
           await _startLspBridge(r, offer, reqAtoms);
           return;
         }
-        _snack('No resting $tk offer that settles this Lightning crossing right now · try again shortly, or set the crossed leg to On-chain.');
+        _snack(_bridgeRefusal(tk, buy));
         return;
       case SettlementPath.unsupported:
-        _snack('The best $tk offer rests over Lightning, so this rail crossing has no on-chain $tk leg to '
-            'settle against right now · try again shortly, or switch the $tk leg to On-chain.');
+        _snack(_lnAssetRefusal(tk, buy));
         return;
       case SettlementPath.native:
-        _snack('No resting ${buy ? 'BTC→$tk' : '$tk→BTC'} offer that settles over Lightning right now · '
-            'this rail needs a resting maker. Try again shortly.');
+        _snack('This trade could not be placed right now - try again shortly.');
         return;
     }
   }
@@ -4009,7 +4124,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
           child: Text(
               _confBook
                   ? 'Blinded resting offers (read-only). Lifting needs the maker online to co-sign (coming).'
-                  : 'Settles in ~1 block · anchor-bound to Bitcoin (reverts only if Bitcoin reverts).',
+                  : 'Confirms in ~1 block · final once its Bitcoin anchor is buried.',
               style: AmbraText.sub),
         ),
       ]),
@@ -4560,7 +4675,7 @@ class _MarketWalkReviewSheetState extends State<_MarketWalkReviewSheet> {
                 _Row('Partial only', 'The book has less than your size; the rest is CANCELLED, not rested (switch to Limit to rest it).'),
               _Row('Network fee', '$feePerFill  (per level)'),
               _Row('Settlement', 'Permissionless covenant fill; each level settles in full or not at all.'),
-              _Row('Finality', 'Anchor-bound to Bitcoin (reverts only if Bitcoin reverts).'),
+              _Row('Finality', 'Confirms in ~1 block · final once its Bitcoin anchor is buried.'),
             ]),
           ),
           const SizedBox(height: 14),
@@ -4671,7 +4786,7 @@ class _PostReviewSheetState extends State<_PostReviewSheet> {
               _Row('You want', _amt(widget.recvAsset, widget.buyAtoms)),
               _Row('Funding fee', _feeWithApprox(widget.feeAsset, widget.feeAtoms)),
               _Row('Order', 'Rests as a funded covenant; a taker fills it at your price.'),
-              _Row('Finality', 'Anchor-bound to Bitcoin (reverts only if Bitcoin reverts).'),
+              _Row('Finality', 'Confirms in ~1 block · final once its Bitcoin anchor is buried.'),
             ]),
           ),
           const SizedBox(height: 14),
@@ -4859,7 +4974,7 @@ class _LimitReviewSheetState extends State<_LimitReviewSheet> {
               if (_willRest) _Row('Rest funding fee', _feeWithApprox(widget.restFeeAsset, widget.restFeeAtoms)),
               _Row('Settlement',
                   'Each fill is a permissionless covenant fill (settles in full or not at all); the remainder rests as a funded covenant.'),
-              _Row('Finality', 'Anchor-bound to Bitcoin (reverts only if Bitcoin reverts).'),
+              _Row('Finality', 'Confirms in ~1 block · final once its Bitcoin anchor is buried.'),
             ]),
           ),
           const SizedBox(height: 14),
@@ -4970,7 +5085,7 @@ class _PeggedPostReviewSheetState extends State<_PeggedPostReviewSheet> {
               _Row('You want', _amt(widget.assetHex, widget.assetAtoms)),
               _Row('Rests as', 'Pegged BTC (SBTC) in a covenant advertised as BTC — stays live while you\'re offline.'),
               _Row('On fill / cancel', 'Your funds return as real BTC (auto-redeemed at the bridge).'),
-              _Row('Finality', 'Anchor-bound to Bitcoin (reverts only if Bitcoin reverts).'),
+              _Row('Finality', 'Confirms in ~1 block · final once its Bitcoin anchor is buried.'),
             ]),
           ),
           const SizedBox(height: 14),
@@ -5102,7 +5217,7 @@ class _PeggedTakeReviewSheetState extends State<_PeggedTakeReviewSheet> {
                 _Row('Partial fill', 'Filling ${_amt(kBtcSentinel, widget.takeBaseAtoms)} of the ${_amt(kBtcSentinel, widget.offer.baseAtoms)} offer.'),
               _Row('Network fee', _feeWithApprox(widget.feeAsset, widget.feeAtoms)),
               _Row('Settlement', 'Permissionless covenant fill; you receive pegged BTC (SBTC), auto-redeemed to real BTC.'),
-              _Row('Finality', 'Anchor-bound to Bitcoin (reverts only if Bitcoin reverts).'),
+              _Row('Finality', 'Confirms in ~1 block · final once its Bitcoin anchor is buried.'),
             ]),
           ),
           const SizedBox(height: 14),
@@ -5234,7 +5349,7 @@ class _ConfPostReviewSheetState extends State<_ConfPostReviewSheet> {
                   'address and blinding pubkey are published so the counterparty can blind their leg too.'),
               _Row('Filling', 'A taker fills it by co-signing a blinded swap. In-wallet co-sign is coming; '
                   'for now the offer rests and you can cancel it anytime.'),
-              _Row('Finality', 'Settles in ~1 block · anchor-bound to Bitcoin (reverts only if Bitcoin reverts).'),
+              _Row('Finality', 'Confirms in ~1 block · final once its Bitcoin anchor is buried.'),
             ]),
           ),
           const SizedBox(height: 14),
