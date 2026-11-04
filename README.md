@@ -352,14 +352,17 @@ module that implements it.
   - Confirmed BTC at the shared address moves in by itself: the kit pays it, less the
     fee, to a new board's funding address in one transaction, and the ark wallet boards
     that transaction (`board_funding_address`, `board_psbt`) and puts it on the network.
-    Below 20,000 sat it stays on the chain. One board at a time, never while something a
-    person asked for runs, or in the minute after; a board whose funding transaction the
-    network has not known for ten minutes (its broadcast failed) holds nothing and no longer
-    holds the next one back. Bark's own log goes to logcat, tagged `bark`.
+    Every limit is the ark server's own, read from its info (`max_board`, `min_board` in
+    `ark_balance`): a board carries at most the server's largest coin, the rest staying at
+    the address for later boards, and none is made below the server's least board (with
+    1,000 sat over it for the fees) or before the server has answered. One board at a
+    time, never while something a person asked for runs, or in the minute after; a board
+    whose funding transaction the network has not known for ten minutes (its broadcast
+    failed) holds nothing and no longer holds the next one back. Bark's own log goes to logcat, tagged `bark`.
   - BTC held in the wallet's own Lightning channel (a wallet made before BTC lived on the
     ark) moves in by itself too (`app/lib/src/data/lightning_to_ark.dart`): the channel pays
     an invoice of the wallet's own ark for all it can spend less the route's fee, from
-    5,000 sat, at most every fifteen minutes and never while something a person asked for
+    5,000 sat and at most the ark server's largest coin, at most every fifteen minutes and never while something a person asked for
     runs. The payment leaves the wallet's own hosted node over whatever channel it has,
     to the ark server's Lightning node. Until it is paid the BTC stays spendable in the channel; meanwhile Balance says
     "Moving <amount> BTC so it can be sent in seconds." under BTC's figure.
@@ -370,6 +373,10 @@ module that implements it.
     two hours), and is then boarded like any other coin. Otherwise the channel stays, and
     developer mode says why under its Lightning part ("Channel <id> stays open: …"). The rules
     are the web wallet's and Ambra browser's (`lightning-to-ark.js`).
+  - Renewals are made in groups that each fit in the server's largest coin; a coin due that
+    is larger than the server takes now (made before it lowered its limit) is offboarded with
+    the server to the phrase's own address instead (`offboarded` in `ark_sync`'s answer),
+    and boarded again from there.
   - Before it schedules the server's renewals, each pass asks the library's Bitcoin ark
     watchtower plan (`tower_plan`), so a coin a tower holds is never also renewed; the
     tower plan's coins are left out (`schedule_refreshes_except`). Deposits with the site's

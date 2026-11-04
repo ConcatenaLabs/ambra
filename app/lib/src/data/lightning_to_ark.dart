@@ -111,11 +111,17 @@ class LightningToArk extends ChangeNotifier {
     return a >= (min ?? BigInt.from(minMove)) && a > BigInt.zero ? a : null;
   }
 
+  /// A BTC move held to the ark's largest coin ([max], the server's published `max_vtxo_amount`,
+  /// null when it names none): a receive over it is refused, so the move carries at most that and
+  /// the rest of the channel moves on a later pass.
+  static BigInt? withinArk(BigInt? amount, BigInt? max) => amount != null && max != null && amount > max ? max : amount;
+
   /// One look at the wallet's own BTC channel; a move when it holds enough.
   Future<void> tick() async {
     final ark = ArkBtcService.instance;
     final ln = LightningService.instance;
-    if (_running || DevMode.instance.on || !ark.open || !ln.configured || LeafService.instance.personBusy) return;
+    // Nothing moves before the ark's server has said its limits.
+    if (_running || DevMode.instance.on || !ark.open || !ark.limitsRead || !ln.configured || LeafService.instance.personBusy) return;
     await _checkClosed();
     final last = _lastTry;
     if (last != null && DateTime.now().difference(last) < retry) return;
@@ -128,7 +134,8 @@ class LightningToArk extends ChangeNotifier {
       final all = ((st.raw['channels'] as List?) ?? const []).whereType<Map>().toList();
       final channels = all.where(channelLockedIn).toList();
       final spendable = legLiquidity(channels, RailTarget.btc()).spendable;
-      final amount = withinAllowance(amountToMove(spendable), await LnPaymentLimit.instance.allowanceAtoms(LnPaymentLimit.kBtcKey));
+      final amount = withinArk(
+          withinAllowance(amountToMove(spendable), await LnPaymentLimit.instance.allowanceAtoms(LnPaymentLimit.kBtcKey)), ark.maxBoard);
       if (amount == null) {
         if (amountToMove(spendable) == null) await _closeEmptied(m, 'BTC', all, min: BigInt.from(minMove));
         return;
