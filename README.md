@@ -399,7 +399,9 @@ module that implements it.
   - The same phrase on another device, or restored here, holds the same ark BTC: Bark
     recovers from the server's recovery mailbox when it creates its store, and on every
     open and every five minutes after the wallet catches up (`catch_up_from_server`) with
-    what the phrase's other wallets boarded, received or spent since.
+    what the phrase's other wallets boarded, received or spent since. A board whose device
+    was lost before the board was registered is found on the chain from the phrase alone
+    and taken in by the same catch-up.
   - Each pass of the wallet's sync schedules with the ark's server, for every coin
     that has none, a renewal the server runs by itself shortly before the coin's expiry
     (`schedule_refreshes`), so a phone left closed keeps its BTC renewed on time; the

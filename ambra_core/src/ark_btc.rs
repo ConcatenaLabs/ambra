@@ -318,17 +318,23 @@ pub fn exit(command: &str, args: &str) -> Result<Value, Value> {
 /// recovery mailbox and imported when the store lacks them, and coins they
 /// spent, marked spent. [`open`] recovers only when it creates the store, so a
 /// second device, or a store kept across a remove and an import, learns of them
-/// only here. The native twin of bark-wasm's `catch_up`: `{"recovered",
-/// "recovered_sat", "spent_elsewhere", "failed", "complete"}`.
+/// only here. A board the phrase's own Bitcoin coins funded that no wallet of
+/// the phrase registered (its device lost before the board's confirmations)
+/// is found on the chain and taken in (`boards`, bark-wasm's
+/// `boards_on_chain`). The native twin of bark-wasm's `catch_up`:
+/// `{"recovered", "recovered_sat", "spent_elsewhere", "failed", "complete",
+/// "boards"}`.
 pub fn catch_up() -> Result<Value, Value> {
     let w = wallet()?;
     let r = runtime().block_on(w.catch_up_from_server()).map_err(err)?;
+    let boards = runtime().block_on(arca_bark_wasm::command::boards_on_chain(&w));
     Ok(json!({
         "recovered": r.recovery.recovered().ids().map(|i| i.to_string()).collect::<Vec<_>>(),
         "recovered_sat": sats(r.recovery.recovered().total_amount()),
         "spent_elsewhere": r.spent_elsewhere.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
         "failed": r.recovery.failed().ids().map(|i| i.to_string()).collect::<Vec<_>>(),
         "complete": r.recovery.is_complete(),
+        "boards": boards,
     }))
 }
 
