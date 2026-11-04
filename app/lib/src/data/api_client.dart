@@ -5,6 +5,22 @@ import 'package:http/http.dart' as http;
 import '../rust/api.dart' as core;
 import 'config.dart';
 
+/// A faucet answer that is not a payout: its own words, and whether it says the wallet already
+/// has the asset (then no other route is tried).
+class FaucetRefused implements Exception {
+  FaucetRefused(this.message, {this.alreadyPaid = false, this.asset});
+  factory FaucetRefused.of(int status, Map<String, dynamic> j) => FaucetRefused(
+        j['error']?.toString() ?? 'HTTP $status',
+        alreadyPaid: status == 429 && j['claimed'] == true,
+        asset: j['asset']?.toString(),
+      );
+  final String message;
+  final bool alreadyPaid;
+  final String? asset;
+  @override
+  String toString() => message;
+}
+
 class FaucetResult {
   FaucetResult(this.amount, this.asset, this.txid);
   final String amount;
@@ -101,34 +117,53 @@ class EnclaveAddressInfo {
 class ApiClient {
   ApiClient._();
 
-  /// Request testnet coins to [address]. Empty/null [asset] = tSEQ.
-  static Future<FaucetResult> faucet(String address, {String? asset}) async {
-    final body = (asset == null || asset.isEmpty)
-        ? <String, String>{'address': address}
-        : <String, String>{'address': address, 'asset': asset};
+  /// Request testnet coins to [address]. Empty/null [asset] = tSEQ. [wallet] is the wallet's
+  /// id for the faucet (faucet_wallet.dart), which pays each asset once per wallet.
+  static Future<FaucetResult> faucet(String address, {String? asset, String? wallet}) async {
+    final body = <String, String>{
+      'address': address,
+      if (asset != null && asset.isNotEmpty) 'asset': asset,
+      'wallet': ?wallet,
+    };
     final r = await http
         .post(Uri.parse(Backend.faucet),
             headers: {'Content-Type': 'application/json', ...Backend.authHeaders}, body: jsonEncode(body))
         .timeout(const Duration(seconds: 30));
     final j = jsonDecode(r.body) as Map<String, dynamic>;
-    if (r.statusCode != 200) {
-      throw Exception(j['error']?.toString() ?? 'HTTP ${r.statusCode}');
-    }
+    if (r.statusCode != 200) throw FaucetRefused.of(r.statusCode, j);
     return FaucetResult('${j['amount']}', '${j['asset']}', '${j['txid']}');
+  }
+
+  /// The faucet labels of the assets [wallet] has already received from the faucet, or null
+  /// when the faucet could not be asked.
+  static Future<Set<String>?> faucetClaimed(String wallet) async {
+    try {
+      final r = await http
+          .get(Uri.parse('${Backend.faucet}/claimed?wallet=$wallet'), headers: Backend.authHeaders)
+          .timeout(const Duration(seconds: 20));
+      if (r.statusCode != 200) return null;
+      final j = jsonDecode(r.body);
+      final c = j is Map ? j['claimed'] : null;
+      return c is List ? c.map((e) => '$e').toSet() : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Ask the faucet to pay [asset] (a faucet ticker; empty = tSEQ) to a leaf receive
   /// [request] this wallet made: the faucet pays it off the chain through the operator.
-  static Future<FaucetResult> faucetLeaf(String request, {String? asset}) async {
-    final body = <String, String>{'request': request, if (asset != null && asset.isNotEmpty) 'asset': asset};
+  static Future<FaucetResult> faucetLeaf(String request, {String? asset, String? wallet}) async {
+    final body = <String, String>{
+      'request': request,
+      if (asset != null && asset.isNotEmpty) 'asset': asset,
+      'wallet': ?wallet,
+    };
     final r = await http
         .post(Uri.parse(Backend.faucet),
             headers: {'Content-Type': 'application/json', ...Backend.authHeaders}, body: jsonEncode(body))
         .timeout(const Duration(seconds: 90));
     final j = jsonDecode(r.body) as Map<String, dynamic>;
-    if (r.statusCode != 200) {
-      throw Exception(j['error']?.toString() ?? 'HTTP ${r.statusCode}');
-    }
+    if (r.statusCode != 200) throw FaucetRefused.of(r.statusCode, j);
     return FaucetResult('${j['amount']}', '${j['asset']}', '');
   }
 
