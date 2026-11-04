@@ -300,9 +300,18 @@ class ArkBtcService extends ChangeNotifier {
       final t0 = DateTime.now();
       final r = jsonDecode(await ark.arkCatchUp()) as Map;
       final n = (r['recovered'] as List?)?.length ?? 0, gone = (r['spent_elsewhere'] as List?)?.length ?? 0;
-      if (n > 0 || gone > 0) {
+      // Boards no wallet of the phrase registered, found on the chain: each taken in, or why not.
+      final boards = r['boards'] is List ? (r['boards'] as List) : const [];
+      for (final b in boards) {
+        if (b is Map) debugPrint('[ambra-ark] board on the chain ${b['funding']} ${b['amount']} sat: ${b['outcome']}');
+      }
+      if (r['boards'] is Map && (r['boards'] as Map)['error'] != null) {
+        debugPrint('[ambra-ark] boards on the chain: ${(r['boards'] as Map)['error']}');
+      }
+      final taken = boards.where((b) => b is Map && (b['outcome'] == 'adopted' || b['outcome'] == 'recovered')).length;
+      if (n > 0 || gone > 0 || taken > 0) {
         debugPrint('[ambra-ark] caught up in ${DateTime.now().difference(t0).inMilliseconds} ms: '
-            '$n coins (${r['recovered_sat']} sat) recovered, $gone spent elsewhere');
+            '$n coins (${r['recovered_sat']} sat) recovered, $gone spent elsewhere, $taken board(s) taken in');
         await refresh();
       }
     } catch (e) {
