@@ -35,27 +35,46 @@ class ArkBtcService extends ChangeNotifier {
   /// How long an open that failed waits before it is tried again.
   static const retry = Duration(minutes: 2);
 
-  /// The smallest board the wallet makes by itself, in sats: below it, the fee is too
-  /// large a share, and the BTC stays on the chain (still in the one BTC figure).
-  static const minBoard = 20000;
+  /// What a board leaves over the server's least board, in sats, for the fees of the
+  /// funding and the board (the web wallet's `BOARD_MARGIN_SATS`).
+  static const boardMargin = 1000;
 
   /// The fee rate of a board's funding transaction, sat/vB.
   static const boardFeeRate = 2.0;
-
-  /// The most one board may carry when the server's info has not said yet, in sats: the testnet
-  /// server's `max_board_amount` and `max_vtxo_amount` (sequentia-testnet-ops
-  /// `bitcoin-ark/captaind.toml`). The server's own figure ([maxBoard]) wins once read.
-  static const defaultMaxBoard = 5000000;
 
   /// How many of the largest boards the wallet keeps on the ark by itself: past it, BTC at the
   /// address stays there (in the one BTC figure, sendable as ever) until a trade or a payment needs
   /// more. Thousands of coins on the ark would slow every command the wallet makes there.
   static const keepBoards = 4;
 
-  /// What one board may carry (the server's largest coin, a board making one), in sats.
-  BigInt get maxBoard {
+  /// Whether the server's limits have been read (its info, from the last handshake): until
+  /// they are, the wallet boards nothing and moves nothing into the ark by itself. Every limit
+  /// is the server's own; the wallet holds none of its own.
+  bool get limitsRead => balance?['min_board'] != null;
+
+  /// What one board may carry (the server's largest coin, a board making one), in sats; null
+  /// when the server names no largest or has not been read.
+  BigInt? get maxBoard {
     final v = BigInt.tryParse('${balance?['max_board'] ?? ''}');
-    return v != null && v > BigInt.zero ? v : BigInt.from(defaultMaxBoard);
+    return v != null && v > BigInt.zero ? v : null;
+  }
+
+  /// The least board the wallet makes by itself, in sats: the server's least board and
+  /// [boardMargin]; null before the server's limits are read.
+  BigInt? get minBoard {
+    final v = BigInt.tryParse('${balance?['min_board'] ?? ''}');
+    return v == null ? null : v + BigInt.from(boardMargin);
+  }
+
+  /// What a board of [have] sats at the address carries, its funding [fee] off: at most the
+  /// server's largest coin ([max], null for none), whatever is left over staying at the address
+  /// for later boards; null below the least board ([min], null before the server's limits are
+  /// read: nothing is boarded on a guess).
+  static BigInt? boardPlan({required BigInt have, required BigInt fee, required BigInt? min, required BigInt? max}) {
+    if (min == null) return null;
+    var amount = have - fee;
+    if (max != null && amount > max) amount = max;
+    return amount < min ? null : amount;
   }
 
   /// The Bitcoin confirmations a board waits for before its BTC can be spent.
@@ -317,7 +336,8 @@ class ArkBtcService extends ChangeNotifier {
   /// Moves the confirmed BTC at the shared address into the ark: the kit pays all of
   /// it, less the fee, to a new board's funding address, and the ark wallet boards that
   /// transaction. Never while something a person asked for runs or within a minute of
-  /// it (the payment spends the address's coins), never below [minBoard], and after a
+  /// it (the payment spends the address's coins), never before the server's limits are read nor
+  /// below its least board ([minBoard]), never above its largest coin ([maxBoard]), and after a
   /// refusal not again for ten minutes.
   Future<void> autoBoard({BigInt? onchainSats, bool asked = false}) async {
     if (!open || _boarding || exitHolds || DevMode.instance.on || (!asked && LeafService.instance.personBusy)) return;
@@ -333,26 +353,27 @@ class ArkBtcService extends ChangeNotifier {
     if (m == null) return;
     _boarding = true;
     try {
+      final min = minBoard, max = maxBoard;
+      if (min == null) return;
       final have = onchainSats ?? BigInt.parse((await core.btcSync(mnemonic: m, t4Api: Backend.testnet4)).balanceSats);
-      if (have < BigInt.from(minBoard)) return;
+      if (have < min) return;
       // Enough is on the ark already, and nothing more was asked for: the rest stays at the address.
       final wanted = _wanted;
-      if (wanted <= BigInt.zero && held >= maxBoard * BigInt.from(keepBoards)) return;
+      if (wanted <= BigInt.zero && max != null && held >= max * BigInt.from(keepBoards)) return;
       final where = jsonDecode(await ark.arkBoardAddress()) as Map;
       // A first build tells the fee of paying everything; the board is everything less it.
       final probe = await core.btcPrepare(
           mnemonic: m,
           t4Api: Backend.testnet4,
           address: '${where['address']}',
-          amountSats: BigInt.from(minBoard ~/ 2),
+          amountSats: min ~/ BigInt.two,
           feeRate: boardFeeRate);
       final fee = BigInt.parse(probe.feeSats) + BigInt.from(200); // room for the inputs of a full spend
       // Everything at the address less the fee, but never more than one board may carry: a board
       // over the server's largest coin is refused, and the BTC would never move at all. The rest
       // moves in later boards, one at a time.
-      var amount = have - fee;
-      if (amount > maxBoard) amount = maxBoard;
-      if (amount < BigInt.from(minBoard) || (!asked && LeafService.instance.personBusy)) return;
+      final amount = boardPlan(have: have, fee: fee, min: min, max: max);
+      if (amount == null || (!asked && LeafService.instance.personBusy)) return;
       final tx = await core.btcPrepare(
           mnemonic: m,
           t4Api: Backend.testnet4,

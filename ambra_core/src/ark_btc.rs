@@ -257,7 +257,9 @@ pub fn balance() -> Result<Value, Value> {
 /// The scheduled renewal ([`bark::Wallet::schedule_refreshes`]) is what keeps
 /// the BTC of a phone left closed: the server runs it by itself shortly before
 /// the coin's expiry, and the next pass takes the new coin in. The maintenance
-/// leaves a coin with a renewal scheduled to the server.
+/// leaves a coin with a renewal scheduled to the server. Renewals fit under the
+/// server's largest coin; a coin due that is alone above it is offboarded to the
+/// phrase's own address instead (`offboarded`).
 pub fn sync() -> Result<Value, Value> {
     let w = wallet()?;
     runtime().block_on(async {
@@ -278,8 +280,16 @@ pub fn sync() -> Result<Value, Value> {
                 0
             }
         };
+        // A coin due that is alone above the server's largest (made before the server lowered
+        // it) cannot be refreshed: it leaves the ark to the phrase's own first address, where
+        // the app boards it again in coins the server takes. The maintenance then refreshes
+        // the rest in refreshes that each fit under the largest.
+        let offboarded = arca_bark_wasm::exit::offboard_oversized(&w).await.unwrap_or_else(|e| {
+            log::warn!("offboarding coins above the server's largest: {:#}", e);
+            vec![]
+        });
         let maintained = w.maintenance().await.map(|_| true).unwrap_or(false);
-        Ok(json!({"lightning_receives": claimed, "renewals_scheduled": scheduled, "maintained": maintained}))
+        Ok(json!({"lightning_receives": claimed, "renewals_scheduled": scheduled, "offboarded": offboarded, "maintained": maintained}))
     })
 }
 
