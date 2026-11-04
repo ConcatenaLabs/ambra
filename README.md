@@ -370,6 +370,12 @@ module that implements it.
     two hours), and is then boarded like any other coin. Otherwise the channel stays, and
     developer mode says why under its Lightning part ("Channel <id> stays open: …"). The rules
     are the web wallet's and Ambra browser's (`lightning-to-ark.js`).
+  - Before it schedules the server's renewals, each pass asks the library's Bitcoin ark
+    watchtower plan (`tower_plan`), so a coin a tower holds is never also renewed; the
+    tower plan's coins are left out (`schedule_refreshes_except`). Deposits with the site's
+    tower (`/btc-watchtower` of the ark's origin) are sent only when `TOWER_DEPOSITS` in
+    `ambra_core/src/ark_btc.rs` is on; withdrawals always, so a deposit never outlives its
+    coin.
   - Send pays out of the ark, chosen without asking: an ark address in seconds, a BTC
     invoice (`lntb…`) over Lightning, a Bitcoin address on the chain after a Bitcoin
     block. An address the ark cannot cover, or one it refuses, is paid as before. A code

@@ -39,6 +39,14 @@ fn runtime() -> &'static tokio::runtime::Runtime {
 
 static WALLET: Mutex<Option<std::sync::Arc<Wallet>>> = Mutex::new(None);
 
+/// The Bitcoin ark watchtowers of the open wallet's server and the file that
+/// keeps the deposits they hold ([`tower_pass`]).
+static TOWERS: Mutex<Option<(PathBuf, Vec<String>)>> = Mutex::new(None);
+
+/// Whether the wallet deposits its coins with the towers. Off: it still asks
+/// the plan, so a coin a tower holds never gets a scheduled renewal too.
+const TOWER_DEPOSITS: bool = false;
+
 /// A refusal as the app reads it.
 pub fn refusal(msg: impl std::fmt::Display) -> Value {
     json!({"error": {"kind": "ark", "message": format!("{:#}", msg)}})
@@ -108,13 +116,97 @@ pub fn open(dir: &Path, mnemonic: &str, net: &str, server: &str, esplora: &str) 
         "network": net,
         "server_pubkey": props.server_pubkey.map(|k| k.to_string()),
     });
+    // The server's site runs its watchtower at /btc-watchtower.
+    let origin: String = server.splitn(4, '/').take(3).collect::<Vec<_>>().join("/");
+    *TOWERS.lock().expect("lock") = Some((dd_towers(dir, network, &m), vec![format!("{}/btc-watchtower", origin)]));
     *WALLET.lock().expect("lock") = Some(std::sync::Arc::new(w));
     Ok(out)
+}
+
+fn dd_towers(dir: &Path, network: Network, m: &bip39::Mnemonic) -> PathBuf {
+    datadir(dir, network, m).join("towers.json")
+}
+
+/// The coins `schedule_refreshes` leaves out after a tower pass: those a
+/// tower holds a deposit for (`covered`), and those whose deposit a tower
+/// accepted in this pass. A coin the plan meant for a deposit that no tower
+/// took is renewed as any other: a coin gets either a tower or a scheduled
+/// renewal, never both, and never neither.
+pub fn tower_except(plan: &Value, accepted: &[String]) -> Vec<String> {
+    let mut ids: Vec<String> = accepted.to_vec();
+    for c in plan["covered"].as_array().cloned().unwrap_or_default() {
+        if let Some(v) = c["vtxo"].as_str() {
+            if !ids.iter().any(|i| i == v) {
+                ids.push(v.to_string());
+            }
+        }
+    }
+    ids
+}
+
+/// Bitcoin ark watchtowers, before renewals are scheduled: the library's
+/// plan (`tower_plan`) says which deposits to send, which to take back (a
+/// coin spent, or left to its renewal) and which coins a tower covers.
+/// Deposits are sent only when [`TOWER_DEPOSITS`] is on; withdrawals always,
+/// so a deposit never outlives its coin. Answers the coins to leave out of
+/// the renewals; without a plan, the coins a tower holds.
+async fn tower_pass(w: &Wallet) -> Vec<String> {
+    let Some((file, towers)) = TOWERS.lock().expect("lock").clone() else { return vec![] };
+    let mut kept: Vec<Value> = std::fs::read_to_string(&file).ok()
+        .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok()).unwrap_or_default();
+    let kept_ids = |k: &Vec<Value>| k.iter().filter_map(|d| d["vtxo"].as_str().map(String::from)).collect::<Vec<_>>();
+    let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build();
+    let Ok(http) = http else { return kept_ids(&kept) };
+    let mut named = vec![];
+    if TOWER_DEPOSITS {
+        for url in &towers {
+            if let Ok(r) = http.get(format!("{}/v1/info", url)).send().await {
+                if let Ok(info) = r.json::<Value>().await {
+                    named.push(json!({"url": url, "info": info}));
+                }
+            }
+        }
+    }
+    let plan = match arca_bark_wasm::tower::run(w, "tower_plan", &json!({"towers": named, "deposited": kept})).await {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("tower plan: {:#}", e);
+            return kept_ids(&kept);
+        }
+    };
+    log::info!("tower plan: {} covered, {} not covered, {} not worth it, deposits {}",
+        plan["covered"].as_array().map_or(0, |v| v.len()), plan["uncovered"].as_array().map_or(0, |v| v.len()),
+        plan["not_worth"].as_array().map_or(0, |v| v.len()), if TOWER_DEPOSITS { "on" } else { "off" });
+    let mut accepted = vec![];
+    if TOWER_DEPOSITS {
+        for d in plan["deposit"].as_array().cloned().unwrap_or_default() {
+            let tower = d["tower"].as_str().unwrap_or("");
+            match http.post(format!("{}/v1/deposit", tower)).json(&d["body"]).send().await {
+                Ok(r) if r.status().is_success() => {
+                    accepted.push(d["vtxo"].as_str().unwrap_or("").to_string());
+                    kept.push(json!({"tower": tower, "vtxo": d["vtxo"], "claim_txid": d["claim_txid"]}));
+                }
+                Ok(r) => log::warn!("tower {} refused a deposit: {}", tower, r.status()),
+                Err(e) => log::warn!("tower {}: {:#}", tower, e),
+            }
+        }
+    }
+    for wd in plan["withdraw"].as_array().cloned().unwrap_or_default() {
+        let tower = wd["tower"].as_str().unwrap_or("").to_string();
+        if let Ok(r) = http.post(format!("{}/v1/withdraw", tower)).json(&wd["body"]).send().await {
+            if r.status().is_success() || r.status() == reqwest::StatusCode::NOT_FOUND {
+                kept.retain(|k| !(k["tower"].as_str() == Some(tower.as_str()) && k["vtxo"] == wd["vtxo"]));
+            }
+        }
+    }
+    let _ = std::fs::write(&file, serde_json::to_string(&kept).unwrap_or_else(|_| "[]".into()));
+    tower_except(&plan, &accepted)
 }
 
 /// Closes the open wallet.
 pub fn close() {
     WALLET.lock().expect("lock").take();
+    TOWERS.lock().expect("lock").take();
 }
 
 fn sats(a: Amount) -> String {
@@ -171,7 +263,10 @@ pub fn sync() -> Result<Value, Value> {
     runtime().block_on(async {
         w.sync().await;
         let claimed = w.try_claim_all_lightning_receives(false).await.map(|v| v.len()).unwrap_or(0);
-        let scheduled = match w.schedule_refreshes().await {
+        // The tower plan first: a coin a tower covers gets no scheduled renewal.
+        let except: std::collections::HashSet<bark::ark::VtxoId> = tower_pass(&w).await.iter()
+            .filter_map(|i| i.parse().ok()).collect();
+        let scheduled = match w.schedule_refreshes_except(&except).await {
             Ok(s) => {
                 arca_bark_wasm::exit::note_server(&w, false);
                 s.iter().map(|r| r.vtxos.len()).sum::<usize>()
