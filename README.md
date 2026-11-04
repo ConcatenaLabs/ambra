@@ -26,11 +26,14 @@ Protocol documentation lives in the node repo:
   offered on the same download page.
 - iOS is not released. The `app/ios/` scaffold exists but iOS bring-up has not happened
   (it needs a macOS + Xcode machine).
-- Free testnet funds: the in-app faucet (More tab) dispenses tSEQ and the demo assets;
-  for BTC use any public Bitcoin testnet4 faucet with the wallet's receive address. In
-  user mode the faucet pays the wallet's receive code, so the coins arrive in seconds
-  (the address if the faucet refuses the code); in developer mode, a wallet that joined
-  an operator can ask to be paid as a leaf instead.
+- Free testnet funds: the in-app faucet (More tab) dispenses BTC (testnet4, on chain to
+  the wallet's address), tSEQ and the demo assets. In user mode the faucet pays the
+  wallet's receive code, so the coins arrive in seconds (the address if the faucet refuses
+  the code); in developer mode, a wallet that joined an operator can ask to be paid as a
+  leaf instead. The faucet pays each asset once per wallet: every request names the wallet
+  by its id (`app/lib/src/data/faucet_wallet.dart`, the same for one phrase in every
+  Sequentia wallet), a button whose asset the wallet has received reads "<TICKER>
+  received" and is off, and more of that asset comes from trading for it.
 
 ## What the wallet does
 
@@ -610,8 +613,9 @@ module that implements it.
   are moved out to the wallet's address first when a stake or a first pool membership needs
   them (`app/lib/src/data/on_chain_need.dart`). Developer mode shows the staking key, lock
   heights and the pools' keys and full payout policies.
-- Faucet screen requesting tSEQ, USDX, EURX, GOLD, SILVR, or OILX from the public
-  testnet faucet.
+- Faucet screen requesting BTC, tSEQ, USDX, EURX, GOLD, SILVR, or OILX from the public
+  testnet faucet, once per wallet, with what the wallet has already received shown on
+  its buttons.
 - Report a problem (More → Help): what happened, an optional Emissio account code to be
   credited, and the address only when ticked. The report carries the app's version, its
   mode and its recent uncaught errors, scrubbed of addresses, keys and invoices, shows
@@ -780,6 +784,7 @@ Flutter (from `app/`):
 
 ```sh
 flutter test test/lsp_client_test.dart        # pure-Dart, mocked HTTP, runs anywhere
+FAUCET_DIR=/path/to/sequentia-faucet flutter test test/faucet_once_test.dart   # against a real faucet, no coins
 flutter test                                  # all tests; see the caveat below
 ```
 

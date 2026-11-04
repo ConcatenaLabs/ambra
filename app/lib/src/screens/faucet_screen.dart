@@ -7,6 +7,7 @@ import '../data/api_client.dart';
 import '../data/config.dart';
 import '../data/default_words.dart';
 import '../data/dev_mode.dart';
+import '../data/faucet_wallet.dart';
 import '../data/leaf_service.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
@@ -20,6 +21,10 @@ class FaucetScreen extends StatefulWidget {
 
 class _FaucetScreenState extends State<FaucetScreen> {
   String? _address;
+  /// The wallet's id for the faucet, which pays each asset once per wallet (faucet_wallet.dart).
+  String? _wallet;
+  /// The faucet labels of the assets this wallet has received from the faucet.
+  Set<String> _claimed = {};
   bool _busy = false;
   bool _error = false;
   bool _asLeaf = false; // developer mode, joined wallet: be paid as a leaf instead of on-chain
@@ -50,7 +55,23 @@ class _FaucetScreenState extends State<FaucetScreen> {
     final m = await WalletRepository.instance.readMnemonic();
     if (m == null) return;
     final info = await core.receiveAddressAt(mnemonic: m, index: 0, confidential: false);
-    if (mounted) setState(() => _address = info.address);
+    if (!mounted) return;
+    setState(() {
+      _address = info.address;
+      _wallet = faucetWalletIdOf(info.address);
+    });
+    await _loadClaimed();
+  }
+
+  Future<void> _loadClaimed() async {
+    final w = _wallet;
+    if (w == null) return;
+    final got = await ApiClient.faucetClaimed(w);
+    if (got != null && mounted) setState(() => _claimed = got);
+  }
+
+  void _paid(String asset) {
+    if (mounted) setState(() => _claimed = {..._claimed, asset});
   }
 
   Future<void> _request(String asset) async {
@@ -62,19 +83,30 @@ class _FaucetScreenState extends State<FaucetScreen> {
       _status = 'Requesting from the faucet…';
     });
     try {
+      if (asset == 'BTC') {
+        // BTC is paid on chain to the wallet's address, the same address on both chains.
+        final r = await ApiClient.faucet(addr, asset: asset, wallet: _wallet);
+        _paid(r.asset);
+        if (mounted) setState(() => _status = 'The faucet sent ${r.amount} BTC. It arrives after a Bitcoin block.');
+        return;
+      }
       if (_userTree) {
         // User mode: the faucet pays a receive code, so the coins arrive in seconds; if it
         // refuses, the same tap is paid to the address as before.
         try {
           final code = await LeafService.instance.receiveCode();
           if (code == null) throw Exception('no receive code');
-          final r = await ApiClient.faucetLeaf(code, asset: asset);
+          final r = await ApiClient.faucetLeaf(code, asset: asset, wallet: _wallet);
+          _paid(r.asset);
           if (mounted) setState(() => _status = DefaultWords.received(r.amount, r.asset));
           // The wallet takes the coin in by itself; nothing waits on it here.
           unawaited(LeafService.instance.openingSync(by: 'faucet'));
           return;
-        } catch (_) {
-          final r = await ApiClient.faucet(addr, asset: asset);
+        } catch (e) {
+          // The wallet has the asset: the address is the same wallet, so it is not asked again.
+          if (e is FaucetRefused && e.alreadyPaid) rethrow;
+          final r = await ApiClient.faucet(addr, asset: asset, wallet: _wallet);
+          _paid(r.asset);
           if (mounted) {
             setState(() => _status = 'Sent ${r.amount} ${r.asset}. It will appear on Balance once it confirms (about a minute).');
           }
@@ -86,11 +118,13 @@ class _FaucetScreenState extends State<FaucetScreen> {
         final made = await LeafService.instance.pay('receive', {'asset': _hexOf(asset)});
         final request = (made is Map ? made['request'] : null)?.toString();
         if (request == null || request.isEmpty) throw Exception('the leaf wallet made no request');
-        final r = await ApiClient.faucetLeaf(request, asset: asset);
+        final r = await ApiClient.faucetLeaf(request, asset: asset, wallet: _wallet);
+        _paid(r.asset);
         await LeafService.instance.refresh();
         if (mounted) setState(() => _status = 'Paid ${r.amount} ${r.asset} as a leaf. It shows under Leaves.');
       } else {
-        final r = await ApiClient.faucet(addr, asset: asset);
+        final r = await ApiClient.faucet(addr, asset: asset, wallet: _wallet);
+        _paid(r.asset);
         if (mounted) {
           setState(() => _status = 'Sent ${r.amount} ${r.asset}. It will appear on Balance once it confirms (about a minute).');
         }
@@ -99,11 +133,14 @@ class _FaucetScreenState extends State<FaucetScreen> {
       if (mounted) {
         setState(() {
           _error = true;
-          _status = 'Faucet error: $e';
+          // The faucet's own refusal is a sentence a person can act on.
+          _status = e is FaucetRefused ? e.message : 'Faucet error: $e';
+          if (e is FaucetRefused && e.alreadyPaid) _claimed = {..._claimed, faucetLabel(asset)};
         });
       }
     } finally {
       if (mounted) setState(() => _busy = false);
+      unawaited(_loadClaimed());
     }
   }
 
@@ -120,6 +157,8 @@ class _FaucetScreenState extends State<FaucetScreen> {
       body: AmbraBackground(
         child: ListView(padding: const EdgeInsets.all(20), children: [
           const Text('Get free testnet coins sent to your wallet address.', style: AmbraText.muted),
+          const SizedBox(height: 6),
+          const Text(FaucetWords.rule, key: Key('faucet-rule'), style: AmbraText.sub),
           const SizedBox(height: 18),
           AmbraCard(
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -140,10 +179,11 @@ class _FaucetScreenState extends State<FaucetScreen> {
             spacing: 10,
             runSpacing: 10,
             children: [
-              for (final a in SeqAssets.faucetAssets)
+              for (final a in ['BTC', ...SeqAssets.faucetAssets])
                 _FaucetButton(
-                  label: a.isEmpty ? 'tSEQ' : a,
-                  onTap: (_busy || _address == null) ? null : () => _request(a),
+                  key: Key('faucet-${faucetLabel(a)}'),
+                  label: _claimed.contains(faucetLabel(a)) ? FaucetWords.received(faucetLabel(a)) : faucetLabel(a),
+                  onTap: (_busy || _address == null || _claimed.contains(faucetLabel(a))) ? null : () => _request(a),
                 ),
             ],
           ),
@@ -166,9 +206,8 @@ class _FaucetScreenState extends State<FaucetScreen> {
               SectionLabel('Bitcoin (testnet4)'),
               SizedBox(height: 10),
               Text(
-                'The buttons above fund Sequentia assets only. Your address also receives '
-                'Bitcoin on testnet4 (one address, both chains). To get testnet Bitcoin, send '
-                'it from a public Bitcoin testnet4 faucet to the funding address shown above.',
+                'Your address receives Bitcoin on testnet4 too (one address, both chains). '
+                'BTC above pays it there, and it arrives after a Bitcoin block.',
                 style: AmbraText.sub,
               ),
             ]),
@@ -192,7 +231,7 @@ class _FaucetScreenState extends State<FaucetScreen> {
 }
 
 class _FaucetButton extends StatelessWidget {
-  const _FaucetButton({required this.label, required this.onTap});
+  const _FaucetButton({super.key, required this.label, required this.onTap});
   final String label;
   final VoidCallback? onTap;
 
