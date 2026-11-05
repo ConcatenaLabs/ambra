@@ -80,6 +80,19 @@ class DefaultWords {
   static String byAddress(String arrives) => "This can't arrive in seconds from what you hold now, so it goes to the address. $arrives";
   static const arrivesNextBlock = 'It arrives after the next block, in about a minute.';
 
+  /// One payment of the Bitcoin ark's `direct` figure or more goes to the address, never into the
+  /// ark (ark_limits.dart): said first in the review, and under Receive's amount.
+  static String byAddressLarge(String usd) => 'A payment of $usd USD or more goes to the address.';
+
+  /// A payment the way in seconds cannot carry now (above the most the service takes in one
+  /// payment, ln_max_payment.dart): paid at the code's address, said first in the review.
+  static const byAddressNoWay = 'This can’t arrive in seconds right now, so it goes to the address.';
+
+  /// No invoice for an amount that goes to the address, nor for more than the service takes in
+  /// one payment: the receive code, which carries the address, instead.
+  static const giveCode = 'Give the receive code instead: it is paid there.';
+  static const invoiceNoWay = 'This can’t arrive in seconds right now. Give the receive code instead: it is paid at the address.';
+
   /// The words no default-mode screen says (the contract's list).
   static const forbidden = [
     'rail', 'round', 'leaf', 'operator', 'tree', 'board', 'covenant', 'expiry', 'atom', 'sat', 'forfeit',
@@ -96,6 +109,7 @@ class DefaultWords {
         fee('5', 'USDX'), arriving('5', 'USDX'), redoing('5', 'USDX'), keptSafe('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
         arrivesAfterBlock, noFees, btcSentAfterBlock('0.001'),
         btcUpTo('0.001'), couldNotSend, byAddress(arrivesAfterBlock), arrivesNextBlock, moving('0.001', 'BTC'),
+        byAddressLarge('1,500'), byAddressNoWay, giveCode, invoiceNoWay,
         payWaiting, payCameBack, onItsWay, notPaid, cameBack,
         exitStarted('0.0015', '0.00002'), exitMoving('0.0015'), exitArrived('0.0015', '0.00002'), exitArrived('0.0015', null),
         exitNeedsFees('0.0015', '0.00002'), exitNotWorth('0.00002'),

@@ -67,10 +67,19 @@ class _SendTabState extends State<SendTab> {
   /// pays it; anything else to its address ([_byAddress] then says so in plain words).
   String? _routeOf(PayCode code) {
     _byAddress = false;
+    _why = null;
     if (_isBtc) {
       final sats = parseAtoms(_amount.text, 8);
       final ark = ArkBtcService.instance;
       final some = sats != null && sats > BigInt.zero;
+      // One payment of the band's `direct` figure or more goes to the address straight away
+      // (ark_limits.dart): the receiving wallet would only move it out of its ark again.
+      final large = code.address != null && some ? ark.directWhy(sats) : null;
+      if (large != null) {
+        _byAddress = true;
+        _why = large;
+        return code.address;
+      }
       if (code.ark != null && ark.open && some && sats <= ark.spendable) return code.ark;
       final inv = code.lightning;
       if (inv != null) {
@@ -113,8 +122,17 @@ class _SendTabState extends State<SendTab> {
   }
 
   /// Whether the payment being reviewed is a receive code paid at its address, because no
-  /// instant way fits: the review says so ([DefaultWords.byAddress]).
+  /// instant way fits: the review says so ([DefaultWords.byAddress]), or in its own sentence
+  /// ([_why]) when the wallet passed an instant way over on purpose.
   bool _byAddress = false;
+  String? _why;
+
+  /// The review's first line for a code paid at its address, followed by when it arrives.
+  String? _addressNote(String arrives) {
+    if (!_byAddress || DevMode.instance.on) return null;
+    final why = _why;
+    return why == null ? DefaultWords.byAddress(arrives) : '$why $arrives';
+  }
   String? _error;
 
   /// The synthetic asset id for parent-chain Bitcoin in the picker/state.
@@ -425,6 +443,8 @@ class _SendTabState extends State<SendTab> {
 
   Future<void> _review() async {
     _route = null;
+    _byAddress = false;
+    _why = null;
     try {
       final code = PayCode.read(_addr.text);
       if (code != null) {
@@ -524,7 +544,7 @@ class _SendTabState extends State<SendTab> {
         feeAsset: feeAsset,
         feeLabel: _feeLabel,
         feeRateSatKvb: feeRateSatKvb,
-        note: _byAddress && !DevMode.instance.on ? DefaultWords.byAddress(DefaultWords.arrivesNextBlock) : null,
+        note: _addressNote(DefaultWords.arrivesNextBlock),
       ),
     );
     if (txid != null && mounted) {
@@ -572,7 +592,7 @@ class _SendTabState extends State<SendTab> {
         amountSats: atoms,
         amountStr: formatAtoms(atoms.toString(), 8),
         feeRate: feeRate,
-        note: _byAddress && !DevMode.instance.on ? DefaultWords.byAddress(DefaultWords.arrivesAfterBlock) : null,
+        note: _addressNote(DefaultWords.arrivesAfterBlock),
       ),
     );
     if (txid != null) unawaited(_logSent('BTC', atoms, 8, 'btc', txid: txid, chain: 'btc'));
@@ -682,10 +702,16 @@ class _SendTabState extends State<SendTab> {
         backgroundColor: AmbraColors.panel,
         title: Text(DefaultWords.review(amountStr, 'BTC'), style: AmbraText.title),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // A code paid at its address says why first.
+          if (!fast && _addressNote(DefaultWords.arrivesAfterBlock) != null) ...[
+            Text(_addressNote(DefaultWords.arrivesAfterBlock)!, key: const Key('send-why'), style: AmbraText.muted),
+            const SizedBox(height: 6),
+          ],
           Text('To  ${dest.length > 24 ? '${dest.substring(0, 12)}…${dest.substring(dest.length - 8)}' : dest}',
               style: AmbraText.muted),
           const SizedBox(height: 6),
-          Text(fast ? DefaultWords.reviewLine : DefaultWords.arrivesAfterBlock, style: AmbraText.muted),
+          if (fast || _addressNote(DefaultWords.arrivesAfterBlock) == null)
+            Text(fast ? DefaultWords.reviewLine : DefaultWords.arrivesAfterBlock, style: AmbraText.muted),
         ]),
         actions: [
           GhostButton(label: 'Cancel', onPressed: () => Navigator.pop(context, false)),

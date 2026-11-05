@@ -1982,16 +1982,22 @@ class _ReceiveTabState extends State<ReceiveTab> {
     return (dec, sats);
   }
 
-  /// The code from its parts as they stand.
+  /// Whether the code's amount goes to the address straight away (ark_limits.dart), and the
+  /// sentence Receive says it with; null when it does not.
+  String? _largeWhy(String text) => ArkBtcService.instance.directWhy(_amountOf(text)?.$2);
+
+  /// The code from its parts as they stand. An amount that goes to the address straight away
+  /// carries neither the ark's address nor an invoice: a wallet that is not this one pays it there.
   String? _compose() {
     final a = _codeAddr;
     if (a == null) return null;
+    final large = _largeWhy(_codeAmount) != null;
     try {
       return PayCode(
               address: a,
               amount: _amountOf(_codeAmount)?.$1,
-              lightning: _codeInvoice,
-              ark: _codeArk,
+              lightning: large ? null : _codeInvoice,
+              ark: large ? null : _codeArk,
               sequentia: _codeSeq)
           .build();
     } catch (_) {
@@ -2048,7 +2054,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
         _codeInvoice = null;
         _codeInvoiceHash = null;
         final amount = _amountOf(text);
-        if (amount != null && ark.open) {
+        if (amount != null && ark.open && _largeWhy(text) == null) {
           try {
             _codeInvoice = await ark.invoice(amount.$2);
             _codeInvoiceHash = '${decodeBtcInvoice(_codeInvoice!)['payment_hash']}';
@@ -2180,6 +2186,10 @@ class _ReceiveTabState extends State<ReceiveTab> {
                       controller: _btcAmount,
                       hint: '0.0',
                       onChanged: _onAmount),
+                  if (_largeWhy(_codeAmount) != null) ...[
+                    const SizedBox(height: 8),
+                    Text(_largeWhy(_codeAmount)!, key: const Key('receive-why'), style: AmbraText.sub),
+                  ],
                 ],
               ],
             ]),
