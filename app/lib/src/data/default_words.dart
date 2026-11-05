@@ -93,6 +93,28 @@ class DefaultWords {
   static const giveCode = 'Give the receive code instead: it is paid there.';
   static const invoiceNoWay = 'This can’t arrive in seconds right now. Give the receive code instead: it is paid at the address.';
 
+  /// The service that holds the wallet's coins for instant payments does not answer: the coins
+  /// are still the wallet's, and go home to its own address from what the wallet holds and the
+  /// chain alone (home_coins.dart). Balance shows the card in either mode.
+  static const homeLine = 'The service that holds your coins for instant payments is not answering. '
+      'Your coins are still yours: wait for it to come back, or take them home to your own address now.';
+  static const homeButton = 'Take my coins home';
+  static const homeQuoting = 'Working out what it costs\u2026';
+  static const homeTitle = 'Take your coins home?';
+  static String homeAsset(String amount, String ticker, String fees) =>
+      '$amount $ticker${fees.isEmpty ? '' : ', network fees about $fees'}';
+  static String homeWhen(int hours) => hours > 0
+      ? 'They reach your own address in about $hours hours, and cannot be sent until then. Open this wallet again after that to finish.'
+      : 'They reach your own address shortly, and cannot be sent until then.';
+  static const homeConfirm = 'Take them home';
+  static const homeWorking = 'Taking your coins home\u2026';
+  static String homeNotNow(String amount, String ticker) =>
+      '$amount $ticker cannot be taken home right now. Nothing of it was sent: try again later.';
+  static const homeNothing = 'None of your coins can be taken home right now. Nothing was sent: try again later.';
+  static String homeOnWay(String amount, String ticker, int hours) => hours > 0
+      ? '$amount $ticker on its way to your own address: it arrives in about $hours hours, once this wallet is open.'
+      : '$amount $ticker on its way to your own address.';
+
   /// The words no default-mode screen says (the contract's list).
   static const forbidden = [
     'rail', 'round', 'leaf', 'operator', 'tree', 'board', 'covenant', 'expiry', 'atom', 'sat', 'forfeit',
@@ -110,6 +132,9 @@ class DefaultWords {
         arrivesAfterBlock, noFees, btcSentAfterBlock('0.001'),
         btcUpTo('0.001'), couldNotSend, byAddress(arrivesAfterBlock), arrivesNextBlock, moving('0.001', 'BTC'),
         byAddressLarge('1,500'), byAddressNoWay, giveCode, invoiceNoWay,
+        homeLine, homeButton, homeQuoting, homeTitle, homeAsset('50', 'USDX', '0.00000145 USDX'), homeAsset('50', 'USDX', ''),
+        homeWhen(37), homeWhen(0), homeConfirm, homeWorking, homeNotNow('5', 'USDX'), homeNothing,
+        homeOnWay('5', 'USDX', 37), homeOnWay('5', 'USDX', 0),
         payWaiting, payCameBack, onItsWay, notPaid, cameBack,
         exitStarted('0.0015', '0.00002'), exitMoving('0.0015'), exitArrived('0.0015', '0.00002'), exitArrived('0.0015', null),
         exitNeedsFees('0.0015', '0.00002'), exitNotWorth('0.00002'),

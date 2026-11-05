@@ -17,6 +17,7 @@ import '../data/descriptor.dart';
 import '../data/dev_mode.dart';
 import '../data/fee_asset_rule.dart';
 import '../data/format.dart';
+import '../data/home_coins.dart';
 import '../data/hidden_assets.dart';
 import '../data/lightning_to_ark.dart';
 import '../data/pay_code.dart';
@@ -515,6 +516,9 @@ class _BalanceTabState extends State<BalanceTab> {
               child: Text('Live prices unavailable; see per-asset amounts below.', style: AmbraText.sub),
             ),
           const SizedBox(height: 24),
+          // The service holding coins for instant payments does not answer: one card above the
+          // list, in either mode, to take them home (home_coins.dart), whatever else has loaded.
+          const _HomeCard(),
           if (_error != null && balances == null)
             AmbraCard(child: Text(_error!, style: const TextStyle(color: AmbraColors.red)))
           else if (balances == null)
@@ -897,6 +901,176 @@ class _HiddenAssetsSection extends StatelessWidget {
 }
 
 /// The Bitcoin parent-chain balance row — first-class, same layout as [_AssetRow].
+/// While the service that holds the wallet's coins for instant payments does not answer, one
+/// card above the list with **Take my coins home**, in either mode, and a line for each asset on
+/// its way home (docs/DEFAULT_MODE.md of the web wallet, "When the service does not answer").
+class _HomeCard extends StatelessWidget {
+  const _HomeCard();
+
+  static String _amt(String asset, BigInt atoms) {
+    final l = SeqAssets.labelFor(asset);
+    return '${formatAtoms(atoms.toString(), l.precision)} ${l.ticker}';
+  }
+
+  // It follows the leaf service itself: the card comes and goes as the service answers or stops,
+  // whatever rebuilds Balance.
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(listenable: LeafService.instance, builder: (context, _) => _card(context));
+
+  Widget _card(BuildContext context) {
+    final l = LeafService.instance;
+    final offer = l.homeOffer();
+    final way = homeOnWay(l.homeUnderWayNow(), DateTime.now().millisecondsSinceEpoch);
+    if (offer == null && way.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: AmbraCard(
+        key: const Key('home-card'),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          for (final w in way)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                  DefaultWords.homeOnWay(formatAtoms(w.atoms.toString(), SeqAssets.labelFor(w.asset).precision),
+                      SeqAssets.labelFor(w.asset).ticker, w.hours),
+                  key: const Key('home-onway'),
+                  style: AmbraText.sub),
+            ),
+          if (offer != null) ...[
+            const Text(DefaultWords.homeLine, key: Key('home-line'), style: AmbraText.muted),
+            const SizedBox(height: 12),
+            PrimaryButton(
+                key: const Key('home-take'), label: DefaultWords.homeButton, onPressed: () => _review(context)),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  /// The review: one line per asset (amount, and the fees the holder pays), when they arrive,
+  /// what cannot go now; **Take them home** broadcasts each exit only on the fees shown.
+  static Future<void> _review(BuildContext context) async {
+    await showDialog<void>(context: context, barrierDismissible: false, builder: (_) => const _HomeReview());
+  }
+}
+
+class _HomeReview extends StatefulWidget {
+  const _HomeReview();
+  @override
+  State<_HomeReview> createState() => _HomeReviewState();
+}
+
+class _HomeReviewState extends State<_HomeReview> {
+  HomeQuote? _q;
+  HomeSummary? _sum;
+  bool _quoting = true, _working = false, _done = false;
+  final _gone = <String, BigInt>{}, _back = <String, BigInt>{};
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_quote());
+  }
+
+  Future<void> _quote() async {
+    HomeQuote? q;
+    try {
+      q = await LeafService.instance.homeQuoteNow();
+    } catch (e) {
+      debugPrint('[home] quote: $e');
+    }
+    for (final r in q?.refused ?? const <HomeRefused>[]) {
+      debugPrint('[home] not now: ${r.coin.leafId} ${r.error}');
+    }
+    if (!mounted) return;
+    setState(() {
+      _q = q;
+      _sum = homeSummary(q);
+      _quoting = false;
+    });
+  }
+
+  Future<void> _take() async {
+    final q = _q;
+    if (q == null) return;
+    setState(() => _working = true);
+    HomeTaken? r;
+    try {
+      r = await LeafService.instance.takeHome(q);
+    } catch (e) {
+      debugPrint('[home] take: $e');
+    }
+    for (final s in r?.started ?? const <HomeStarted>[]) {
+      _gone[s.coin.asset] = (_gone[s.coin.asset] ?? BigInt.zero) + (BigInt.tryParse(s.coin.value) ?? BigInt.zero);
+    }
+    for (final s in r?.refused ?? const <HomeRefused>[]) {
+      _back[s.coin.asset] = (_back[s.coin.asset] ?? BigInt.zero) + (BigInt.tryParse(s.coin.value) ?? BigInt.zero);
+      debugPrint('[home] refused: ${s.coin.leafId} ${s.error}');
+    }
+    if (!mounted) return;
+    setState(() {
+      _working = false;
+      _done = true;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sum = _sum;
+    final lines = <Widget>[];
+    Widget line(String t, Key k) => Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(t, key: k, style: AmbraText.muted));
+    if (_quoting) {
+      lines.add(const Row(children: [
+        SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AmbraColors.amber)),
+        SizedBox(width: 10),
+        Expanded(child: Text(DefaultWords.homeQuoting, style: AmbraText.muted)),
+      ]));
+    } else if (_done) {
+      final hours = homeHours(sum?.delaySeconds ?? 0);
+      for (final e in _gone.entries) {
+        final lb = SeqAssets.labelFor(e.key);
+        lines.add(line(DefaultWords.homeOnWay(formatAtoms(e.value.toString(), lb.precision), lb.ticker, hours), const Key('home-review-onway')));
+      }
+      for (final e in _back.entries) {
+        final lb = SeqAssets.labelFor(e.key);
+        lines.add(line(DefaultWords.homeNotNow(formatAtoms(e.value.toString(), lb.precision), lb.ticker), const Key('home-review-notnow')));
+      }
+      if (_gone.isEmpty) lines.add(line(DefaultWords.homeNothing, const Key('home-review-nothing')));
+    } else if (sum != null) {
+      for (final a in sum.assets) {
+        final fees = [for (final f in a.feeList) if (f.atoms > BigInt.zero) _HomeCard._amt(f.asset, f.atoms)].join(' + ');
+        final lb = SeqAssets.labelFor(a.asset);
+        lines.add(line(DefaultWords.homeAsset(formatAtoms(a.atoms.toString(), lb.precision), lb.ticker, fees), const Key('home-review-asset')));
+      }
+      if (sum.count > 0) lines.add(line(DefaultWords.homeWhen(homeHours(sum.delaySeconds)), const Key('home-review-when')));
+      for (final r in sum.refused) {
+        final lb = SeqAssets.labelFor(r.asset);
+        lines.add(line(DefaultWords.homeNotNow(formatAtoms(r.atoms.toString(), lb.precision), lb.ticker), const Key('home-review-notnow')));
+      }
+      if (sum.count == 0) lines.add(line(DefaultWords.homeNothing, const Key('home-review-nothing')));
+      if (_working) {
+        lines.add(const Row(children: [
+          SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AmbraColors.amber)),
+          SizedBox(width: 10),
+          Expanded(child: Text(DefaultWords.homeWorking, style: AmbraText.muted)),
+        ]));
+      }
+    }
+    final canTake = !_quoting && !_working && !_done && (sum?.count ?? 0) > 0;
+    return AlertDialog(
+      backgroundColor: AmbraColors.panel,
+      title: const Text(DefaultWords.homeTitle, style: AmbraText.title),
+      content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: lines)),
+      actions: [
+        GhostButton(label: _done ? 'Done' : 'Cancel', onPressed: _working ? null : () => Navigator.pop(context)),
+        if (!_done)
+          TextButton(
+              key: const Key('home-confirm'), onPressed: canTake ? _take : null, child: const Text(DefaultWords.homeConfirm)),
+      ],
+    );
+  }
+}
+
 class _BtcRow extends StatefulWidget {
   const _BtcRow(
       {required this.sats,

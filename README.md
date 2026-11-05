@@ -459,6 +459,20 @@ module that implements it.
   asset and state, receive (a request shown as text and QR, copied or shared), send to
   a request, settle now (the refresh fee shown before anything is signed), every coin
   with its dates, the exit drill, board from on-chain, and what the wallet refused.
+  While the operator cannot be reached (a sync's `unreachable`), Leaves says so under
+  Operator, and every leaf still goes home by its exit drill, one at a time.
+- When the operator stops answering, Balance shows one card above the list, in either
+  mode: "The service that holds your coins for instant payments is not answering. Your
+  coins are still yours: wait for it to come back, or take them home to your own address
+  now." and **Take my coins home** (`app/lib/src/data/home_coins.dart`, the web wallet's
+  `default-arca.js` home functions). The button quotes every coin the wallet still holds
+  (`exit_quote`; a channel leaf by `channel_exit`) and reviews it: one line per asset with
+  the network fees the holder pays, about how many hours until it arrives, and what cannot
+  go now. **Take them home** broadcasts each exit only on the fees shown; a coin whose shared
+  steps another coin already put on the chain is quoted again and goes only for no more than
+  was shown. Until they arrive the card reads "<amount> <TICKER> on its way to your own
+  address: it arrives in about <hours> hours, once this wallet is open." Nothing of it asks
+  the operator.
 - The Swap screen's leaf rail (developer mode, an operator joined, two Sequentia assets;
   `app/lib/src/data/leaf_rail.dart`, `app/lib/src/screens/leaf_rail_panel.dart`): "Pay
   from" and "Receive to" offer **Leaf** beside On-chain and Lightning, and a leg on Leaf

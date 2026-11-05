@@ -290,6 +290,17 @@ class _StatusCardState extends State<_StatusCard> {
         Text(s.operator?.server ?? '', style: AmbraText.mono),
         const SizedBox(height: 4),
         Text(s.open ? 'Open on this phone' : 'Not open', style: AmbraText.sub),
+        // The operator does not answer: every leaf below still goes home from this wallet's
+        // record and the chain alone, one leaf at a time, by its Exit drill.
+        if (s.unreachable != null) ...[
+          const SizedBox(height: 8),
+          Text('The operator cannot be reached: ${s.unreachable!.note ?? s.unreachable!.why}',
+              key: const Key('leaf-unreachable'), style: const TextStyle(color: AmbraColors.red)),
+          Text(
+              'Since ${s.unreachableSince?.toUtc().toIso8601String().replaceFirst('T', ' ').split('.').first} UTC. '
+              'Each leaf below still goes home from this wallet\'s record and the chain alone: its Exit drill asks nothing of the operator.',
+              style: AmbraText.sub),
+        ],
         if (sch != null) ...[
           const SizedBox(height: 4),
           Text('Next sync: ${sch['next_sync_at'] == null ? 'nothing waits' : _when(sch['next_sync_at'], sch['now'])}',

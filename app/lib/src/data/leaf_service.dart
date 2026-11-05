@@ -16,6 +16,7 @@ import 'btc_state.dart';
 import 'config.dart';
 import 'dev_mode.dart';
 import 'format.dart';
+import 'home_coins.dart';
 import 'ln_max_payment.dart';
 import 'pay_code.dart' show expandRequest;
 import 'price_service.dart';
@@ -185,6 +186,7 @@ class LeafService extends ChangeNotifier {
     }
     operator = await savedOperator();
     await _loadClaims();
+    await _homeKept();
     debugPrint('[leaves] start: ${joined ? 'a leaf wallet is held' : 'none held yet'}');
     if (!joined) {
       notifyListeners();
@@ -275,6 +277,9 @@ class LeafService extends ChangeNotifier {
     _caredThisRun = false;
     _heldFor = null;
     _boardRefused.clear();
+    unreachable = null;
+    unreachableSince = null;
+    await _keepHome({});
     notifyListeners();
   }
 
@@ -748,6 +753,7 @@ class LeafService extends ChangeNotifier {
         run: run,
         synced: (v) async {
           lastSync = DateTime.now();
+          noteUnreachable(unreachableOf(v, 'sync'));
           for (final a in arrivals(v is Map ? v['mailbox'] : null)) {
             arrivedCount++;
           await notifyArrived(a, channel: _channel);
@@ -793,15 +799,106 @@ class LeafService extends ChangeNotifier {
     if (info == null) {
       try {
         info = Map<String, dynamic>.from(await run('info') as Map);
+        noteUnreachable(unreachableOf(info, 'info'));
       } catch (_) {}
     }
     notifyListeners();
+  }
+
+  // -------------------------------------------------------------------------
+  // Every coin home, with the operator gone (home_coins.dart)
+  // -------------------------------------------------------------------------
+
+  /// Whether the operator cannot be reached, as the library last said (a sync's `unreachable`,
+  /// present only then, or an `info`'s), and since when; null once it answers again.
+  Unreachable? unreachable;
+  DateTime? unreachableSince;
+
+  /// Keeps what a library answer says of the operator being reachable ([unreachableOf]).
+  void noteUnreachable(({bool known, Unreachable? value}) u) {
+    if (!u.known) return;
+    final was = unreachable != null;
+    unreachable = u.value;
+    if (u.value == null) {
+      unreachableSince = null;
+    } else {
+      unreachableSince ??= DateTime.now();
+    }
+    if (was != (unreachable != null)) {
+      debugPrint('[leaves] the operator ${unreachable == null ? 'answers again' : 'cannot be reached: ${unreachable!.why}'}');
+      notifyListeners();
+    }
+  }
+
+  /// While the operator cannot be reached: the coins that could go home, else null. Balance shows
+  /// the card with "Take my coins home" in either mode while it is not null.
+  List<Map>? homeOffer() {
+    if (!open || unreachable == null) return null;
+    final c = homeCoins(coins);
+    return c.isEmpty ? null : c;
+  }
+
+  /// Each coin's exit, quoted by the library; asks nothing of the operator.
+  Future<HomeQuote> homeQuoteNow() => _person(() => homeQuote(run, coins, homeChannelIds()));
+
+  /// The wallet's channel leaves, which go home by their own steps (`channel_exit`).
+  List<String> homeChannelIds() => const [];
+
+  /// Broadcasts what [homeQuoteNow] quoted, each exit only on the fees it showed, and keeps what
+  /// was sent and when for the card's words.
+  Future<HomeTaken> takeHome(HomeQuote q) => _person(() async {
+        final r = await homeTake(run, q, log: debugPrint);
+        await _keepHome({...await _homeKept(), ...r.kept});
+        await refresh();
+        return r;
+      });
+
+  /// The coins on their way home, for the card's words ([homeUnderWay]).
+  List<HomeWay> homeUnderWayNow() {
+    final r = homeUnderWay(coins, _homeKeptNow, unreachable != null);
+    if (coins.isNotEmpty && r.kept.length != _homeKeptNow.length) {
+      _homeKeptNow = Map<String, Map>.from(r.kept);
+      unawaited(_keepHome(_homeKeptNow));
+    }
+    return r.list;
+  }
+
+  static const _kHome = 'ambra.leaves.home';
+  Map<String, Map> _homeKeptNow = {};
+
+  Future<Map<String, Map>> _homeKept() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final j = jsonDecode(p.getString(_kHome) ?? '{}');
+      _homeKeptNow = {for (final e in (j as Map).entries) '${e.key}': e.value as Map};
+    } catch (_) {}
+    return _homeKeptNow;
+  }
+
+  Future<void> _keepHome(Map<String, Map> m) async {
+    _homeKeptNow = m;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kHome, jsonEncode(m));
+    } catch (_) {}
+  }
+
+  /// Something a person asked for: the wallet's own upkeep keeps off while it runs.
+  Future<T> _person<T>(Future<T> Function() f) async {
+    _asking++;
+    try {
+      return await f();
+    } finally {
+      _asking--;
+      personActed();
+    }
   }
 
   /// A sync now: what the library does on its own (the mailbox, refreshes, every
   /// coin's way home), and a notification per coin received.
   Future<Map<String, dynamic>> syncNow({String by = 'user'}) async {
     final r = await run('sync') as Map<String, dynamic>;
+    noteUnreachable(unreachableOf(r, 'sync'));
     _heldFor = null;
     lastSync = DateTime.now();
     for (final a in arrivals(r['mailbox'])) {
