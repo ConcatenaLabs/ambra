@@ -98,7 +98,9 @@ flutter build apk --debug --target-platform android-x64 \
 The service is then the origin's `/lsp`, and the wallet's own nodes are reached through its
 websocket router (`/lsp-ws-node/…`). A release build names none of these.
 
-There is no CI in this repository. Nothing checks a build or a test for you.
+CI (`.github/workflows/tests.yml`) runs the core's offline tests, `flutter analyze` and the
+host tests on every pull request and on `main`. The tests that need a `sequentiad`, the live
+testnet, an operator harness or a device are not run there; run them yourself before a merge.
 
 ## Leaf commands a person starts go through one path
 
