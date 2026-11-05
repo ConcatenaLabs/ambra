@@ -6,12 +6,14 @@ import 'package:http/http.dart' as http;
 
 import '../rust/api.dart' as core;
 import '../rust/api/ark_btc.dart' as ark;
+import 'ark_limits.dart';
 import 'btc_state.dart';
 import 'default_words.dart';
 import 'config.dart';
 import 'dev_mode.dart';
 import 'leaf_service.dart';
 import 'lightning_to_ark.dart';
+import 'price_service.dart';
 import 'wallet_repository.dart';
 
 /// BTC on the Bitcoin ark, in user mode: the wallet's BTC lives there by itself,
@@ -67,14 +69,38 @@ class ArkBtcService extends ChangeNotifier {
   }
 
   /// What a board of [have] sats at the address carries, its funding [fee] off: at most the
-  /// server's largest coin ([max], null for none), whatever is left over staying at the address
-  /// for later boards; null below the least board ([min], null before the server's limits are
-  /// read: nothing is boarded on a guess).
-  static BigInt? boardPlan({required BigInt have, required BigInt fee, required BigInt? min, required BigInt? max}) {
+  /// server's largest coin ([max], null for none) and at most what the band leaves room for ([cap],
+  /// [arkRoom]; null for no limit), whatever is left over staying at the address for later boards;
+  /// null below the least board ([min], null before the server's limits are read: nothing is
+  /// boarded on a guess).
+  static BigInt? boardPlan({required BigInt have, required BigInt fee, required BigInt? min, required BigInt? max, BigInt? cap}) {
     if (min == null) return null;
     var amount = have - fee;
     if (max != null && amount > max) amount = max;
+    if (cap != null && amount > cap) amount = cap;
     return amount < min ? null : amount;
+  }
+
+  /// The band default mode keeps the ark within, in USD (ark_limits.dart), and BTC's price.
+  ArkFigures get band => arkLimitsNow().btc;
+  double? get _btcUsd => PriceService.instance.usdPrice('BTC');
+
+  /// How much more BTC the wallet moves into the ark by itself ([boardRoom]): nothing while it holds
+  /// a quarter of the resting level or more, else the rest up to it; null for no limit. With no
+  /// price yet, nothing moves in until there is one (the web wallet's `arkRoom('BTC')`).
+  BigInt? arkRoom() {
+    final l = band, p = _btcUsd;
+    if (l.board != null && !(p != null && p > 0)) return BigInt.zero;
+    return boardRoom(held: held, limitUsd: l.board, price: p, precision: 8);
+  }
+
+  /// Whether one BTC payment of [sats] goes to the address rather than into an ark ([goesToAddress]),
+  /// and the sentence the review says it with; null when it does not. Default mode only.
+  String? directWhy(BigInt? sats) {
+    if (DevMode.instance.on || sats == null) return null;
+    final l = band;
+    if (!goesToAddress(atoms: sats, direct: l.direct, price: _btcUsd, precision: 8)) return null;
+    return DefaultWords.byAddressLarge(usdFigure(directUsd(l)!));
   }
 
   /// The Bitcoin confirmations a board waits for before its BTC can be spent.
@@ -328,6 +354,7 @@ class ArkBtcService extends ChangeNotifier {
       if (last == null || DateTime.now().difference(last) >= catchUpEvery) await catchUp();
       await refresh();
       await exitCheck();
+      await holdTick();
       await autoBoard();
       // A wallet from before BTC lived on the ark moves its Lightning BTC here by itself.
       unawaited(LightningToArk.instance.tick());
@@ -364,10 +391,15 @@ class ArkBtcService extends ChangeNotifier {
     try {
       final min = minBoard, max = maxBoard;
       if (min == null) return;
+      // Within the band (ark_limits.dart): only below a quarter of the resting level, back up to
+      // it; a trade or a payment that asks for more there gets it.
+      var cap = arkRoom();
+      final wanted = _wanted;
+      if (cap != null && wanted > cap) cap = wanted;
+      if (cap != null && cap <= BigInt.zero) return;
       final have = onchainSats ?? BigInt.parse((await core.btcSync(mnemonic: m, t4Api: Backend.testnet4)).balanceSats);
       if (have < min) return;
       // Enough is on the ark already, and nothing more was asked for: the rest stays at the address.
-      final wanted = _wanted;
       if (wanted <= BigInt.zero && max != null && held >= max * BigInt.from(keepBoards)) return;
       final where = jsonDecode(await ark.arkBoardAddress()) as Map;
       // A first build tells the fee of paying everything; the board is everything less it.
@@ -381,7 +413,7 @@ class ArkBtcService extends ChangeNotifier {
       // Everything at the address less the fee, but never more than one board may carry: a board
       // over the server's largest coin is refused, and the BTC would never move at all. The rest
       // moves in later boards, one at a time.
-      final amount = boardPlan(have: have, fee: fee, min: min, max: max);
+      final amount = boardPlan(have: have, fee: fee, min: min, max: max, cap: cap);
       if (amount == null || (!asked && LeafService.instance.personBusy)) return;
       final tx = await core.btcPrepare(
           mnemonic: m,
@@ -413,6 +445,41 @@ class ArkBtcService extends ChangeNotifier {
     } finally {
       _boarding = false;
       notifyListeners();
+    }
+  }
+
+  /// How often the ark is looked at for a move down to the resting level ([holdTick]).
+  static const holdEvery = Duration(minutes: 2);
+  DateTime? _holdAt;
+  bool _moving = false;
+
+  /// Once the ark holds the band's ceiling, everything above its resting level moves out to the
+  /// wallet's own address in one move ([moveOutAtoms]); never in developer mode (whose places are
+  /// the person's), never while a person is busy or one such move is under way, at most every
+  /// [holdEvery]. The web wallet's `arkHoldTick`.
+  Future<void> holdTick({bool force = false}) async {
+    if (!open || _moving || exitHolds || DevMode.instance.on || LeafService.instance.personBusy) return;
+    final at = _holdAt;
+    if (!force && at != null && DateTime.now().difference(at) < holdEvery) return;
+    final l = band;
+    final over = moveOutAtoms(held: held, board: l.board, hold: l.hold, price: _btcUsd, precision: 8);
+    if (over <= BigInt.zero) return;
+    _holdAt = DateTime.now();
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m == null) return;
+    _moving = true;
+    try {
+      // What the ark can pay now; the move's fee comes on top, out of what stays.
+      final sats = over < spendable ? over : spendable;
+      if (sats <= BigInt.zero) return;
+      final to = (await core.receiveAddressAt(mnemonic: m, index: BtcState.instance.unifiedNext, confidential: false)).address;
+      final r = await ark.arkSend(destination: to, sats: sats);
+      debugPrint('[ambra-ark] [ark limit] moved $sats sat of BTC to the wallet\'s address ${(jsonDecode(r) as Map)['txid']}');
+      await refresh();
+    } catch (e) {
+      debugPrint('[ambra-ark] [ark limit] moving out: $e');
+    } finally {
+      _moving = false;
     }
   }
 

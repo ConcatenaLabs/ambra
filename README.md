@@ -358,9 +358,21 @@ module that implements it.
   opened from the same recovery phrase against the ark server the default node serves
   (`Backend.bitcoinArk`, gRPC on the node's own address; testnet4 here; a custom node
   has none). BTC stays native bitcoin, which the holder can always take on the chain.
-  - Confirmed BTC at the shared address moves in by itself: the kit pays it, less the
+  - What the ark holds is kept within a band in USD (`app/lib/src/data/ark_limits.dart`, the
+    web wallet's `ark-limits.js`): it rests at 1,500 USD, and once it holds 3,000 USD everything
+    above 1,500 moves to the wallet's own address in one move (an ark payment to the address,
+    looked at every two minutes, never while a person is busy). A payment of 1,500 USD or more
+    goes to the address, never into an ark: Send pays a receive code's address for it, saying
+    first "A payment of 1,500 USD or more goes to the address.", and a receive code for such an
+    amount carries neither the ark's address nor an invoice (Receive says the same sentence under
+    the amount). No figure applies until the price feed values BTC; until then nothing moves in.
+    A debug build takes other figures with `--dart-define=AMBRA_ARK_LIMITS='{"btc":{"board":15,"hold":30,"direct":15}}'`;
+    a release build always holds the defaults.
+  - Confirmed BTC at the shared address moves in by itself, only while the ark holds less than
+    a quarter of the resting level, and then back up to it in one move: the kit pays it, less the
     fee, to a new board's funding address in one transaction, and the ark wallet boards
-    that transaction (`board_funding_address`, `board_psbt`) and puts it on the network.
+    that transaction (`board_funding_address`, `board_psbt`) and puts it on the network. The
+    rest stays at the address, in the one BTC figure and sendable as ever.
     Every limit is the ark server's own, read from its info (`max_board`, `min_board` in
     `ark_balance`): a board carries at most the server's largest coin, the rest staying at
     the address for later boards, and none is made below the server's least board (with
