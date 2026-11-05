@@ -2042,6 +2042,12 @@ class _ReceiveTabState extends State<ReceiveTab> {
   String? _codeSeq;
   int? _codeUntil; // the receive request's lapse, a median time
   bool _drawing = false;
+  // Something changed while a code was being drawn (an amount typed, a payment, a channel): drawn
+  // again once that draw is done, rather than lost.
+  bool _drawAgain = false;
+  bool _invoiceSpent = false;
+  bool _seqAsking = false;
+  bool _arkAsking = false;
   bool _fresh = false; // the next draw asks for a new receive request
   int _paidAt = 0;
   // The channels a payer can pay changed since the code was drawn: its request is made again,
@@ -2107,7 +2113,11 @@ class _ReceiveTabState extends State<ReceiveTab> {
   void _onLeaves() {
     final l = LeafService.instance;
     final ark = ArkBtcService.instance;
-    if (DevMode.instance.on || _drawing || !mounted) return;
+    if (DevMode.instance.on || !mounted) return;
+    if (_drawing) {
+      _drawAgain = true;
+      return;
+    }
     // A code carrying an invoice is spent once BTC arrived on the ark: a new invoice then.
     final paid = ark.received;
     final invoicePaid = (paid != null && paid.hash == _codeInvoiceHash) ||
@@ -2128,16 +2138,25 @@ class _ReceiveTabState extends State<ReceiveTab> {
       _chanAt = l.channelsVersion;
       _seqStale = true;
     }
+    // The paid invoice is replaced at the next draw, which reads the ark's figure again: one
+    // draw, not one at every change of the wallet's state.
+    if (invoicePaid) _invoiceSpent = true;
     final want = _code == null ||
         _fresh ||
         _seqStale ||
-        (ark.open && _codeArk == null) ||
-        (l.open && _codeSeq == null) ||
+        (ark.open && _codeArk == null && !_arkAsking) ||
+        (l.open && _codeSeq == null && !_seqAsking) ||
         invoicePaid ||
         _btcAmount.text.trim() != _codeAmount;
     if (!want) return;
     _drawing = true;
-    _drawCode().whenComplete(() => _drawing = false);
+    _drawCode().whenComplete(() {
+      _drawing = false;
+      if (_drawAgain) {
+        _drawAgain = false;
+        _onLeaves();
+      }
+    });
   }
 
   String? _codeInvoice;
@@ -2213,28 +2232,20 @@ class _ReceiveTabState extends State<ReceiveTab> {
         if (_code == null) _show();
       }
       final ark = ArkBtcService.instance;
-      if (ark.open && _codeArk == null) {
-        try {
-          _codeArk = await ark.address();
+      // The ark's address is asked apart too: the ark wallet may be busy with its own work.
+      if (ark.open && _codeArk == null && !_arkAsking) {
+        _arkAsking = true;
+        unawaited(ark.address().then((a) {
+          if (!mounted) return;
+          _codeArk = a;
           _show();
-        } catch (_) {}
+        }, onError: (_) {}).whenComplete(() => _arkAsking = false));
       }
-      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      final lapsing = _codeUntil != null && _codeUntil! - now < 86400;
-      final stale = _seqStale;
-      _seqStale = false;
-      if (LeafService.instance.open && (_codeSeq == null || fresh || lapsing || stale)) {
-        final seq = await LeafService.instance.receiveCode();
-        if (seq != null) {
-          _codeSeq = seq;
-          final r = libraryRequest(seq);
-          _codeUntil = r?['until'] is int ? r!['until'] as int : null;
-          _paidAt = LeafService.instance.arrivedCount;
-          _show();
-        }
-      }
+      // The amount's part first: it waits on the ark alone, never on the leaf wallet's own work.
       final text = _btcAmount.text.trim();
-      if (text != _codeAmount || _codeInvoice == null || fresh) {
+      final spent = _invoiceSpent;
+      _invoiceSpent = false;
+      if (text != _codeAmount || _codeInvoice == null || fresh || spent) {
         _codeAmount = text;
         _arkSeen = ark.spendable + ark.arriving;
         _codeInvoice = null;
@@ -2250,10 +2261,38 @@ class _ReceiveTabState extends State<ReceiveTab> {
         }
         _show();
       }
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final lapsing = _codeUntil != null && _codeUntil! - now < 86400;
+      final stale = _seqStale;
+      _seqStale = false;
+      // The receive request comes from the leaf wallet, which may be busy with its own upkeep: it
+      // is asked apart, so nothing else of the code waits on it, and added once it is there.
+      if (LeafService.instance.open && (_codeSeq == null || fresh || lapsing || stale)) {
+        if (_seqAsking) {
+          // A new code was asked for meanwhile: asked again once the request under way is in.
+          if (fresh || stale) _seqStale = true;
+        } else {
+          _seqAsking = true;
+          unawaited(LeafService.instance.receiveCode().then((seq) async {
+            if (seq == null || !mounted) return;
+            _codeSeq = seq;
+            final r = libraryRequest(seq);
+            _codeUntil = r?['until'] is int ? r!['until'] as int : null;
+            _paidAt = LeafService.instance.arrivedCount;
+            _show();
+            await WalletCache.saveReceiveCode(
+                {'address': _codeAddr, 'ark': _codeArk, 'sequentia': _codeSeq, 'until': _codeUntil});
+          }).whenComplete(() {
+            _seqAsking = false;
+            if (_seqStale) _onLeaves();
+          }));
+        }
+      }
       await WalletCache.saveReceiveCode(
           {'address': _codeAddr, 'ark': _codeArk, 'sequentia': _codeSeq, 'until': _codeUntil});
-    } catch (_) {
+    } catch (e) {
       // The code shown stays; the next change of the wallet's state tries again.
+      debugPrint('[ambra-receive] the code not drawn now: $e');
     }
   }
 
