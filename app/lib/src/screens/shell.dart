@@ -2044,6 +2044,10 @@ class _ReceiveTabState extends State<ReceiveTab> {
   bool _drawing = false;
   bool _fresh = false; // the next draw asks for a new receive request
   int _paidAt = 0;
+  // The channels a payer can pay changed since the code was drawn: its request is made again,
+  // so it names them (LeafService.channelsVersion).
+  int _chanAt = 0;
+  bool _seqStale = false;
 
   // The one receive code shows in user mode once there is one to show, or once the wallet
   // holds coins with the operator or BTC on the ark.
@@ -2062,6 +2066,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
     // The mode decides what Receive shows (one code, or every rail): it follows a switch at once.
     DevMode.instance.addListener(_onMode);
     _paidAt = LeafService.instance.arrivedCount;
+    _chanAt = LeafService.instance.channelsVersion;
     _load();
     unawaited(_restoreCode().whenComplete(_onLeaves));
   }
@@ -2119,8 +2124,13 @@ class _ReceiveTabState extends State<ReceiveTab> {
       _paidAt = l.arrivedCount;
       _fresh = true;
     }
+    if (l.channelsVersion != _chanAt) {
+      _chanAt = l.channelsVersion;
+      _seqStale = true;
+    }
     final want = _code == null ||
         _fresh ||
+        _seqStale ||
         (ark.open && _codeArk == null) ||
         (l.open && _codeSeq == null) ||
         invoicePaid ||
@@ -2211,7 +2221,9 @@ class _ReceiveTabState extends State<ReceiveTab> {
       }
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final lapsing = _codeUntil != null && _codeUntil! - now < 86400;
-      if (LeafService.instance.open && (_codeSeq == null || fresh || lapsing)) {
+      final stale = _seqStale;
+      _seqStale = false;
+      if (LeafService.instance.open && (_codeSeq == null || fresh || lapsing || stale)) {
         final seq = await LeafService.instance.receiveCode();
         if (seq != null) {
           _codeSeq = seq;

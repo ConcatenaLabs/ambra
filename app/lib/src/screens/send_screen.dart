@@ -789,6 +789,8 @@ class _SendTabState extends State<SendTab> {
       }
       return _snack('Amount exceeds your ${label.ticker} balance');
     }
+    // The channel reads hold while the person reviews, so the payment never waits behind one.
+    LeafService.instance.holdReads(const Duration(minutes: 5));
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -801,6 +803,7 @@ class _SendTabState extends State<SendTab> {
         ],
       ),
     );
+    LeafService.instance.holdReads(Duration.zero);
     if (ok != true || !mounted) return;
     setState(() => _sendingInTree = true);
     final started = DateTime.now();
