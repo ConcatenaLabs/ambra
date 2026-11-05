@@ -85,6 +85,14 @@ class _SendTabState extends State<SendTab> {
       if (inv != null) {
         final msat = bolt11AmountMsat(inv);
         final want = msat == null ? sats : msat ~/ BigInt.from(1000);
+        // The ark pays it over Lightning only within the most the operator takes in one payment
+        // (ln_max_payment.dart): above it, the code's address, said so first.
+        final fits = LeafService.instance.lnFitsNow('BTC', 'out', want);
+        if (want != null && ark.open && want <= ark.spendable && !fits && code.address != null) {
+          _byAddress = true;
+          _why = DefaultWords.byAddressNoWay;
+          return code.address;
+        }
         if (want != null && ((ark.open && want <= ark.spendable) || want <= _lnAtoms(_btcId))) return inv;
       }
       _byAddress = code.address != null;

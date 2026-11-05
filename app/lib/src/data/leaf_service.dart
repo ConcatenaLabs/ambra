@@ -16,7 +16,9 @@ import 'btc_state.dart';
 import 'config.dart';
 import 'dev_mode.dart';
 import 'format.dart';
+import 'ln_max_payment.dart';
 import 'pay_code.dart' show expandRequest;
+import 'price_service.dart';
 import 'vesting.dart';
 import 'wallet_repository.dart';
 
@@ -609,6 +611,16 @@ class LeafService extends ChangeNotifier {
     final fills = si is Map && si['fills'] is Map ? si['fills'] as Map : (info?['fills'] is Map ? info!['fills'] as Map : null);
     final s = fills?['round_interval_seconds'];
     return s is num && s > 0 ? (s / 60).ceil() : null;
+  }
+
+  /// Whether one payment of [atoms] of [kind] ('BTC', or an asset id) fits the most the operator
+  /// takes in one payment over Lightning in direction [dir] ('out' or 'in'), from its `info`
+  /// (ln_max_payment.dart [lnFits]): its published limit, or [kLnFallbackUsd] when it publishes
+  /// none. Above it, a payment goes on the chain.
+  bool lnFitsNow(String kind, String dir, BigInt? atoms) {
+    final precision = kind == 'BTC' ? 8 : SeqAssets.labelFor(kind).precision;
+    final ticker = kind == 'BTC' ? 'BTC' : SeqAssets.labelFor(kind).ticker;
+    return lnFits(open ? info : null, kind, dir, atoms, price: PriceService.instance.usdPrice(ticker), precision: precision);
   }
 
   /// What of [asset] the leaves can pay now: held, less what is still arriving and what

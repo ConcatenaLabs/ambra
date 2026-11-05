@@ -306,7 +306,9 @@ module that implements it.
     one optional field, "Amount in BTC (optional)": with an amount the code also carries
     `amount=` and a `lightning=` invoice from the Bitcoin ark for exactly that amount
     (`BITCOIN:<ADDRESS>?amount=<BTC>&lightning=<INVOICE>&ark=…&sequentia=…`), claimed while
-    the wallet is open; a new invoice comes with each new code and each new amount. While a code handed out in the
+    the wallet is open; a new invoice comes with each new code and each new amount. No
+    invoice is made for more than the operator takes in one payment over Lightning (below).
+    While a code handed out in the
     last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
     the address alone; so does user mode until the wallet holds coins with the operator or
     BTC on the ark.
@@ -315,7 +317,12 @@ module that implements it.
     when the wallet's leaves hold it (in seconds), and BTC goes to the ark address when the
     ark holds the amount, else to the code's invoice when the ark or the wallet's Lightning
     pays it. Anything else goes to the address, and the review says so first ("This can't
-    arrive in seconds from what you hold now, so it goes to the address. …"). A bare receive
+    arrive in seconds from what you hold now, so it goes to the address. …"). An invoice the
+    ark would pay above the most the operator takes in one payment over Lightning goes to the
+    code's address too, said first as "This can’t arrive in seconds right now, so it goes to the
+    address." That limit is the operator's (`max_payment` in its `info`, per asset and for its
+    Bitcoin node, each way; `app/lib/src/data/ln_max_payment.dart`); the wallet holds no figure
+    of its own, and only when the operator publishes none holds one payment to 1,500 USD. A bare receive
     request is paid the same way. Every payment that leaves is in History at once, pending
     until its block when it waits for one, and BTC arriving at the wallet's latest addresses
     shows there as soon as the Bitcoin network has it. Anything that is not a code (an
@@ -341,7 +348,9 @@ module that implements it.
     `app/lib/src/data/lightning_to_ark.dart`): the leaf wallet asks to receive it over
     Lightning (`lightning_receive`: an invoice of the operator's node in that asset, under a
     hash whose preimage only the wallet holds), and the channel pays it, all it can spend
-    less the route's fee, when that reaches the operator's smallest leaf. The operator holds
+    less the route's fee, when that reaches the operator's smallest leaf, and at most what the
+    operator takes in one payment over Lightning (`max_payment.receive`; the rest moves on a
+    later pass, since the operator refuses a larger one). The operator holds
     the payment until the wallet's leaf is in the asset's next round; the leaf wallet's sync
     then claims the leaf with the preimage, which settles the payment. One move per asset
     at a time, never while something a person asked for runs, and a refused one waits

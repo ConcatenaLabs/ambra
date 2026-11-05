@@ -15,6 +15,7 @@ import 'ark_btc_service.dart';
 import 'config.dart';
 import 'dev_mode.dart';
 import 'leaf_service.dart';
+import 'ln_max_payment.dart';
 import 'ln_payment_limit.dart';
 import 'lightning_service.dart';
 import 'ln_rail.dart';
@@ -214,10 +215,20 @@ class LightningToArk extends ChangeNotifier {
           continue;
         }
         final allowance = await LnPaymentLimit.instance.allowanceAtoms(asset);
-        final amount = withinAllowance(amountToMove(spendable, min: min), allowance, min: min);
+        var amount = withinAllowance(amountToMove(spendable, min: min), allowance, min: min);
         if (amount == null) {
           _why('$a8: $spendable in the channel, too little to move (smallest leaf $min, the day\'s limit $allowance)');
           continue;
+        }
+        // The operator refuses one payment over Lightning above the limit it publishes
+        // (ln_max_payment.dart): the move is held to it, the rest moving on a later pass.
+        final most = lnMaxPayment(leaves.info, asset, 'in');
+        if (most != null && amount > most) {
+          if (most < (min ?? BigInt.one)) {
+            _why('$a8: the operator takes at most $most in one payment over Lightning now, under the smallest leaf $min');
+            continue;
+          }
+          amount = most;
         }
         try {
           movingFrom[asset] = legLiquidity(channels, RailTarget.asset(hex: asset)).balance;

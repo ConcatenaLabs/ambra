@@ -2054,7 +2054,9 @@ class _ReceiveTabState extends State<ReceiveTab> {
         _codeInvoice = null;
         _codeInvoiceHash = null;
         final amount = _amountOf(text);
-        if (amount != null && ark.open && _largeWhy(text) == null) {
+        // Nor an amount above the most the operator takes in one payment over Lightning
+        // (ln_max_payment.dart): the code then carries the address and the ark's, no invoice.
+        if (amount != null && ark.open && _largeWhy(text) == null && LeafService.instance.lnFitsNow('BTC', 'in', amount.$2)) {
           try {
             _codeInvoice = await ark.invoice(amount.$2);
             _codeInvoiceHash = '${decodeBtcInvoice(_codeInvoice!)['payment_hash']}';
