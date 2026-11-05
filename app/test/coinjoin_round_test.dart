@@ -5,7 +5,6 @@
 //
 // The coordinator here signs with a real RSA private exponent, so the credentials are
 // genuine ones and `unblind` verifies them exactly as it would in a live round.
-import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ambra/src/data/blindsig.dart';
@@ -28,8 +27,6 @@ final _denom = BigInt.from(1000);
 final _fee = BigInt.from(10);
 
 class _FakeCoordinator {
-  _FakeCoordinator({this.credit = true});
-  final bool credit;
   final blindedSeen = <String>[];
   final credentialsSeen = <String>[];
   final addresses = <String>[];

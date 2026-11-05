@@ -1578,7 +1578,8 @@ class _MoveSheetState extends State<_MoveSheet> {
       // The poll now lives in the service, on the server's own timescale. It used to run here for
       // 120 * 2s and then report "the channel is still opening; check back shortly" — a four-minute
       // verdict on an hour-long watch, for a deposit that confirms in the next block.
-      final job = await ChannelMoveService.drive(rec, onStep: _say);
+      // It returns only once the channel is active, and throws on every other outcome.
+      await ChannelMoveService.drive(rec, onStep: _say);
       if (mounted) {
         setState(() {
           _done = true;
