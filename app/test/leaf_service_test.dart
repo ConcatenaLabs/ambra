@@ -110,7 +110,8 @@ void main() {
     expect(careDue(null, t), isTrue, reason: 'never run: due');
     expect(careDue(t, t.add(const Duration(minutes: 9, seconds: 59))), isFalse);
     expect(careDue(t, t.add(const Duration(minutes: 10))), isTrue);
-    expect(careArgs(7), {'scan': 27}, reason: 'the library\'s own planning reach: a leaf stays free to trade until its refresh nears');
+    expect(careArgs(7), {'channels': true, 'scan': 27},
+        reason: 'the library\'s own planning reach, and the wallet\'s channels cared for');
   });
 
   test('a care answer is counted part by part, refusals named', () {
@@ -424,5 +425,35 @@ void main() {
     ];
     expect(frozenAtomsOf(coins, balance), {'zz': BigInt.from(2299983)}, reason: 'the landed coin once, on the chain');
   });
-}
 
+  test('a channel read: what came in, what a payer can pay, and when the code is made again', () {
+    final x = 'aa' * 32, y = 'bb' * 32;
+    final before = [
+      {'leaf_id': 'c1', 'asset': x, 'credit': '100', 'coin_state': 'live', 'final': true},
+      {'leaf_id': 'c2', 'asset': y, 'credit': '0', 'coin_state': 'live', 'final': true},
+      {'leaf_id': 'c3', 'error': 'not read'},
+    ];
+    final after = [
+      {'leaf_id': 'c1', 'asset': x, 'credit': '1100', 'coin_state': 'live', 'final': true},
+      {'leaf_id': 'c2', 'asset': y, 'credit': '0', 'coin_state': 'live', 'final': true},
+      {'leaf_id': 'c3', 'asset': y, 'credit': '50'},
+      {'leaf_id': 'c4', 'asset': y, 'credit': '70'},
+    ];
+    expect(channelArrivals(before, after), [
+      {'leaf_id': 'c1', 'asset': x, 'value': '1000', 'kind': 'channel'}
+    ], reason: 'only a channel read before, whose credit grew');
+    expect(channelArrivals(null, after), isEmpty);
+    expect(payableChannels(before), {x: 'c1', y: 'c2'});
+    expect(payableChannels([
+      {'leaf_id': 'n', 'asset': x, 'coin_state': 'live', 'final': false},
+      {'leaf_id': 'e', 'asset': y, 'coin_state': 'exiting', 'final': true},
+    ]), isEmpty, reason: 'a channel not final, or not live, is not named');
+    expect(careMovedChannels({'channels': {'folded': ['c1'], 'opened': []}}), isTrue);
+    expect(careMovedChannels({'channels': {'folded': [], 'opened': [{'error': 'no room'}]}}), isFalse);
+    expect(careMovedChannels({'channels': {'opened': [{'participation': 'p'}]}}), isTrue);
+    expect(careMovedChannels({'claims': []}), isFalse);
+    expect(LeafService.channelPoll, const Duration(milliseconds: 300));
+    expect(LeafService.channelIdle, const Duration(seconds: 5));
+    expect(LeafService.channelFastFor, const Duration(minutes: 3));
+  });
+}

@@ -312,6 +312,21 @@ module that implements it.
     last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
     the address alone; so does user mode until the wallet holds coins with the operator or
     BTC on the ark.
+  - Payments that arrive at once, over channel leaves (`app/lib/src/data/leaf_service.dart`):
+    where the operator makes channel leaves of an asset, the wallet's own care
+    (`careArgs`, `channels: true`) opens one in each such asset from half of the wallet's
+    leaves of it, reads it and folds the credit it was paid. The receive code names the
+    wallet's payable channels (live, their round final) and is made again when they change,
+    and the leaf library's `send` pays over a channel when the code it pays names one, with no
+    round between. A payment the receiving channel cannot take is paid as any payment to a
+    receive code. In default mode the wallet reads its channels (`channel_sync`) every 300 ms
+    while the app is in view and was used, opened, paid or showed a receive code within three
+    minutes, else every five seconds, never while another leaf command runs or a person's
+    payment is being reviewed (`holdReads`); a channel paid moves the asset's figure at once
+    and Receive draws a new code. Developer mode's Leaves has a Channels card (each channel's
+    sides and credit, with Read, Fold and Exit). The leaf library is arca at the revision
+    `ambra_core/Cargo.toml` names, which carries the channel commands and the claim of a
+    channel's credit after someone else closed it.
   - Send reads a receive code, typed, pasted or scanned (the scanner keeps the whole code),
     and picks its part without asking, instant first: an asset goes to the receive request
     when the wallet's leaves hold it (in seconds), and BTC goes to the ark address when the

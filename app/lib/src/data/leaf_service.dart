@@ -4,6 +4,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
+import 'dart:ui' show AppLifecycleState;
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -212,6 +214,7 @@ class LeafService extends ChangeNotifier {
       await refresh();
       await openingSync();
       _plan(tick);
+      _watchChannels();
     }
   }
 
@@ -221,6 +224,7 @@ class LeafService extends ChangeNotifier {
   /// replaced until then; and a wallet back from a while away may have payments in
   /// its mailbox or an exit to move on.
   Future<void> openingSync({String by = 'open'}) async {
+    _openedAt = DateTime.now();
     if (!open || _ticking) return;
     _ticking = true;
     try {
@@ -237,6 +241,8 @@ class LeafService extends ChangeNotifier {
   Future<void> stop() async {
     _timer?.cancel();
     _timer = null;
+    _chanTimer?.cancel();
+    _chanTimer = null;
     _joinTimer?.cancel();
     _joinTimer = null;
     if (open) leaves.leavesClose();
@@ -641,6 +647,8 @@ class LeafService extends ChangeNotifier {
   /// default Receive's QR. Null when the leaf wallet is not open or refuses one.
   Future<String?> receiveCode() async {
     if (!open) return null;
+    // A code handed out is when a person waits for a payment: channels are read fast.
+    _usedAt = DateTime.now();
     try {
       final r = await run('receive');
       final req = r is Map ? r['request']?.toString() : null;
@@ -692,8 +700,10 @@ class LeafService extends ChangeNotifier {
       // Asked for, never waited on: the wallet goes on while the person answers.
       unawaited(Permission.notification.request().then((_) {}, onError: (_) {}));
       await _foreground(true);
+      _openedAt = DateTime.now();
       await refresh();
       _plan(tick);
+      _watchChannels();
       return out;
     } catch (e) {
       throw LeafRefusal.of(e);
@@ -719,11 +729,125 @@ class LeafService extends ChangeNotifier {
   /// [LeafRefusal] in the library's words.
   Future<dynamic> run(String command, [Map<String, dynamic> args = const {}]) async {
     if (!open) throw LeafRefusal('refused', 'the leaf wallet is not open');
+    _running++;
     try {
       final out = jsonDecode(await leaves.leavesRun(command: command, argsJson: jsonEncode(args)));
       return (out as Map)['result'];
     } catch (e) {
       throw LeafRefusal.of(e);
+    } finally {
+      _running--;
+    }
+  }
+
+  /// How many of the library's commands run now: a channel read waits for none.
+  int _running = 0;
+
+  // -------------------------------------------------------------------------
+  // Channels: a payment into one is in the asset's figure within a second
+  // -------------------------------------------------------------------------
+
+  /// The wallet's channel leaves as the library holds them (`channels`, asking nothing), each
+  /// merged with its last read (`channel_sync`).
+  List<dynamic> channels = const [];
+
+  /// Bumped when the channels a payer can pay change ([payableChannels]): Receive then makes its
+  /// code again, so the code names them.
+  int channelsVersion = 0;
+  String _payable = '{}';
+
+  /// How often, in default mode, the wallet reads its channels from the operator while the app is
+  /// in the foreground and was used, opened, paid or showed a receive code within [channelFastFor]: a payment into one is
+  /// in the asset's figure within this and the read's own time. Otherwise every [channelIdle].
+  /// Each read runs the library's witness, which the operator hands out at a bounded rate, so only
+  /// a wallet in use reads fast. The web wallet's CHANNEL_POLL_MS, CHANNEL_POLL_IDLE_MS and
+  /// CHANNEL_FAST_FOR_MS.
+  static const channelPoll = Duration(milliseconds: 300);
+  static const channelIdle = Duration(seconds: 5);
+  static const channelFastFor = Duration(minutes: 3);
+
+  Timer? _chanTimer;
+  DateTime? _openedAt, _usedAt, _channelIn, _holdUntil;
+  bool _chanReading = false;
+
+  /// Holds the channel reads for [d] (zero lets them go on): while a person reviews a payment the
+  /// wallet is about to make, so the payment never waits behind one.
+  void holdReads(Duration d) => _holdUntil = d > Duration.zero ? DateTime.now().add(d) : null;
+
+  /// Whether the app is in view: in front, or in view behind a system sheet (`inactive`).
+  bool get _inForeground {
+    final s = SchedulerBinding.instance.lifecycleState;
+    return s == null || s == AppLifecycleState.resumed || s == AppLifecycleState.inactive;
+  }
+
+  Duration _channelPace() {
+    final used = [_personAt, _openedAt, _usedAt, _channelIn].whereType<DateTime>().fold<DateTime?>(
+        null, (a, b) => a == null || b.isAfter(a) ? b : a);
+    if (!_inForeground || used == null || DateTime.now().difference(used) > channelFastFor) return channelIdle;
+    return channelPoll;
+  }
+
+  /// While the leaf wallet is open in default mode and holds a live channel, reads its channels
+  /// from the operator at [_channelPace], never while another command of the wallet runs, while a
+  /// person asks for something, or while the reads are held ([holdReads]); a channel that was
+  /// paid reads the balance again, so the asset's figure moves at once, and counts as a payment
+  /// received (Receive draws a new code).
+  void _watchChannels() {
+    _chanTimer?.cancel();
+    if (!open) return;
+    _chanTimer = Timer(_channelPace(), () async {
+      final hold = _holdUntil;
+      final live = channels.any((c) => c is Map && c['coin_state'] == 'live');
+      if (live && open && !DevMode.instance.on && _running == 0 && _asking == 0 && !_ticking && !_chanReading &&
+          !(hold != null && DateTime.now().isBefore(hold))) {
+        _chanReading = true;
+        try {
+          final before = channels;
+          final after = await run('channel_sync');
+          if (after is List) {
+            channels = [
+              for (final c in after)
+                if (c is Map)
+                  {...?before.whereType<Map>().where((x) => x['leaf_id'] == c['leaf_id']).firstOrNull, ...c}
+            ];
+          }
+          final came = channelArrivals(before, channels);
+          if (came.isNotEmpty) {
+            _channelIn = DateTime.now();
+            try {
+              balance = await run('balance') as Map<String, dynamic>?;
+            } catch (_) {}
+            for (final a in came) {
+              arrivedCount++;
+              debugPrint('[leaves] channel ${a['leaf_id']} paid ${a['value']} of ${'${a['asset']}'.substring(0, 8)}');
+              unawaited(notifyArrived(a, channel: _channel));
+            }
+            notifyListeners();
+          }
+        } catch (_) {
+        } finally {
+          _chanReading = false;
+        }
+      }
+      _watchChannels();
+    });
+  }
+
+  /// The channels as the wallet holds them; when those a payer can pay change, Receive's code is
+  /// made again.
+  Future<void> _readChannels() async {
+    try {
+      final c = await run('channels');
+      final before = {for (final x in channels.whereType<Map>()) x['leaf_id']: x};
+      channels = [for (final x in (c is List ? c : const [])) if (x is Map) {...?before[x['leaf_id']], ...x}];
+    } catch (_) {
+      channels = const [];
+    }
+    final p = jsonEncode(payableChannels(channels));
+    if (p != _payable) {
+      _payable = p;
+      channelsVersion++;
+      debugPrint('[leaves] the channels a payer can pay: $p');
     }
   }
 
@@ -791,6 +915,7 @@ class LeafService extends ChangeNotifier {
     } catch (e) {
       lastError = LeafRefusal.of(e);
     }
+    await _readChannels();
     try {
       plans = await run('plans');
     } catch (_) {}
@@ -842,7 +967,7 @@ class LeafService extends ChangeNotifier {
   Future<HomeQuote> homeQuoteNow() => _person(() => homeQuote(run, coins, homeChannelIds()));
 
   /// The wallet's channel leaves, which go home by their own steps (`channel_exit`).
-  List<String> homeChannelIds() => const [];
+  List<String> homeChannelIds() => [for (final c in channels) if (c is Map) '${c['leaf_id']}'];
 
   /// Broadcasts what [homeQuoteNow] quoted, each exit only on the fees it showed, and keeps what
   /// was sent and when for the card's words.
@@ -928,6 +1053,8 @@ class LeafService extends ChangeNotifier {
     try {
       lastCare = Map<String, dynamic>.from(await run('care', careArgs(await scanNext())) as Map);
       careError = null;
+      // A channel opened or its credit folded: the channels and the code follow at once.
+      if (careMovedChannels(lastCare)) await refresh();
     } catch (e) {
       careError = LeafRefusal.of(e);
     }
@@ -1164,7 +1291,48 @@ const kReleaseTimeout =
 /// index counter is separate from the kit's). Its planning reach is the library's own: a
 /// leaf of a round is planned once its first step could run within ten days, so it stays
 /// free to trade and pay out of round for most of its life.
-Map<String, dynamic> careArgs(int kitNextIndex) => {'scan': kitNextIndex + 20};
+///
+/// It also cares for the wallet's channels (`channels`): each read and its credit folded, and
+/// one opened in each asset the operator makes channels of, from half of the wallet's leaves of
+/// it, so a payment between two such wallets is final for the receiver at once.
+Map<String, dynamic> careArgs(int kitNextIndex) => {'channels': true, 'scan': kitNextIndex + 20};
+
+/// Whether a care answer opened a channel or folded one's credit ([careArgs]' `channels`).
+bool careMovedChannels(Map? care) {
+  final ch = care?['channels'];
+  if (ch is! Map) return false;
+  final folded = ch['folded'] is List ? (ch['folded'] as List).length : 0;
+  final opened = ch['opened'] is List ? (ch['opened'] as List).where((o) => o is Map && o['participation'] != null).length : 0;
+  return folded + opened > 0;
+}
+
+/// The credit a channel read brought in: each channel whose credit grew, and by how much
+/// (`{leaf_id, asset, value, kind: 'channel'}`). The web wallet's `channelArrivals`.
+List<Map<String, dynamic>> channelArrivals(List<dynamic>? before, List<dynamic>? after) {
+  BigInt big(Object? v) => BigInt.tryParse('${v ?? 0}') ?? BigInt.zero;
+  final was = {
+    for (final c in before ?? const [])
+      if (c is Map && c['error'] == null) c['leaf_id']: big(c['credit'])
+  };
+  return [
+    for (final c in after ?? const [])
+      if (c is Map && c['error'] == null && was.containsKey(c['leaf_id']) && big(c['credit']) > was[c['leaf_id']]!)
+        {'leaf_id': c['leaf_id'], 'asset': c['asset'], 'value': '${big(c['credit']) - was[c['leaf_id']]!}', 'kind': 'channel'}
+  ];
+}
+
+/// The wallet's channels a payer can pay now, by asset (live, their round final): what a receive
+/// code names (the library's `receive` puts them under `channels`). The web wallet's
+/// `payableChannels`.
+Map<String, String> payableChannels(List<dynamic>? channels) {
+  final m = <String, String>{};
+  for (final c in channels ?? const []) {
+    if (c is Map && c['coin_state'] == 'live' && c['final'] == true && !m.containsKey('${c['asset']}')) {
+      m['${c['asset']}'] = '${c['leaf_id']}';
+    }
+  }
+  return m;
+}
 
 /// A payment waiting for the round that frees the planned coins it needs.
 class ReleaseWait {
@@ -1357,7 +1525,7 @@ Future<void> notifyArrived(Map<String, dynamic> a, {required MethodChannel chann
     await channel.invokeMethod('notify', {
       'id': '${a['leaf_id'] ?? asset}',
       'title': 'Payment received',
-      'body': '$amount ${label.ticker} arrived as a leaf.',
+      'body': '$amount ${label.ticker} arrived.',
     });
   } catch (_) {/* host tests: no platform */}
 }

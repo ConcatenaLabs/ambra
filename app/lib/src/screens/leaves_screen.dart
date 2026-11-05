@@ -79,6 +79,8 @@ class _LeavesScreenState extends State<LeavesScreen> {
                   : Padding(padding: const EdgeInsets.only(bottom: 14), child: _SupplyCard(svc: svc)),
               _CoinsCard(svc: svc),
               const SizedBox(height: 14),
+              _ChannelsCard(svc: svc),
+              const SizedBox(height: 14),
               const _BoardCard(),
               const SizedBox(height: 14),
               const _RefusalsCard(),
@@ -574,6 +576,88 @@ class _SettleCardState extends State<_SettleCard> {
           if (_err != null) RefusalText(_err!),
         ]),
       );
+}
+
+// ---------------------------------------------------------------------------
+// Channels: each with both sides, its credit, and Read, Fold and Exit
+// ---------------------------------------------------------------------------
+
+/// Developer mode's channels. A channel leaf holds a balance for this wallet and one for the
+/// operator; a payment from it into another wallet's channel of the same operator is final for the
+/// receiver at once, with no round between: the operator signs the receiver a credit note,
+/// enforceable on the chain without anyone's help, against capacity already in the receiver's
+/// leaf. The payer relies on the operator for that one request. Care opens a channel in each asset
+/// the operator makes channels of, folds the credit it was paid, and closes it into a round near
+/// its expiry; Exit takes it home on the chain alone, one step a run. The web wallet's Channels card.
+class _ChannelsCard extends StatefulWidget {
+  const _ChannelsCard({required this.svc});
+  final LeafService svc;
+  @override
+  State<_ChannelsCard> createState() => _ChannelsCardState();
+}
+
+class _ChannelsCardState extends State<_ChannelsCard> {
+  String? _busy, _said;
+  LeafRefusal? _err;
+
+  Future<void> _do(String what, String leaf) async {
+    setState(() {
+      _busy = '$what $leaf';
+      _err = null;
+      _said = null;
+    });
+    try {
+      final v = await widget.svc.pay(what, {'leaf_id': leaf});
+      _said = '$what ${leaf.substring(0, 8)}: ${v is Map ? '${v['state'] ?? ''} ${(v['steps'] as List?)?.map((s) => '${(s as Map)['what']} ${s['txid']}').join(', ') ?? ''}' : v}';
+      await widget.svc.refresh();
+    } catch (e) {
+      _err = LeafRefusal.of(e);
+    }
+    if (mounted) setState(() => _busy = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final list = widget.svc.channels.whereType<Map>().toList();
+    return AmbraCard(
+      key: const Key('leaf-channels'),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SectionLabel('Channels'),
+        const SizedBox(height: 8),
+        const Text(
+            'A payment from a channel into another wallet\'s channel of the same operator is final for the receiver at once, '
+            'with no round between: the operator signs the receiver a credit note against capacity already in its leaf. '
+            'Care opens one in each asset the operator makes channels of and folds the credit it was paid.',
+            style: AmbraText.sub),
+        if (list.isEmpty) const Padding(padding: EdgeInsets.only(top: 8), child: Text('No channels.', style: AmbraText.muted)),
+        for (final ch in list) ...[
+          const SizedBox(height: 10),
+          Text(
+              '${SeqAssets.labelFor('${ch['asset']}').ticker} channel ${'${ch['leaf_id']}'.substring(0, 8)} · ${ch['coin_state'] ?? '?'}'
+              '${ch['final'] == true ? ', final' : ', not final'}${ch['pending'] == true ? ' · a state sent, not answered' : ''}',
+              style: AmbraText.mono.copyWith(fontSize: 12)),
+          Text('This wallet\'s side ${ch['balance'] ?? '?'} · the operator\'s ${ch['operator_side'] ?? '?'}', style: AmbraText.sub),
+          Text('Credit ${ch['credit'] ?? 0}, of which not folded ${ch['credit_not_folded'] ?? 0}', style: AmbraText.sub),
+          const SizedBox(height: 6),
+          Wrap(spacing: 8, children: [
+            GhostButton(label: 'Read', onPressed: _busy != null ? null : () => _do('channel_sync', '${ch['leaf_id']}')),
+            GhostButton(
+                label: 'Fold',
+                onPressed: _busy != null || ch['coin_state'] != 'live' || (BigInt.tryParse('${ch['credit_not_folded'] ?? 0}') ?? BigInt.zero) <= BigInt.zero
+                    ? null
+                    : () => _do('channel_fold', '${ch['leaf_id']}')),
+            GhostButton(
+                label: 'Exit',
+                onPressed: _busy != null || !['live', 'exiting', 'given', 'pending'].contains(ch['coin_state'])
+                    ? null
+                    : () => _do('channel_exit', '${ch['leaf_id']}')),
+          ]),
+        ],
+        if (_said != null) Padding(padding: const EdgeInsets.only(top: 8), child: SelectableText(_said!, style: AmbraText.sub)),
+        if (_err != null) RefusalText(_err!),
+      ]),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
