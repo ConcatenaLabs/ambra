@@ -516,6 +516,9 @@ class _BalanceTabState extends State<BalanceTab> {
               child: Text('Live prices unavailable; see per-asset amounts below.', style: AmbraText.sub),
             ),
           const SizedBox(height: 24),
+          // The service holding coins for instant payments does not answer: one card above the
+          // list, in either mode, to take them home (home_coins.dart), whatever else has loaded.
+          const _HomeCard(),
           if (_error != null && balances == null)
             AmbraCard(child: Text(_error!, style: const TextStyle(color: AmbraColors.red)))
           else if (balances == null)
@@ -531,9 +534,6 @@ class _BalanceTabState extends State<BalanceTab> {
                       style: AmbraText.muted)),
               const SizedBox(height: 18),
             ],
-            // The service holding coins for instant payments does not answer: one card above the
-            // list, in either mode, to take them home (home_coins.dart).
-            const _HomeCard(),
             Text('ASSETS', style: AmbraText.label),
             const SizedBox(height: 10),
             AmbraCard(
@@ -912,8 +912,12 @@ class _HomeCard extends StatelessWidget {
     return '${formatAtoms(atoms.toString(), l.precision)} ${l.ticker}';
   }
 
+  // It follows the leaf service itself: the card comes and goes as the service answers or stops,
+  // whatever rebuilds Balance.
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(listenable: LeafService.instance, builder: (context, _) => _card(context));
+
+  Widget _card(BuildContext context) {
     final l = LeafService.instance;
     final offer = l.homeOffer();
     final way = homeOnWay(l.homeUnderWayNow(), DateTime.now().millisecondsSinceEpoch);
