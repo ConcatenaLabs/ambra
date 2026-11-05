@@ -85,9 +85,15 @@ ArkLimits arkLimits(Object? page) {
 
 const _override = String.fromEnvironment('AMBRA_ARK_LIMITS');
 
-/// The limits this build holds: the defaults, or in a debug build those `AMBRA_ARK_LIMITS` names.
+/// Figures a drive on a device sets at run time (a debug build only; a release build ignores it).
+ArkLimits? debugArkLimits;
+
+/// The limits this build holds: the defaults, or in a debug build those a drive set
+/// ([debugArkLimits]) or `AMBRA_ARK_LIMITS` names.
 ArkLimits arkLimitsNow() {
-  if (kReleaseMode || _override.isEmpty) return kArkLimits;
+  if (kReleaseMode) return kArkLimits;
+  if (debugArkLimits != null) return debugArkLimits!;
+  if (_override.isEmpty) return kArkLimits;
   try {
     return arkLimits(jsonDecode(_override));
   } catch (_) {
