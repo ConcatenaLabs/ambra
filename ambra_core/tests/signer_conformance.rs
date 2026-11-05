@@ -93,8 +93,12 @@ fn init_caps(framed: &[u8]) -> (Vec<u32>, Vec<u8>) {
 
 /// The device's two deliberate departures from libhsmd, checked exactly:
 ///
-/// - INIT (request 11): the device also advertises the taproot-covenant spends
-///   (`SIGN_TCOV_*`, 61 to 64), which libhsmd does not implement; every other
+/// - INIT (request 11): the device also advertises the messages Sequentia adds
+///   to the signer, which the libhsmd that recorded the oracle did not have: the
+///   taproot-covenant spends (`SIGN_TCOV_*`, 61 to 64), the credit note (67) and
+///   the symmetric channels' messages (`SIGN_SYM_*`, `CHECK_SYM_CLOCK_FUNDING`,
+///   `SIGN_MUTUAL_CLOSE_LANES_TX`, `APPROVE_SYM_SWAP`: 69 to 73, 75 to 77), as
+///   listed in seqln's `contrib/seqln-signer/src/dispatch.rs`. Every other
 ///   capability, the version and the node id are libhsmd's.
 /// - A penalty to us (request 14): the device signs it `SIGHASH_SINGLE |
 ///   ANYONECANPAY` (0x83), so a watchtower can add a fee input, where libhsmd
@@ -106,7 +110,7 @@ fn deliberate_departure(req: &[u8], got: &[u8], want: &[u8]) -> bool {
         11 => {
             let (mut gc, gr) = init_caps(got);
             let (mut wc, wr) = init_caps(want);
-            wc.extend([61, 62, 63, 64]);
+            wc.extend([61, 62, 63, 64, 67, 69, 70, 71, 72, 73, 75, 76, 77]);
             gc.sort();
             wc.sort();
             gc == wc && gr == wr && got[4..10] == want[4..10]

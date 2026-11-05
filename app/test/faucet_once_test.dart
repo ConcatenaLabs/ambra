@@ -33,6 +33,8 @@ void main() {
     final fport = probe.port;
     await probe.close();
     faucet = await Process.start('node', ['$_dir/server.js'], environment: {
+      // Only PATH is passed on, so `node` is found wherever this machine keeps it.
+      'PATH': Platform.environment['PATH'] ?? '',
       'FAUCET_PORT': '$fport', 'FAUCET_CLI': cli.path, 'FAUCET_DATADIR': '/nowhere',
       'FAUCET_LEDGER': '${work!.path}/claims.jsonl',
     }, includeParentEnvironment: false);
