@@ -51,6 +51,32 @@ class _FaucetScreenState extends State<FaucetScreen> {
     _loadAddress();
   }
 
+  /// The faucet's coin the wallet had not taken in when the line last spoke: the line says
+  /// Received once any later read of the wallet takes it in.
+  VoidCallback? _arrivalWatch;
+  void _waitFor(String hex, DateTime since, String received) {
+    _stopWaiting();
+    void check() {
+      if (!LeafService.instance.arrivedSince(hex, since)) return;
+      _stopWaiting();
+      if (mounted) setState(() => _status = received);
+    }
+    _arrivalWatch = check;
+    LeafService.instance.addListener(check);
+  }
+
+  void _stopWaiting() {
+    final w = _arrivalWatch;
+    if (w != null) LeafService.instance.removeListener(w);
+    _arrivalWatch = null;
+  }
+
+  @override
+  void dispose() {
+    _stopWaiting();
+    super.dispose();
+  }
+
   Future<void> _loadAddress() async {
     final m = await WalletRepository.instance.readMnemonic();
     if (m == null) return;
@@ -91,20 +117,32 @@ class _FaucetScreenState extends State<FaucetScreen> {
         return;
       }
       if (_userTree) {
-        // User mode: the faucet pays a receive code, so the coins arrive in seconds; if it
-        // refuses, the same tap is paid to the address as before.
+        // User mode: the faucet pays a receive code, so the coins arrive in seconds: the coin is in
+        // the wallet's mailbox once the faucet answers, and a mailbox read takes it in (never a
+        // whole sync). A faucet busy with other requests says so, and is not asked for the address
+        // instead; any other refusal is paid to the address, in the same tap.
         try {
+          final since = DateTime.now();
           final code = await LeafService.instance.receiveCode();
           if (code == null) throw Exception('no receive code');
           final r = await ApiClient.faucetLeaf(code, asset: asset, wallet: _wallet);
           _paid(r.asset);
-          if (mounted) setState(() => _status = DefaultWords.received(r.amount, r.asset));
-          // The wallet takes the coin in by itself; nothing waits on it here.
-          unawaited(LeafService.instance.openingSync(by: 'faucet'));
+          if (mounted) setState(() => _status = 'Sent ${r.amount} ${r.asset} · arriving…');
+          final hex = (r.leafAsset ?? _hexOf(asset)).toLowerCase();
+          final got = await LeafService.instance.takeIn(hex, since: since);
+          debugPrint('[faucet] ${r.asset} to the receive code: ${got ? 'received' : 'still on its way'} '
+              '${DateTime.now().difference(since).inMilliseconds} ms after the tap');
+          if (got) {
+            if (mounted) setState(() => _status = DefaultWords.received(r.amount, r.asset));
+          } else {
+            if (mounted) setState(() => _status = DefaultWords.faucetOnItsWay(r.amount, r.asset));
+            _waitFor(hex, since, DefaultWords.received(r.amount, r.asset));
+          }
           return;
         } catch (e) {
-          // The wallet has the asset: the address is the same wallet, so it is not asked again.
-          if (e is FaucetRefused && e.alreadyPaid) rethrow;
+          // The wallet has the asset (the address is the same wallet), or the faucet is busy: said
+          // as the faucet says it, and not asked again.
+          if (e is FaucetRefused && (e.alreadyPaid || e.busy)) rethrow;
           final r = await ApiClient.faucet(addr, asset: asset, wallet: _wallet);
           _paid(r.asset);
           if (mounted) {

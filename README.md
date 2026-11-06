@@ -28,8 +28,9 @@ Protocol documentation lives in the node repo:
   (it needs a macOS + Xcode machine).
 - Free testnet funds: the in-app faucet (More tab) dispenses BTC (testnet4, on chain to
   the wallet's address), tSEQ and the demo assets. In user mode the faucet pays the
-  wallet's receive code, so the coins arrive in seconds (the address if the faucet refuses
-  the code); in developer mode, a wallet that joined an operator can ask to be paid as a
+  wallet's receive code, and the wallet reads its mailbox for the coin at once, so it shows
+  as received in seconds (the address if the faucet refuses the code, though never only
+  because the faucet is busy); in developer mode, a wallet that joined an operator can ask to be paid as a
   leaf instead. The faucet pays each asset once per wallet: every request names the wallet
   by its id (`app/lib/src/data/faucet_wallet.dart`, the same for one phrase in every
   Sequentia wallet), a button whose asset the wallet has received reads "<TICKER>
