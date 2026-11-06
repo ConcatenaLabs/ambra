@@ -11,6 +11,8 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../rust/api.dart' as core;
 import 'dev_mode.dart';
 import 'format.dart';
@@ -99,6 +101,7 @@ Future<bool> ensureOnChain({
     }
   }
   final coming = (await under()).atoms;
+  debugPrint('[on chain] $asset: $have held, $need needed, $coming coming');
   final started = DateTime.now();
   var moving = coming;
   if (missing > coming) {
@@ -116,7 +119,8 @@ Future<bool> ensureOnChain({
     Map q;
     try {
       q = (await leaves.run('offboard_quote', args)) as Map;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[on chain] quote refused: $e');
       throw OnChainRefusal(DefaultWords.notMoved);
     }
     // A round pays the whole coin a move gives (what is moved and its change) out of the operator's
@@ -128,9 +132,11 @@ Future<bool> ensureOnChain({
     say(DefaultWords.movingOut(words(missing), purpose, leaves.roundMinutes()));
     // The wallet's own boarding leaves these coins on the chain while they move, and after.
     leaves.keepOnChain(kMoveWait + kKeepOnChain);
+    debugPrint('[on chain] moving $missing out');
     try {
       await leaves.pay('offboard', {...args, 'shown': q}, true);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[on chain] move refused: $e');
       throw OnChainRefusal(DefaultWords.notMoved);
     }
   } else {

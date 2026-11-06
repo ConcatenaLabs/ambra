@@ -548,19 +548,40 @@ class _SendTabState extends State<SendTab> {
       // the Ark by itself still counts them.
       final onchain = moved ? bal : await _onChainAtoms(_assetId);
       if (!mounted) return;
-      final plan = confidentialPlan(
+      debugPrint('[ambra-send] confidential: $atoms of ${_assetId.substring(0, 8)}, $onchain on the chain, ${leaves.open ? leaves.spendableAtoms(_assetId) : 0} held for instant payments');
+      final minLeaf = leaves.open ? minLeaves(leaves.info)[_assetId] : null;
+      var plan = confidentialPlan(
         amount: atoms,
         margin: margin,
         onchain: onchain,
         instant: leaves.open ? leaves.spendableAtoms(_assetId) : null,
-        minLeaf: leaves.open ? minLeaves(leaves.info)[_assetId] : null,
+        minLeaf: minLeaf,
         precision: label.precision,
       );
+      // Part of what is held for instant payments may not be movable now (a channel's balance, a
+      // coin not final yet): the library says how much is, and the plan is made on that.
+      if (plan.move > BigInt.zero && !moved && leaves.open) {
+        try {
+          final m = await WalletRepository.instance.readMnemonic();
+          if (m != null) {
+            await leaves.run('offboard_quote', {'asset': _assetId, 'amount': '${plan.move}', 'address': await core.receiveAddress(mnemonic: m)});
+          }
+        } catch (e) {
+          final live = liveFromRefusal('$e');
+          debugPrint('[ambra-send] what can move now: $live');
+          if (live != null) {
+            plan = confidentialPlan(amount: atoms, margin: margin, onchain: onchain, instant: live, minLeaf: minLeaf, precision: label.precision);
+            if (plan.short != null) return _snack(DefaultWords.notMoved);
+          }
+        }
+        if (!mounted) return;
+      }
       if (plan.short != null) {
         // What is still arriving would cover it: said so, rather than that the wallet holds too little.
         if (onchain + _leafAtoms(_assetId) >= atoms + margin) return _snack(DefaultWords.stillArriving(label.ticker));
         return _snack(DefaultWords.notEnough(formatAtoms('${plan.short}', label.precision), label.ticker));
       }
+      debugPrint('[ambra-send] confidential plan: $plan');
       if (plan.move > BigInt.zero && !moved) return _moveOutThenReview(label.ticker, label.precision, onchain + plan.move);
       own = ownShare(amount: atoms, margin: margin, onchain: onchain);
       confidentialSaid = own > BigInt.zero ? DefaultWords.confidentialAmountHidden(label.ticker) : DefaultWords.confidentialSeen;

@@ -93,3 +93,15 @@ BigInt ownShare({required BigInt amount, required BigInt margin, required BigInt
   final x = onchain - amount - margin;
   return x >= margin ? x : BigInt.zero;
 }
+
+/// What the wallet can move out now, by the leaf library's own refusal of a larger move: "the
+/// wallet's live coins of asset … hold N and an offboard of A and its fee need F …". Coins
+/// the library holds but cannot pay out (a channel's balance, a coin not final yet) count in the
+/// balance and not here. The atoms (the coins less the fee such a move pays), or null when the
+/// refusal says something else. The web wallet's `liveFromRefusal`.
+BigInt? liveFromRefusal(String message) {
+  final m = RegExp(r'live coins of asset \S+ hold (\d+) and an offboard of (\d+) and its fee need (\d+)').firstMatch(message);
+  if (m == null) return null;
+  final hold = BigInt.parse(m.group(1)!), fee = BigInt.parse(m.group(3)!) - BigInt.parse(m.group(2)!);
+  return hold > fee ? hold - fee : BigInt.zero;
+}

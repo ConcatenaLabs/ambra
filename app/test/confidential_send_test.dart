@@ -98,4 +98,12 @@ void main() {
     expect(keep, lessThan(need.indexOf("await leaves.pay('offboard'")));
     expect(File('lib/src/data/leaf_service.dart').readAsStringSync(), contains(': _keptOnChain'));
   });
+
+  test('what can be moved now, by the library\'s own refusal of a larger move', () {
+    const msg = "refused: the wallet's live coins of asset 2a515539da5e6a60caa7766ecd65bac0c10d15717ddd2088844ba58f4d04b9de hold 399999981 and an offboard of 799999961 and its fee need 800000049 (refresh 0, offboard 88), with any change at least the operator's smallest leaf of 1000000";
+    expect(liveFromRefusal(msg), BigInt.from(399999981 - 88));
+    expect(liveFromRefusal('the operator is unreachable'), isNull);
+    expect(confidentialPlan(amount: u, margin: mg, onchain: BigInt.zero, instant: liveFromRefusal(msg), minLeaf: BigInt.from(1000000)),
+        ConfidentialPlan(move: BigInt.from(399999893), hides: true));
+  });
 }
