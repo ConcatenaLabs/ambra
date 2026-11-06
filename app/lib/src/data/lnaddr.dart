@@ -58,7 +58,8 @@ class NameWords {
   static const noWallet = 'No wallet goes by that name.';
   static const offline = "The recipient's wallet is offline. Try again when it is open.";
   // Receive, when the wallet has a name: the picture is the name.
-  static const qrTip = 'Any asset, any amount. Another wallet that pays this name gets a new receive code of yours each time.';
+  static const qrTip = 'Any asset, any amount, a new receive code of yours for each payer. A Sequentia wallet can pay '
+      'this name while this wallet is closed; other wallets, while it is open.';
   static const public = 'Anyone who has your name can look it up and get a receive code of yours.';
   static const copyName = 'Copy name';
   static const copiedName = 'Name copied';

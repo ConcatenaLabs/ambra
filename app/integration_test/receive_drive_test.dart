@@ -76,6 +76,9 @@ void main() {
     expect(find.byKey(const Key('receive-name-qr')), findsOneWidget);
     expect(find.byKey(const Key('receive-name-public')), findsOneWidget);
     expect(find.byKey(const Key('receive-code-new')), findsNothing);
+    // One card says the name once: no second name card under it while the name view is on.
+    expect(find.text(PaymentNameService.instance.address!), findsOneWidget);
+    expect(find.byKey(const Key('receive-name-remove')), findsOneWidget);
     await binding.takeScreenshot('ambra-3-name');
     final stocked = await until(() => PaymentNameService.instance.stocked >= 10, 120);
     note('stock: ${PaymentNameService.instance.stocked} signed codes left with the service ($stocked)');

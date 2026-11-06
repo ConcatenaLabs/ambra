@@ -343,9 +343,13 @@ module that implements it.
     default node has names.
   - With a name, no amount and Confidential off, Receive shows the **name** as its QR code
     (`nameQrText`: the bare `name@domain` in lower case, the spelling every wallet that pays
-    names reads from a scan), with "Anyone who has your name can look it up and get a receive
-    code of yours." under it, **Copy name** and **Show full code** (whose **Show name** goes
-    back); an amount or Confidential gives the full code.
+    names reads from a scan), as one card that says the name once: the name, "Any asset, any
+    amount, a new receive code of yours for each payer. A Sequentia wallet can pay this name
+    while this wallet is closed; other wallets, while it is open.", "Anyone who has your name can
+    look it up and get a receive code of yours.", **Copy name** and **Show full code** (whose
+    **Show name** goes back), the Confidential switch, and **Remove name** as a quiet link at
+    its foot; the separate name card shows only with the full code. An amount or Confidential
+    gives the full code.
     While a code handed out in the
     last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
     the address alone; so does user mode until the wallet holds coins with the operator or

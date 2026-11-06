@@ -2077,6 +2077,9 @@ class _ReceiveTabState extends State<ReceiveTab> {
   // With a payment name: Receive shows the name as its QR code until "Show full code" ([_showFull]),
   // an amount or Confidential asks for the full code. Off each time Receive opens.
   bool _showFull = false;
+  // Remove name, at the foot of the name's one card.
+  bool _nameRemoving = false;
+  String? _nameError;
   // What the optional amount is in: 'BTC', or an asset the operator receives in over Lightning.
   String _recvAsset = 'BTC';
   String _codeAsset = 'BTC';
@@ -2516,6 +2519,20 @@ class _ReceiveTabState extends State<ReceiveTab> {
   /// What Receive shows as its code: the confidential address while [_conf] is on, else the code.
   String? get _shown => _conf ? _confAddr : _code;
 
+  Future<void> _removeName() async {
+    setState(() {
+      _nameRemoving = true;
+      _nameError = null;
+    });
+    try {
+      await PaymentNameService.instance.release();
+    } catch (e) {
+      _nameError = '$e';
+    } finally {
+      if (mounted) setState(() => _nameRemoving = false);
+    }
+  }
+
   /// The wallet's payment name can stand for its code: it has one, no amount is typed and
   /// Confidential is off (DEFAULT_MODE.md, Receive).
   bool get _named => PaymentNameService.instance.address != null && !_conf && _btcAmount.text.trim().isEmpty;
@@ -2597,9 +2614,10 @@ class _ReceiveTabState extends State<ReceiveTab> {
               SectionLabel(_nameView ? NameWords.label : DefaultWords.receiveCode),
               const SizedBox(height: 12),
               if (_nameView) ...[
-                const Text(NameWords.qrTip, style: AmbraText.sub),
-                const SizedBox(height: 12),
+                // One card says the name once: the name, what it does, that it is public.
                 SelectableText(PaymentNameService.instance.address!, key: const Key('receive-name'), style: AmbraText.mono),
+                const SizedBox(height: 8),
+                const Text(NameWords.qrTip, key: Key('receive-name-tip'), style: AmbraText.sub),
                 const SizedBox(height: 6),
                 const Text(NameWords.public, key: Key('receive-name-public'), style: AmbraText.sub),
                 const SizedBox(height: 14),
@@ -2686,9 +2704,24 @@ class _ReceiveTabState extends State<ReceiveTab> {
                 ),
               ),
               if (_conf) Text(DefaultWords.confidentialOn, key: const Key('receive-confidential-on'), style: AmbraText.sub),
+              if (_nameView) ...[
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    key: const Key('receive-name-remove'),
+                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 4), foregroundColor: AmbraColors.dim),
+                    onPressed: _nameRemoving ? null : _removeName,
+                    child: Text(_nameRemoving ? NameWords.removing : NameWords.remove,
+                        style: const TextStyle(decoration: TextDecoration.underline, color: AmbraColors.dim)),
+                  ),
+                ),
+                if (_nameError != null) Text(_nameError!, style: const TextStyle(color: AmbraColors.red)),
+              ],
             ]),
           ),
-          if (PaymentNameService.instance.available) ...[
+          // The name's own card, to choose or remove one, except while Receive's card shows the name.
+          if (PaymentNameService.instance.available && !_nameView) ...[
             const SizedBox(height: 18),
             const PaymentNameCard(),
           ],
