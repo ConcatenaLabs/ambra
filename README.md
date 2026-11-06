@@ -339,9 +339,23 @@ module that implements it.
     Lightning wallet included (it is a Lightning address, LNURL-pay). The name is held by a
     BIP340 key of the phrase (`m/1017'/16'/0'`, `name_key.dart`), the same key the web wallet
     holds it with, so the phrase shows it again in either wallet. While the app runs it answers
-    the service (the web wallet's `tooling/lsp/lnaddr.mjs`): an invoice of the Bitcoin ark for
-    the amount a payer chose, or a new receive code. Developer mode calls it **Lightning
-    address**. Only the default node has names.
+    the service (the web wallet's `tooling/lsp/lnaddr.mjs`) with an invoice of the Bitcoin ark
+    for the amount a Lightning payer chose, and keeps a stock of ten receive codes topped up
+    there (`name_stock.dart`, the web wallet's `name-stock.js`): each a full code at an address
+    of its own inside the twenty New code cycles through, so a restore finds every payment, each
+    signed by the name's key over the name, the domain and the code. The service hands each out
+    once to a Sequentia wallet paying the name, open or closed, then the most recent again,
+    paid without its single-use part. Developer mode calls it **Lightning address**. Only the
+    default node has names.
+  - With a name, no amount and Confidential off, Receive shows the **name** as its QR code
+    (`nameQrText`: the bare `name@domain` in lower case, the spelling every wallet that pays
+    names reads from a scan), as one card that says the name once: the name, "Any asset, any
+    amount, a new receive code of yours for each payer. A Sequentia wallet can pay this name
+    while this wallet is closed; other wallets, while it is open.", "Anyone who has your name can
+    look it up and get a receive code of yours.", **Copy name** and **Show full code** (whose
+    **Show name** goes back), the Confidential switch, and **Remove name** as a quiet link at
+    its foot; the separate name card shows only with the full code. An amount or Confidential
+    gives the full code.
     While a code handed out in the
     last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
     the address alone; so does user mode until the wallet holds coins with the operator or
@@ -374,9 +388,14 @@ module that implements it.
     of its own, and only when the operator publishes none holds one payment to 1,500 USD. A bare receive
     request is paid the same way. Every payment that leaves is in History at once, pending
     until its block when it waits for one, and BTC arriving at the wallet's latest addresses
-    shows there as soon as the Bitcoin network has it. A payment name (`name@domain`) is paid as
-    what it stands for: a name at the node's own domain at the receive code its wallet gives at
-    that moment, any asset, as any code is; a name at another domain in BTC only, at the invoice
+    shows there as soon as the Bitcoin network has it. A payment name (`name@domain`, also read
+    as `lightning:name@domain` or `₿name@domain`, typed or scanned) is paid as what it stands
+    for: a name at the node's own domain at a receive code its wallet left signed with the
+    service, any asset, as any code is, once the signature checks out against the key published
+    beside the name and the key this wallet first paid the name at (kept per wallet); otherwise
+    "This name gave a receive code its wallet did not sign, so nothing was sent. Ask the
+    recipient for their full code." or "This name now belongs to another wallet than the one you
+    paid before, so nothing was sent. Ask the recipient for their full code."; a name at another domain in BTC only, at the invoice
     that service makes, which must be for BTC and for exactly the amount. Anything that is not a
     code or a name (an address, an invoice, an account id) takes the path it always took.
     An address send the chain cannot cover is paid out of the leaves (the library's
@@ -901,8 +920,8 @@ Rust core through flutter_rust_bridge on the host. They resolve the cdylib from
 (relative to `app/`), so run `cargo build` in `ambra_core/` first or set the variable.
 
 On a device or emulator, `integration_test/receive_drive_test.dart` drives Receive in default
-mode against the live testnet (New code, a payment name in the code, amounts in BTC and in an
-asset, the Confidential switch) and saves a screenshot of each through
+mode against the live testnet (New code, a payment name as the QR code with its stock filled and
+Show full code, amounts in BTC and in an asset, the Confidential switch) and saves a screenshot of each through
 `test_driver/integration_test.dart`, since an emulator's own screen capture reads the app back as
 black:
 

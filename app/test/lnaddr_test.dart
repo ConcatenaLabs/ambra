@@ -152,13 +152,19 @@ void main() {
       return BigInt.parse(pr.substring(4, pr.indexOf('n', 4))) * BigInt.from(100);
     }
 
-    test('a name at our domain is paid at the code its wallet gives', () async {
+    test('a name at our domain is paid at the code its wallet signed', () async {
+      final signed = signCode(key.priv, domain, 'bob', 'BITCOIN:TB1QBOB');
       final c = MockClient((r) async {
         expect(r.url.toString(), '$base/lnaddr/bob');
-        return http.Response('{"ok":true,"code":"BITCOIN:TB1QBOB","fresh":true}', 200);
+        return http.Response(jsonEncode({'ok': true, 'pubkey': key.pub, 'id': signed.id, 'code': signed.code, 'sig': signed.sig, 'fresh': true}), 200);
       });
       final t = await resolveLnAddress(text: 'bob@$domain', btc: false, domain: domain, base: base, decodeMsat: decode, client: c);
       expect(t.code, 'BITCOIN:TB1QBOB');
+      expect(t.fresh, isTrue);
+      // The same code unsigned: refused.
+      final bare = MockClient((r) async => http.Response('{"ok":true,"code":"BITCOIN:TB1QBOB","fresh":true}', 200));
+      await expectLater(resolveLnAddress(text: 'bob@$domain', btc: false, domain: domain, base: base, decodeMsat: decode, client: bare),
+          throwsA(predicate((e) => '$e' == NameWords.unsigned)));
     });
 
     test('an offline wallet, in the service\'s words', () async {
@@ -192,6 +198,10 @@ void main() {
       expect(parseLnAddress('Alice@SequentiaTestnet.com')?.name, 'alice');
       expect(parseLnAddress('lightning:a.b+c@x.io')?.domain, 'x.io');
       expect(parseLnAddress('tb1qxyz'), isNull);
+      for (final t in ['alice@sequentiatestnet.com', 'lightning:alice@sequentiatestnet.com', 'LIGHTNING:ALICE@SEQUENTIATESTNET.COM', '\u20bfalice@sequentiatestnet.com']) {
+        final a = parseLnAddress(t);
+        expect('${a?.name}@${a?.domain}', 'alice@sequentiatestnet.com', reason: t);
+      }
     });
   });
 

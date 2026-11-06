@@ -1,7 +1,9 @@
 // On-device drive of Receive in default mode against the live testnet (the web wallet's
 // docs/DEFAULT_MODE.md, Receive): a new wallet joins the operator, shows its receive code, New code
 // moves the address, a payment name puts its LNURL-pay in the code, an amount in BTC and in an asset
-// carry their invoices, and the Confidential switch shows the confidential address alone. A
+// carry their invoices, and the Confidential switch shows the confidential address alone. With a
+// name, Receive shows the name as its QR code, the stock of signed codes is filled, and Show full
+// code gives the code and Show name the name again. A
 // screenshot of each, through the Flutter engine (an emulator's own screen capture reads Flutter's
 // SurfaceView back as black).
 //
@@ -71,7 +73,24 @@ void main() {
     await PaymentNameService.instance.register(name);
     note('name: ${PaymentNameService.instance.address}');
     await until(() => false, 8);
+    expect(find.byKey(const Key('receive-name-qr')), findsOneWidget);
+    expect(find.byKey(const Key('receive-name-public')), findsOneWidget);
+    expect(find.byKey(const Key('receive-code-new')), findsNothing);
+    // One card says the name once: no second name card under it while the name view is on.
+    expect(find.text(PaymentNameService.instance.address!), findsOneWidget);
+    expect(find.byKey(const Key('receive-name-remove')), findsOneWidget);
     await binding.takeScreenshot('ambra-3-name');
+    final stocked = await until(() => PaymentNameService.instance.stocked >= 10, 120);
+    note('stock: ${PaymentNameService.instance.stocked} signed codes left with the service ($stocked)');
+    await tester.ensureVisible(find.byKey(const Key('receive-show-full')));
+    await tester.tap(find.byKey(const Key('receive-show-full')));
+    await until(() => false, 4);
+    expect(find.byKey(const Key('receive-code-qr')), findsOneWidget);
+    await binding.takeScreenshot('ambra-3c-full-code');
+    await tester.ensureVisible(find.byKey(const Key('receive-show-name')));
+    await tester.tap(find.byKey(const Key('receive-show-name')));
+    await until(() => false, 2);
+    expect(find.byKey(const Key('receive-name-qr')), findsOneWidget);
     await tester.drag(find.byType(ListView), const Offset(0, -500));
     await until(() => false, 2);
     await binding.takeScreenshot('ambra-3b-name-card');

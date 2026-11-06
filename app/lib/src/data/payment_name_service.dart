@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,8 +18,10 @@ import 'wallet_repository.dart';
 
 /// The open wallet's payment name ([LnAddress]), on the default node only: the name lives at that
 /// node's domain and its invoices come from the Bitcoin ark, which only the default node has.
-/// While the app runs and the wallet holds a name, it answers the service's requests: an invoice
-/// of the Bitcoin ark for the amount a payer chose, or a new receive code.
+/// While the app runs and the wallet holds a name, it answers the service's requests (an invoice of
+/// the Bitcoin ark for the amount a payer chose) and keeps the stock of signed receive codes it
+/// leaves with the service topped up (name_stock.dart), so a Sequentia wallet paying the name gets
+/// a new code of this wallet's while it is closed too.
 class PaymentNameService extends ChangeNotifier {
   PaymentNameService._();
   static final PaymentNameService instance = PaymentNameService._();
@@ -31,13 +34,19 @@ class PaymentNameService extends ChangeNotifier {
   ({List<int> priv, String pub})? _key;
   String? _tag;
 
-  /// The receive index the code shows now: a payer of the name is given a code at it.
+  /// The receive index the code shows now: the stock leaves it to the screen.
   int Function() receiveIndex = () => BtcState.instance.unifiedNext;
+
+  /// The first address index no scan has seen used: the stock's window starts there.
+  int Function() nextUnused = () => BtcState.instance.unifiedNext;
 
   bool get available => _a != null;
   String? get name => _a?.name;
   String? get address => _a?.address;
   String? get lnurl => _a?.lnurl;
+
+  /// How many signed codes this wallet has left with the service, as last topped up.
+  int get stocked => _a?.stock?.mine.length ?? 0;
   String get domain => Backend.lnaddrDomain ?? '';
 
   /// Opens the name of the wallet now open: its key, the name kept for it, the name its key holds
@@ -57,13 +66,21 @@ class PaymentNameService extends ChangeNotifier {
       debugPrint('[lnaddr] no name key: $e');
       return;
     }
-    final prefKey = 'ambra.lnaddr.name.$tag';
+    final prefKey = 'ambra.lnaddr.name.$tag', stockKey = 'ambra.lnaddr.stock.$tag';
     _a = LnAddress(
       base: Backend.lsp,
       domain: domain,
       key: () => _key,
       invoice: (msat) => ArkBtcService.instance.invoice(msat ~/ BigInt.from(1000)),
-      code: _code,
+      code: () async => throw StateError('the stock makes codes'),
+      stockCode: _stockCode,
+      nextUnused: () => nextUnused(),
+      shownIndex: () => receiveIndex(),
+      loadStock: () async => (await SharedPreferences.getInstance()).getString(stockKey),
+      saveStock: (j) async {
+        final p = await SharedPreferences.getInstance();
+        j == null ? await p.remove(stockKey) : await p.setString(stockKey, j);
+      },
       limits: _limits,
       load: () async => (await SharedPreferences.getInstance()).getString(prefKey),
       save: (n) async {
@@ -94,24 +111,51 @@ class PaymentNameService extends ChangeNotifier {
 
   Future<void> release() async => _a?.release();
 
+  /// The key each payment name was first paid at, for the wallet now open: Send refuses a code
+  /// under another key (lnaddr.dart [resolveLnAddress]).
+  NamePins get pins {
+    final k = 'ambra.lnaddr.pins.${DevMode.instance.tag ?? 'default'}';
+    Future<Map<String, dynamic>> all() async {
+      try {
+        final j = jsonDecode((await SharedPreferences.getInstance()).getString(k) ?? '{}');
+        return j is Map ? Map<String, dynamic>.from(j) : {};
+      } catch (_) {
+        return {};
+      }
+    }
+
+    return (
+      get: (a) async => (await all())[a] as String?,
+      set: (a, pub) async {
+        final m = await all();
+        m[a] = pub;
+        await (await SharedPreferences.getInstance()).setString(k, jsonEncode(m));
+      },
+    );
+  }
+
   static ({List<int> priv, String pub}) _keyOf(String phrase) {
     final k = nameKey(phrase);
     return (priv: k.priv, pub: k.pub);
   }
 
-  /// A new receive code for a payer: the address at the code's index, an address of the Bitcoin
-  /// ark and a new receive request, as far as each can be had now.
-  Future<String> _code() async {
+  /// A code for the stock at address [index]: the address there, an address of the Bitcoin ark
+  /// and a new receive request. None while the wallet can't hold coins with the operator yet: such
+  /// a code could not be paid in seconds.
+  Future<String?> _stockCode(int index) async {
+    if (!LeafService.instance.open) return null;
     final m = await WalletRepository.instance.readMnemonic();
-    if (m == null) throw StateError('no wallet is open');
-    final address = (await core.receiveAddressAt(mnemonic: m, index: receiveIndex(), confidential: false)).address;
+    if (m == null) return null;
+    final address = (await core.receiveAddressAt(mnemonic: m, index: index, confidential: false)).address;
     String? ark, seq;
     try {
       if (ArkBtcService.instance.open) ark = await ArkBtcService.instance.address();
     } catch (_) {}
     try {
-      seq = await LeafService.instance.receiveCode();
+      final r = await LeafService.instance.run('receive');
+      seq = r is Map ? r['request']?.toString() : null;
     } catch (_) {}
+    if (seq == null || seq.isEmpty) return null;
     return nameCode(address: address, ark: ark, sequentia: seq);
   }
 
