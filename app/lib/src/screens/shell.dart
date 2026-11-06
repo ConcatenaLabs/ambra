@@ -2608,20 +2608,24 @@ class _ReceiveTabState extends State<ReceiveTab> {
                 ],
               ],
               const SizedBox(height: 6),
-              SwitchListTile(
-                key: const Key('receive-confidential'),
-                contentPadding: EdgeInsets.zero,
-                activeThumbColor: AmbraColors.amber,
-                value: _conf,
-                onChanged: (v) {
-                  setState(() {
-                    _conf = v;
-                    _confAddr = null;
-                  });
-                  if (v) unawaited(_drawConf());
-                },
-                title: const Text(DefaultWords.confidential, style: AmbraText.body),
-                subtitle: const Text(DefaultWords.confidentialLine, style: AmbraText.sub),
+              // Its own Material: the card's background would hide the tile's ink.
+              Material(
+                type: MaterialType.transparency,
+                child: SwitchListTile(
+                  key: const Key('receive-confidential'),
+                  contentPadding: EdgeInsets.zero,
+                  activeThumbColor: AmbraColors.amber,
+                  value: _conf,
+                  onChanged: (v) {
+                    setState(() {
+                      _conf = v;
+                      _confAddr = null;
+                    });
+                    if (v) unawaited(_drawConf());
+                  },
+                  title: const Text(DefaultWords.confidential, style: AmbraText.body),
+                  subtitle: const Text(DefaultWords.confidentialLine, style: AmbraText.sub),
+                ),
               ),
               if (_conf) Text(DefaultWords.confidentialOn, key: const Key('receive-confidential-on'), style: AmbraText.sub),
             ]),

@@ -879,6 +879,17 @@ Rust core through flutter_rust_bridge on the host. They resolve the cdylib from
 `$AMBRA_CORE_LIB`, defaulting to `../ambra_core/target/debug/libambra_core.so`
 (relative to `app/`), so run `cargo build` in `ambra_core/` first or set the variable.
 
+On a device or emulator, `integration_test/receive_drive_test.dart` drives Receive in default
+mode against the live testnet (New code, a payment name in the code, amounts in BTC and in an
+asset, the Confidential switch) and saves a screenshot of each through
+`test_driver/integration_test.dart`, since an emulator's own screen capture reads the app back as
+black:
+
+```sh
+AMBRA_SHOTS=/tmp/shots flutter drive --driver=test_driver/integration_test.dart \
+  --target=integration_test/receive_drive_test.dart -d <device> --dart-define=AMBRA_RECEIVE_DRIVE=1
+```
+
 ## Sequentia ecosystem
 
 | Repo | One-liner |
