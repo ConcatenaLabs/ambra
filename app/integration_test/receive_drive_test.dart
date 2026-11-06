@@ -8,7 +8,7 @@
 // SurfaceView back as black).
 //
 //   AMBRA_SHOTS=<dir> flutter drive --driver=test_driver/integration_test.dart \
-//     --target=integration_test/receive_drive_test.dart -d <device> --dart-define=AMBRA_RECEIVE_DRIVE=1
+//     --target=integration_test/receive_drive_test.dart -d <device> --dart-define=AMBRA_RECEIVE_DRIVE=true
 //
 // Without AMBRA_RECEIVE_DRIVE it does nothing: it needs the live testnet and makes a payment name.
 import 'dart:math';

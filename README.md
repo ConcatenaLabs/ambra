@@ -907,7 +907,7 @@ black:
 
 ```sh
 AMBRA_SHOTS=/tmp/shots flutter drive --driver=test_driver/integration_test.dart \
-  --target=integration_test/receive_drive_test.dart -d <device> --dart-define=AMBRA_RECEIVE_DRIVE=1
+  --target=integration_test/receive_drive_test.dart -d <device> --dart-define=AMBRA_RECEIVE_DRIVE=true
 ```
 
 ## Sequentia ecosystem
