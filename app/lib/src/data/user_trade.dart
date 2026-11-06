@@ -31,11 +31,28 @@ const int kFirmMarginMs = 20000;
 /// Minutes after which a received trade still settling is said to be slow.
 const int kSlowSettleMin = 10;
 
-/// How long a quote may take from Review: every source worth asking for firm terms is asked at
-/// once, and one that has not answered by then is left out of the ticket (a late answer is let go
-/// of). The firm terms always get at least [kQuoteFirmMinMs] of it. The web wallet's QUOTE_FIRM_MS.
+/// How long the sources are given to answer for firm terms, from the moment they are asked: every
+/// source worth asking is asked at once, and one whose answer has not come by then is left out of
+/// the ticket (a late answer is let go of). It counts from the asking, never from Review: what the
+/// wallet itself does first, behind whatever its library is busy with, is not taken out of a
+/// maker's time. The web wallet's QUOTE_FIRM_MS.
 const int kQuoteFirmMs = 8000;
-const int kQuoteFirmMinMs = 3000;
+
+/// How many sources are asked for firm terms at once: each one's check runs on the wallet's library,
+/// one command at a time, so every source more holds the first answer back (eight took 2 to 5 s each
+/// on a phone, and none came within the window). The web wallet's FIRM_AT_ONCE.
+const int kFirmAtOnce = 4;
+
+/// How long, past [kQuoteFirmMs], the wallet's own reading of firm terms a source gave in time (the
+/// library's check of an offer, of a fee) may take while no other firm terms are in hand: the
+/// library answers one command at a time, and a sync it was running holds that check up. The web
+/// wallet's QUOTE_READ_MS.
+const int kQuoteReadMs = 30000;
+
+/// What the wallet can pay, as last read, stands for a quote this long: a quote never waits behind
+/// the library to learn it (each quote reads it again behind the price). The web wallet's
+/// HOLDINGS_FRESH_MS.
+const int kHoldingsFreshMs = 60000;
 
 /// How long a quote waits before it asks once more for firm terms that none gave.
 const int kFirmRetryMs = 3000;
@@ -146,6 +163,8 @@ class UserWords {
   static const about = 'about';
   // Review, while the sources are asked for terms they hold to: the shown amount is the estimate.
   static const pricing = 'Getting the exact price…';
+  /// Still at it past the makers' window: the wallet is checking the price it was given.
+  static const pricingLong = 'Still getting the exact price: this can take up to half a minute…';
   // The best offers are orders resting in the tree that only coins expiring later can fill: the
   // wallet refreshes its older coins in the next round, and prices the trade again once they are in.
   static String readying(String pay, [bool soon = false]) => soon
@@ -217,6 +236,7 @@ class UserWords {
     freeing('XT', true),
     about,
     pricing,
+    pricingLong,
     noFirmOffer,
     opening,
     readying('XT'),
@@ -627,6 +647,7 @@ class UserTradeDeps {
     this.btcMove,
     this.btcMoveBlocks,
     this.btcOnlyFirmMs,
+    this.quoteReadMs,
     int? quoteFirmMs,
     int Function()? now,
     void Function(String)? log,
@@ -687,6 +708,10 @@ class UserTradeDeps {
   /// can take, how long it waits for its terms ([kBtcOnlyFirmMs]).
   final int quoteFirmMs;
   final int? btcOnlyFirmMs;
+
+  /// How long past [quoteFirmMs] the wallet's own check of firm terms that came in time may run
+  /// while none is in hand ([kQuoteReadMs]).
+  final int? quoteReadMs;
   final Future<String?> Function() read;
   final Future<void> Function(String value) write;
   final int Function() now;
@@ -809,7 +834,28 @@ class UserTradeEngine {
     try {
       plans = (await _run('plans')) as Map?;
     } catch (_) {}
-    return spendableFrom(coins, plans);
+    final sp = spendableFrom(coins, plans);
+    _holdings = (sp: sp, at: d.now());
+    return sp;
+  }
+
+  /// What the wallet can pay, as last read ([kHoldingsFreshMs]), and a reading under way.
+  ({Map<String, BigInt> sp, int at})? _holdings;
+  Future<Map<String, BigInt>>? _holdingsRead;
+  Future<Map<String, BigInt>> _readHoldingsSoon() =>
+      _holdingsRead ??= spendable().whenComplete(() => _holdingsRead = null);
+
+  /// What the wallet can pay for a quote: the last reading while it is fresh (read again behind the
+  /// quote, never ahead of it), else a reading now. A reading too high is caught by the source's
+  /// own check (the library refuses what the coins cannot pay, and the terms are asked again for
+  /// less); the person never waits on the library's queue to learn it.
+  Future<Map<String, BigInt>> _spendableForQuote() async {
+    final h = _holdings;
+    if (h != null && d.now() - h.at < kHoldingsFreshMs) {
+      unawaited(_readHoldingsSoon().then((_) {}, onError: (_) {}));
+      return h.sp;
+    }
+    return _readHoldingsSoon();
   }
 
   Future<List<BookEntry>> _entries(String pay, String receive, List<String> sources) async {
@@ -915,6 +961,7 @@ class UserTradeEngine {
           if (_tooOldFrom == null || t > _tooOldFrom!) _tooOldFrom = t;
         }
         d.log('[user trade] order_fill_resting_quote: $err');
+        _noteLiveShort(err);
         return null;
       }
       final gets = q['gets'] as Map?, fee = q['fee'] as Map?;
@@ -965,7 +1012,11 @@ class UserTradeEngine {
     return null;
   }
 
-  Future<Candidate?> _firm(BookEntry e, String pay, String receive, BigInt amount, BigInt have) async {
+  /// What the last check of a maker's offer added to its price (its margins, and settling the
+  /// change), by the asset paid.
+  final _marginsSeen = <String, BigInt>{};
+
+  Future<Candidate?> _firm(BookEntry e, String pay, String receive, BigInt amount, BigInt have, {int? until, int? hard}) async {
     final size = sizeEntry(e, amount < have ? amount : have);
     if (size == null) return null;
     final limit = amount < have ? amount : have;
@@ -989,6 +1040,7 @@ class UserTradeEngine {
           q = (await _run('take_quote', {'order': e.raw['_relayJson'] ?? e.raw, 'amount': '$r', 'max_fee_ppm': kMaxFeePpm})) as Map;
         } catch (err) {
           d.log('[user trade] take_quote: $err');
+          _noteLiveShort(err);
           return null;
         }
         var gives = _big(q['spends'] ?? q['gives']);
@@ -1047,11 +1099,29 @@ class UserTradeEngine {
       return Candidate(source: e.source, id: e.id, entry: e, receive: t.receive, give: t.give, fees: t.fees, offer: t.offer, btc: t);
     }
     if (e.source == 'leaf-maker') {
-      var give = size.receive;
+      // The next offer of an asset is asked for what the last check added to its price less, so the
+      // check does not send it back for a smaller one.
+      final guess = _marginsSeen[pay] ?? BigInt.zero;
+      final fitted = guess > BigInt.zero && limit > guess ? sizeEntry(e, limit - guess) : null;
+      var give = fitted?.receive ?? size.receive;
       for (var i = 0; i < 4; i++) {
         Map<String, dynamic> o;
         try {
-          o = await d.fetchJson('${e.maker}/v1/firm', post: {'give_asset': receive, 'want_asset': pay, 'give': '$give'});
+          // A maker that has not answered by the quote's deadline is left out of it; should its offer
+          // come later, it is let go of at once. An offer asked again for less, after the wallet's
+          // check, is given the makers' time again, never past [hard].
+          final f = d.fetchJson('${e.maker}/v1/firm', post: {'give_asset': receive, 'want_asset': pay, 'give': '$give'});
+          if (until == null) {
+            o = await f;
+          } else {
+            final nowMs = DateTime.now().millisecondsSinceEpoch;
+            final askBy = i == 0 ? until : math.min(nowMs + d.quoteFirmMs, hard ?? until);
+            final left = askBy - nowMs;
+            o = await f.timeout(Duration(milliseconds: left < 1000 ? 1000 : left), onTimeout: () {
+              f.then((late) => release(e.maker, '${late['swap']}'), onError: (_) {});
+              throw TimeoutException('the maker did not answer in time');
+            });
+          }
         } catch (err) {
           d.log('[user trade] maker firm: $err');
           return null;
@@ -1061,6 +1131,7 @@ class UserTradeEngine {
           t = (await _run('swap_read', {'offer': o['offer']})) as Map;
         } catch (err) {
           d.log('[user trade] swap_read: $err');
+          _noteLiveShort(err);
           release(e.maker, '${o['swap']}');
           return null;
         }
@@ -1088,6 +1159,7 @@ class UserTradeEngine {
           return null;
         }
         final total = spend + (sc != null ? _big(sc['fee']) : BigInt.zero);
+        _marginsSeen[pay] = total - _big((t['gives'] as Map)['value']);
         if (total > limit) {
           await _releaseNow(e.maker, '${o['swap']}');
           give = give - _ceilDiv((total - limit) * e.rateDen, e.rateNum) - BigInt.one;
@@ -1144,6 +1216,9 @@ class UserTradeEngine {
   /// fees and all. The book's entries are read at most every 8 seconds per pair. The web wallet's
   /// `estimate`.
   Future<Estimate> estimate({required String pay, required String receive, BigInt? payAtoms, BigInt? receiveAtoms}) async {
+    // While the amount is typed, what the wallet can pay is read behind it, so Review finds it.
+    final h = _holdings;
+    if (pay != kUserBtc && (h == null || d.now() - h.at > 10000)) unawaited(_readHoldingsSoon().then((_) {}, onError: (_) {}));
     final ad = await d.admitted();
     final sources = admittedSources(ad.pairs, ad.genesis, pay, receive);
     if (sources.isEmpty) return const Estimate.no('not-listed');
@@ -1199,6 +1274,13 @@ class UserTradeEngine {
   /// when one refused them for expiring sooner; null otherwise.
   int? _tooOldFrom;
 
+  /// Whether a source's check in this quote found the wallet's coins of the asset paid not live now
+  /// (given up in a refresh, received and not yet settled): the trade waits on them, and says so.
+  bool _liveShort = false;
+  void _noteLiveShort(Object err) {
+    if ('$err'.contains(' in live coins')) _liveShort = true;
+  }
+
   /// When the wallet last asked a refresh of an asset's coins for a resting order, so a quote asked
   /// again while that round runs says so rather than asking again.
   final _readyingSince = <String, int>{};
@@ -1233,30 +1315,46 @@ class UserTradeEngine {
     }
   }
 
-  /// A firm answer within [ms], or null: a source that answers later is let go of ([drop]), so the
-  /// offer it holds frees the maker's coins. The web wallet's `inTime`.
-  Future<Candidate?> _inTime(Future<Candidate?> f, int ms) {
-    var tooLate = false;
-    final settled = f.then<Candidate?>((c) {
-      if (tooLate) {
-        if (c != null) {
-          d.log('[user trade] a source answered after the quote, let go: ${c.source}');
-          drop(c);
+  /// The firm terms of [fs] once all are in, or at [soft] (ms, wall clock) when one is in hand, or
+  /// at [hard] whatever is in: the sources' own deadline is [soft], and what the wallet reads of an
+  /// answer that came in time may run to [hard] while nothing else is in hand. One that comes later
+  /// is let go of ([drop]), so the offer it holds frees the maker's coins. The web wallet's `firmsBy`.
+  Future<List<Candidate?>> _firmsBy(List<Future<Candidate?>> fs, int soft, int hard) {
+    final out = Completer<List<Candidate?>>();
+    final got = <Candidate?>[];
+    var left = fs.length;
+    Timer? softTimer, hardTimer;
+    void finish() {
+      if (out.isCompleted) return;
+      softTimer?.cancel();
+      hardTimer?.cancel();
+      out.complete(List.of(got));
+    }
+
+    if (fs.isEmpty) return Future.value(const []);
+    for (final f in fs) {
+      f.then<Candidate?>((c) => c, onError: (Object e) {
+        d.log('[user trade] firm: $e');
+        return null;
+      }).then((c) {
+        left--;
+        if (out.isCompleted) {
+          if (c != null) {
+            d.log('[user trade] a source answered after the quote, let go: ${c.source}');
+            drop(c);
+          }
+          return;
         }
-        return null;
-      }
-      return c;
-    }, onError: (Object e) {
-      d.log('[user trade] firm: $e');
-      return null;
+        if (c != null) got.add(c);
+        if (left == 0 || (c != null && DateTime.now().millisecondsSinceEpoch >= soft)) finish();
+      });
+    }
+    int ms(int t) => math.max(0, t - DateTime.now().millisecondsSinceEpoch);
+    softTimer = Timer(Duration(milliseconds: ms(soft)), () {
+      if (got.isNotEmpty) finish();
     });
-    return Future.any<Candidate?>([
-      settled,
-      Future.delayed(Duration(milliseconds: ms < 0 ? 0 : ms), () {
-        tooLate = true;
-        return null;
-      }),
-    ]);
+    hardTimer = Timer(Duration(milliseconds: ms(hard)), finish);
+    return out.future;
   }
 
   /// What the wallet can pay of BTC for a trade now: what its Bitcoin Lightning holds.
@@ -1288,11 +1386,11 @@ class UserTradeEngine {
 
   /// The ticket for paying [amount] of [pay] for [receive]: every source worth asking is asked for
   /// firm terms at once, and the quote takes what has answered within [UserTradeDeps.quoteFirmMs] of
-  /// Review (the BTC desk alone, [kBtcOnlyFirmMs]); a late answer is let go of. The web wallet's
+  /// the asking (the BTC desk alone, [kBtcOnlyFirmMs]); a late answer is let go of. The web wallet's
   /// `quote`.
   Future<QuoteResult> quote({required String pay, required String receive, required BigInt amount}) async {
-    final started = DateTime.now().millisecondsSinceEpoch;
     _tooOldFrom = null;
+    _liveShort = false;
     if (amount <= BigInt.zero) return QuoteResult.no('too-small');
     final ad = await d.admitted();
     final sources = admittedSources(ad.pairs, ad.genesis, pay, receive);
@@ -1317,7 +1415,7 @@ class UserTradeEngine {
         }
       }
     } else {
-      have = (await spendable())[pay] ?? BigInt.zero;
+      have = (await _spendableForQuote())[pay] ?? BigInt.zero;
     }
     if (have <= BigInt.zero) {
       // What the wallet shows it holds, though no trade can pay from it now: the wallet is asked to
@@ -1372,24 +1470,28 @@ class UserTradeEngine {
       if (pay == kUserBtc && moving) return QuoteResult.no('btc-moving', moving: true);
       return QuoteResult.no('part-ready', ready: have, soon: soonNow);
     }
-    // Firm terms of the best eight, all asked at once, within the quote's time: an entry that cannot
+    // Firm terms of the best [kFirmAtOnce], all asked at once, within the quote's time: an entry that cannot
     // be firmed, or that has not answered by then, is left out, and a late answer is let go of. When
     // none gives firm terms and there is time left, they are asked once more a moment later.
-    final worth = ind.take(8).toList();
-    final btcOnly = worth.isNotEmpty && worth.every((x) => x.e.source == 'btc-gateway');
+    // The next best [kFirmAtOnce] are asked in the second round when the first gave none; with no
+    // more to ask, the first ones again a moment later.
+    final ranked = ind.take(2 * kFirmAtOnce).toList();
+    final btcOnly = ranked.isNotEmpty && ranked.every((x) => x.e.source == 'btc-gateway');
     final window = btcOnly ? (d.btcOnlyFirmMs ?? kBtcOnlyFirmMs) : d.quoteFirmMs;
     final w = math.max(window, d.quoteFirmMs);
-    // Wall-clock time: the person's wait (d.now may be a test's stand-in clock).
-    final int until = math.max(started + w, DateTime.now().millisecondsSinceEpoch + math.min(kQuoteFirmMinMs, w));
+    // Wall-clock time: the person's wait (d.now may be a test's stand-in clock), from the asking.
+    final int until = DateTime.now().millisecondsSinceEpoch + w;
+    final int readMs = d.quoteReadMs ?? kQuoteReadMs;
     final cands = <Candidate>[];
     for (var round = 0; round < 2 && cands.isEmpty; round++) {
+      final next = ranked.skip(round * kFirmAtOnce).take(kFirmAtOnce).toList();
+      final worth = next.isNotEmpty ? next : ranked.take(kFirmAtOnce).toList();
       if (round > 0) {
         final left = until - DateTime.now().millisecondsSinceEpoch;
         if (left < math.min(kFirmRetryMs + 2000, w ~/ 2)) break;
-        await d.sleep(kFirmRetryMs);
+        if (next.isEmpty) await d.sleep(kFirmRetryMs);
       }
-      final got = await Future.wait(
-          worth.map((x) => _inTime(_firm(x.e, pay, receive, amount, have), until - DateTime.now().millisecondsSinceEpoch)));
+      final got = await _firmsBy([for (final x in worth) _firm(x.e, pay, receive, amount, have, until: until, hard: until + readMs)], until, until + readMs);
       for (final c in got) {
         if (c != null) cands.add(c);
       }
@@ -1407,6 +1509,9 @@ class UserTradeEngine {
       return QuoteResult.no('readying', soon: soonNow);
     }
     // Offered, but nobody gave firm terms: that is not the amount's fault.
+    // Nobody gave firm terms because what the wallet holds of the asset is not live now: it is being
+    // made ready, never "nobody could confirm".
+    if (best == null && _liveShort && pay != kUserBtc) return QuoteResult.no('freeing', soon: soonNow);
     if (best == null) return QuoteResult.no(es.isEmpty ? 'not-offered' : (ind.isNotEmpty ? 'no-firm-offer' : 'too-small'));
     return QuoteResult.ok(
       Ticket(
@@ -1443,6 +1548,8 @@ class UserTradeEngine {
   /// "Sending…" whatever the screen does next; [started] is told its id before the step is taken.
   /// Answers the record once the one step is taken; [advance] follows it from there.
   Future<Map<String, dynamic>> confirm(Candidate c, Ticket t, {void Function(String id)? started}) async {
+    // What the wallet can pay changes with this trade: the next quote reads it afresh.
+    _holdings = null;
     final id = '${d.now()}-${d.now().hashCode.toRadixString(16)}${(await records()).length}';
     _confirmingNow.add(id);
     final rec = await _put({'id': id, 'at': d.now(), 'source': c.source, 'state': 'confirming', 'ticket': t.toJson()});

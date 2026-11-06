@@ -170,8 +170,12 @@ module that implements it.
     asked for firm terms), with "The book can fill up to … now." when it cannot, and reads
     "about" until Review. Under You pay, its balance and **Max**; between the two, **⇅** swaps
     the sides, each amount riding with its asset;
-  - **Review** ("Getting the exact price…": every source asked at once, a firm price within
-    8 s, 20 s when the BTC desk is the only source, a late answer left out and released), then
+  - **Review** ("Getting the exact price…": the best four sources asked at once, the next four
+    when none answers, each given 8 s from the asking (20 s when the BTC desk is the only
+    source), a late answer left out and released; what the wallet itself checks of a price
+    given in time is waited for up to 30 s more while no other is in hand, and the button then
+    reads "Still getting the exact price: this can take up to half a minute…"; what the wallet
+    can pay is taken from its last reading, never waited for behind the library), then
     **Trade**, which frees the screen after 1.5 s: the trade goes on under Open as "Sending…",
     then Sent, "Received, settling" and Settled, the same words as History.
   - What was entered, and a price being asked for, is kept across the background, the app lock
