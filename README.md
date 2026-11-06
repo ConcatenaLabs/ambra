@@ -327,8 +327,9 @@ module that implements it.
     payment name carries the name's LNURL-pay in `lightning=` (LUD-01 bech32, `LNURL1…`), which
     any Lightning wallet pays in an amount it chooses; readers give it apart (`PayCode.lnurl`),
     never as an invoice.
-  - Under the code, one switch, **Confidential**: "Hides the asset and amount of a payment from
-    everyone but you and the payer." On, the code is the wallet's confidential address at the
+  - Under the code, one switch, **Confidential**: "Asks the payer to hide the amount, and the
+    asset where it can, from everyone but you and them." What is hidden is the payer's wallet's
+    doing: this one hides the amount, and says when the asset can be seen (Send, below). On, the code is the wallet's confidential address at the
     same index alone (`tsqb1…`), and a second line says what stays public: that a payment was
     made; that a payment arriving in seconds is never confidential (the operator publishes each
     batch's leaves, asset and value), so this one arrives after the next block; and that BTC is
