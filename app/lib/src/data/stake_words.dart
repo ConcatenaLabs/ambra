@@ -4,6 +4,8 @@
 /// string here is checked against [kUserModeForbiddenWords] (stake_words_test.dart).
 library;
 
+import 'default_words.dart';
+
 /// Every string the Stake screen shows in default mode.
 class StakeWords {
   static const title = 'Stake';
@@ -48,15 +50,14 @@ class StakeWords {
   static const stake = 'Stake';
   static String staked(String amount) => 'Staked $amount tSEQ. Now choose a pool for it below.';
   static String tooLittle(String min) => 'The least you can stake is $min tSEQ.';
-  static String notEnough(String short) => 'Not enough tSEQ: $short tSEQ short.';
+  static String notEnough(String short) => DefaultWords.notEnough(short, 'tSEQ');
 
-  // What a stake, a pool's membership and a mix need is moved out of the Ark first.
-  static String movingOut(String what, String purpose) =>
-      'Moving $what out of the Ark so it can be $purpose. It is ready in a few minutes. Keep this screen open.';
-  static String cannotMoveNow(String what) =>
-      '$what cannot be moved out of the Ark right now: the network has too little of it free. Nothing has moved: try again later.';
-  static const notMoved = 'This could not be moved out of the Ark just now. Nothing was spent: try again in a moment.';
-  static const notArrived = 'What was moved out of the Ark has not arrived yet. It stays yours: try again in a few minutes.';
+  // What a stake, a pool's membership and a mix need is moved out of the Ark first, in default
+  // mode's own sentences (default_words.dart), as a confidential payment's is.
+  static String movingOut(String what, String purpose, [int? minutes]) => DefaultWords.movingOut(what, purpose, minutes);
+  static String cannotMoveNow(String what) => DefaultWords.cannotMoveNow(what);
+  static const notMoved = DefaultWords.notMoved;
+  static const notArrived = DefaultWords.notReady;
   static const purposeStake = 'staked';
   static const purposeJoin = 'used to join the pool';
 

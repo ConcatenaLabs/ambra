@@ -377,10 +377,24 @@ module that implements it.
     arrives in a few minutes." (the operator's round interval), and the fee when there is
     one. A quote the library refuses reads "This amount can't be sent to an address right
     now. Send it to a receive code, or pay an invoice."
+    A confidential address (`tsqb1…`) is paid on the chain so that its amount is hidden
+    (`confidential_pay.dart`, the web wallet's `confidential-pay.js`): beside the payment, a
+    second blinded output to the wallet's own confidential address takes what the inputs hold
+    beyond the payment and its fee, so the chain shows only the two together. When the chain holds
+    too little, a round amount is moved out of the leaves to the wallet's own address first (all
+    of the asset held there, or the next power of ten above the need, whichever is smaller;
+    `on_chain_need.dart`, as for a stake), under the button: "Moving <amount> <TICKER> out of the
+    Ark so it can be sent confidentially. They are ready in a few minutes. Keep this screen
+    open." The review says "Anyone reading the chain can see that this payment is <TICKER>, but
+    not how much." (this wallet spends only coins of the asset paid), or, when too little is held
+    beside the payment, that its amount and asset can still be worked out. A move already under
+    way is waited for, never asked twice; when none can be made, one sentence says why and
+    nothing moves.
   - Coins that arrive on the chain, of every asset the operator serves, are boarded by
     the wallet itself (amount = what the chain holds less the board's fee, paid in the
     same asset, on the fee quoted), never while something a person asked for runs or in
-    the minute after it, since the leaf wallet spends the same addresses' coins. What is
+    the minute after it, since the leaf wallet spends the same addresses' coins, nor while
+    coins moved out for a person's payment, stake or mix wait to be used (up to an hour). What is
     not final yet shows as "<amount> <ticker> arriving" under the asset's figure. Before
     boarding, the leaf wallet is handed keys (its `address` command) until it has handed
     out as many as the main wallet, so it reads every key the balance can show a coin at:
@@ -887,7 +901,7 @@ black:
 
 ```sh
 AMBRA_SHOTS=/tmp/shots flutter drive --driver=test_driver/integration_test.dart \
-  --target=integration_test/receive_drive_test.dart -d <device> --dart-define=AMBRA_RECEIVE_DRIVE=1
+  --target=integration_test/receive_drive_test.dart -d <device> --dart-define=AMBRA_RECEIVE_DRIVE=true
 ```
 
 ## Sequentia ecosystem

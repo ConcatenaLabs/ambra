@@ -324,6 +324,17 @@ class LeafService extends ChangeNotifier {
   /// wallet's own upkeep keeps off the coins for [boardQuiet].
   void personActed() => _personAt = DateTime.now();
 
+  /// Coins the wallet moved out of the Ark for something a person asked for (a confidential
+  /// payment, a stake, a pool's membership, a mix; on_chain_need.dart) are left on the chain for
+  /// [d]: the wallet's own boarding would otherwise put them back before they are used.
+  void keepOnChain(Duration d) {
+    final until = DateTime.now().add(d);
+    if (_keepUntil == null || until.isAfter(_keepUntil!)) _keepUntil = until;
+  }
+
+  DateTime? _keepUntil;
+  bool get _keptOnChain => _keepUntil != null && DateTime.now().isBefore(_keepUntil!);
+
   /// Whether something a person asked for runs now or ran within [boardQuiet]: the
   /// wallet's own upkeep (a board, here or on the Bitcoin side) waits.
   bool get personBusy {
@@ -388,7 +399,9 @@ class LeafService extends ChangeNotifier {
                 ? 'a board runs'
                 : personBusy
                     ? 'something a person asked for runs ($_asking asking)'
-                    : null;
+                    : _keptOnChain
+                        ? 'coins moved out for a payment are kept on the chain until ${_keepUntil!.toIso8601String()}'
+                        : null;
     if (skip != null || DevMode.instance.on) return _boardWhy(skip);
     // The library must read every key the balance may show a coin at, first.
     if (await _coverReceiveKeys() > 0) {
