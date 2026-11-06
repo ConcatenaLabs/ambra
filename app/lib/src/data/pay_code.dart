@@ -15,6 +15,10 @@ import 'package:qr/qr.dart';
 ///   there arrives in seconds.
 /// - `sequentia`: a Sequentia receive request (single use): an asset paid there arrives in
 ///   seconds.
+/// - `lightning`: an invoice for the amount the code asks, or, in a code without an amount, the
+///   LNURL-pay of the wallet's payment name (LUD-01, bech32 with the human part `lnurl`), which a
+///   Lightning wallet pays in an amount it chooses. Readers give the second as [lnurl] (the URL
+///   it encodes) and never as [lightning], so nothing pays it as an invoice.
 ///
 /// Neither extra parameter is required (no `req-` prefix), so a wallet that knows neither sees
 /// a plain bitcoin: request for the address. Other BIP321 parameters are read and kept.
@@ -26,7 +30,15 @@ import 'package:qr/qr.dart';
 /// ([expandRequest]). Codes made before the short form are read as they always were.
 class PayCode {
   PayCode(
-      {this.address, this.ark, this.sequentia, this.amount, this.label, this.message, this.lightning, this.other = const {}});
+      {this.address,
+      this.ark,
+      this.sequentia,
+      this.amount,
+      this.label,
+      this.message,
+      this.lightning,
+      this.lnurl,
+      this.other = const {}});
   final String? address;
   final String? ark;
   final String? sequentia;
@@ -34,6 +46,10 @@ class PayCode {
   final String? label;
   final String? message;
   final String? lightning;
+
+  /// The URL of an LNURL-pay the code carries as `lightning` (a payment name's), when it carries
+  /// no invoice there.
+  final String? lnurl;
   final Map<String, String> other;
 
   // Left as they are in a value; everything else is percent-encoded (RFC 3986 unreserved and
@@ -74,7 +90,10 @@ class PayCode {
       if (amount != null) ('amount', _enc(amount!)),
       if (label != null && label!.isNotEmpty) ('label', _enc(label!)),
       if (message != null && message!.isNotEmpty) ('message', _enc(message!)),
-      if (lightning != null && lightning!.isNotEmpty) ('lightning', _enc(_up(lightning!))),
+      if (lightning != null && lightning!.isNotEmpty)
+        ('lightning', _enc(_up(lightning!)))
+      else if (lnurl != null && lnurl!.isNotEmpty)
+        ('lightning', lnurlEncode(lnurl!).toUpperCase()),
       if (ark != null && ark!.isNotEmpty) ('ark', _enc(_up(ark!))),
       if (seq != null && seq.isNotEmpty) ('sequentia', short != null ? short.toUpperCase() : _enc(seq)),
     ];
@@ -114,6 +133,8 @@ class PayCode {
       }
     }
     final address = (m.group(1) ?? '').isEmpty ? null : _down(_dec(m.group(1)!));
+    final ln = known['lightning'];
+    final lnurl = ln == null ? null : lnurlDecode(ln);
     final c = PayCode(
       address: address,
       ark: known['ark'],
@@ -121,10 +142,11 @@ class PayCode {
       amount: known['amount'],
       label: known['label'],
       message: known['message'],
-      lightning: known['lightning'],
+      lightning: lnurl == null ? ln : null,
+      lnurl: lnurl,
       other: other,
     );
-    if (c.address == null && c.ark == null && c.sequentia == null && c.lightning == null) {
+    if (c.address == null && c.ark == null && c.sequentia == null && c.lightning == null && c.lnurl == null) {
       throw const FormatException('the code names no way to pay');
     }
     return c;
@@ -202,6 +224,30 @@ String bech32mEncode(String hrp, List<int> bytes) {
   if (p == null || p.$3 != _bech32m) return null;
   final bytes = _convert(p.$2.sublist(0, p.$2.length - 6), 5, 8, false);
   return bytes == null ? null : (p.$1, bytes);
+}
+
+String _bech32Encode(String hrp, List<int> bytes) {
+  final data = _convert(bytes, 8, 5, true)!;
+  final mod = _polymod([..._hrpExpand(hrp), ...data, 0, 0, 0, 0, 0, 0]) ^ _bech32;
+  final chk = [for (var i = 0; i < 6; i++) (mod >> (5 * (5 - i))) & 31];
+  return '${hrp}1${[...data, ...chk].map((d) => _charset[d]).join()}';
+}
+
+/// [url] as an LNURL (LUD-01: bech32, human part `lnurl`, no length limit), lower case.
+String lnurlEncode(String url) => _bech32Encode('lnurl', utf8.encode(url));
+
+/// The URL an LNURL ([s], either case) encodes, or null when [s] is not one.
+String? lnurlDecode(String s) {
+  final p = _bechParts(s.trim());
+  if (p == null || p.$3 != _bech32 || p.$1 != 'lnurl') return null;
+  final bytes = _convert(p.$2.sublist(0, p.$2.length - 6), 5, 8, false);
+  if (bytes == null) return null;
+  try {
+    final url = utf8.decode(bytes);
+    return url.startsWith('https://') || url.startsWith('http://') ? url : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 String _up(String v) => _bechParts(v) != null ? v.toUpperCase() : v;

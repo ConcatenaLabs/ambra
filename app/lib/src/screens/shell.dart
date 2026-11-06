@@ -21,6 +21,10 @@ import '../data/home_coins.dart';
 import '../data/hidden_assets.dart';
 import '../data/lightning_to_ark.dart';
 import '../data/pay_code.dart';
+import '../data/payment_name_service.dart';
+import '../data/receive_index.dart';
+import '../data/ln_max_payment.dart' show receivableAssets, receiveState;
+import '../data/ark_limits.dart' show arkLimitsNow, goesToAddress, directUsd, usdFigure;
 import '../data/problem_report.dart' show ReportWords;
 import '../data/leaf_service.dart';
 import '../data/lightning_service.dart';
@@ -51,6 +55,7 @@ import '../widgets/restricted_asset_detail.dart';
 import '../widgets/widgets.dart';
 import 'assets_screen.dart';
 import 'faucet_screen.dart';
+import 'payment_name_card.dart';
 import 'history_screen.dart';
 import 'node_screen.dart';
 import 'send_screen.dart';
@@ -124,6 +129,8 @@ class _ShellState extends State<Shell> {
     // The Bitcoin ark wallet stays open in both modes, so BTC held there is always counted;
     // only user mode moves BTC into it and pays from it by itself.
     unawaited(ArkBtcService.instance.start());
+    // The wallet's payment name answers payers while the app runs, in either mode.
+    unawaited(PaymentNameService.instance.start());
   }
 
   Future<void> _initLightning() async {
@@ -2055,6 +2062,23 @@ class _ReceiveTabState extends State<ReceiveTab> {
   // so it names them (LeafService.channelsVersion).
   int _chanAt = 0;
   bool _seqStale = false;
+  // The receive index the code's address is at ([_codeAddr]); New code moves [_index] on
+  // ([nextReceiveIndex]) and the next draw takes the address there.
+  int? _codeIndex;
+  // The scan's next unused index as last kept ([LeafService.scanNext]): a new code never goes
+  // [receiveGap] or more past it.
+  int _scanKept = 0;
+  int get _nextUnused => BtcState.instance.unifiedNext > _scanKept ? BtcState.instance.unifiedNext : _scanKept;
+  // Confidential: the code is the wallet's confidential address at [_index] alone. Off each time
+  // Receive opens: confidentiality is chosen per payment.
+  bool _conf = false;
+  String? _confAddr;
+  // What the optional amount is in: 'BTC', or an asset the operator receives in over Lightning.
+  String _recvAsset = 'BTC';
+  String _codeAsset = 'BTC';
+  // The asset and amount an invoice could not be had for: not asked again for the same.
+  String? _invFailed;
+  int _invWatch = 0;
 
   // The one receive code shows in user mode once there is one to show, or once the wallet
   // holds coins with the operator or BTC on the ark.
@@ -2074,8 +2098,17 @@ class _ReceiveTabState extends State<ReceiveTab> {
     DevMode.instance.addListener(_onMode);
     _paidAt = LeafService.instance.arrivedCount;
     _chanAt = LeafService.instance.channelsVersion;
+    PaymentNameService.instance.addListener(_onName);
+    PaymentNameService.instance.receiveIndex = () => _codeIndex ?? _index;
     _load();
     unawaited(_restoreCode().whenComplete(_onLeaves));
+  }
+
+  /// The payment name came, changed or went: a code without an amount carries it.
+  void _onName() {
+    if (!mounted) return;
+    setState(() {});
+    _show();
   }
 
   void _onMode() {
@@ -2086,6 +2119,12 @@ class _ReceiveTabState extends State<ReceiveTab> {
 
   /// The code last drawn, shown at once, unless its receive request lapses within a day.
   Future<void> _restoreCode() async {
+    _scanKept = await LeafService.scanNext();
+    // Never a code at an address a scan has seen used, before this session's scan has run.
+    if (mounted && _index < _scanKept) {
+      setState(() => _index = _scanKept);
+      unawaited(_load());
+    }
     final kept = await WalletCache.loadReceiveCode();
     if (kept == null || !mounted || _code != null) return;
     final until = kept['until'] is int ? kept['until'] as int : null;
@@ -2093,7 +2132,14 @@ class _ReceiveTabState extends State<ReceiveTab> {
     if (until != null && until - now < 86400) return;
     final addr = kept['address']?.toString();
     if (addr == null || addr.isEmpty) return;
+    // The index the kept code's address is at, while a scan from the phrase still finds it.
+    final at = kept['index'] is int ? kept['index'] as int : null;
+    if (at != null && keptReceiveIndex(at, _nextUnused) != at) return;
     setState(() {
+      if (at != null) {
+        _index = at;
+        _codeIndex = at;
+      }
       _codeAddr = addr;
       _codeArk = kept['ark']?.toString();
       _codeSeq = kept['sequentia']?.toString();
@@ -2103,10 +2149,77 @@ class _ReceiveTabState extends State<ReceiveTab> {
     debugPrint('[ambra-receive] the last code drawn, shown at once: ${_code?.length} chars');
   }
 
-  /// A new code on request; the one shown stays until the new one is ready.
+  /// A new code on request, at the next address ([nextReceiveIndex]); the one shown stays until
+  /// the new one is ready.
   void _newCode() {
+    setState(() => _index = nextReceiveIndex(_index, _nextUnused));
     _fresh = true;
+    if (_conf) unawaited(_drawConf());
     _onLeaves();
+  }
+
+  /// The confidential address at [_index]: the code while [_conf] is on.
+  Future<void> _drawConf() async {
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m == null) return;
+    final i = _index;
+    final a = (await core.receiveAddressAt(mnemonic: m, index: i, confidential: true)).address;
+    if (mounted && _conf && i == _index) setState(() => _confAddr = a);
+  }
+
+  /// BTC, and each asset the operator receives in over Lightning: what the amount can be in.
+  List<String> _recvChoices() =>
+      ['BTC', if (LeafService.instance.open) ...receivableAssets(LeafService.instance.info)];
+
+  /// The amount [text] of [asset] in atoms, or null when it is empty or not an amount.
+  BigInt? _assetAtoms(String asset, String text) {
+    if (asset == 'BTC') return _amountOf(text)?.$2;
+    final a = parseAtoms(text.trim(), SeqAssets.labelFor(asset).precision);
+    return a == null || a <= BigInt.zero ? null : a;
+  }
+
+  /// Whether an amount [text] of [asset] goes to the address straight away (ark_limits.dart),
+  /// and the sentence Receive says it with; null when it does not.
+  String? _largeWhyFor(String asset, String text) {
+    if (asset == 'BTC') return _largeWhy(text);
+    if (DevMode.instance.on) return null;
+    final atoms = _assetAtoms(asset, text);
+    if (atoms == null) return null;
+    final l = arkLimitsNow().asset, label = SeqAssets.labelFor(asset);
+    if (!goesToAddress(atoms: atoms, direct: l.direct, price: PriceService.instance.usdPrice(label.ticker), precision: label.precision)) {
+      return null;
+    }
+    return DefaultWords.byAddressLarge(usdFigure(directUsd(l)!));
+  }
+
+  /// The code's invoice in an asset is the leaf library's receive: once a payment is held for it
+  /// the wallet syncs, which claims it, and the code shows a new one; one that lapsed or failed
+  /// is drawn again.
+  Future<void> _watchAssetInvoice(String hash, int? until) async {
+    final mine = ++_invWatch;
+    while (mounted && mine == _invWatch) {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if (until != null && now >= until) break;
+      await Future<void>.delayed(const Duration(seconds: 5));
+      if (!mounted || mine != _invWatch) return;
+      Object? all;
+      try {
+        all = await LeafService.instance.run('lightning_receives');
+      } catch (_) {}
+      if (!mounted || mine != _invWatch) return;
+      final st = all is Map ? receiveState(all[hash], DateTime.now().millisecondsSinceEpoch ~/ 1000) : 'open';
+      if (st == 'open') continue;
+      if (st == 'paid') {
+        try {
+          await LeafService.instance.syncNow(by: 'receive');
+        } catch (_) {}
+      }
+      break;
+    }
+    if (mounted && mine == _invWatch) {
+      _invoiceSpent = true;
+      _onLeaves();
+    }
   }
 
   /// Draws a code when the wallet shows none, adds a way to be paid that opened since, and
@@ -2122,7 +2235,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
     // A code carrying an invoice is spent once BTC arrived on the ark: a new invoice then.
     final paid = ark.received;
     final invoicePaid = (paid != null && paid.hash == _codeInvoiceHash) ||
-        (_codeAmount.isNotEmpty && ark.open && ark.spendable + ark.arriving > _arkSeen);
+        (_codeAsset == 'BTC' && _codeAmount.isNotEmpty && ark.open && ark.spendable + ark.arriving > _arkSeen);
     if (paid != null && paid.hash == _codeInvoiceHash && _toldPaid != paid.hash) {
       _toldPaid = paid.hash;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2148,6 +2261,9 @@ class _ReceiveTabState extends State<ReceiveTab> {
         (ark.open && _codeArk == null && !_arkAsking) ||
         (l.open && _codeSeq == null && !_seqAsking) ||
         invoicePaid ||
+        _invoiceSpent ||
+        _codeIndex != _index ||
+        _recvAsset != _codeAsset ||
         _btcAmount.text.trim() != _codeAmount;
     if (!want) return;
     _drawing = true;
@@ -2192,15 +2308,20 @@ class _ReceiveTabState extends State<ReceiveTab> {
 
   /// The code from its parts as they stand. An amount that goes to the address straight away
   /// carries neither the ark's address nor an invoice: a wallet that is not this one pays it there.
+  /// An amount in an asset carries the asset's invoice and no `amount=`, which counts BTC. Without
+  /// an amount, a wallet with a payment name carries the name's LNURL-pay, which a Lightning
+  /// wallet pays in an amount it chooses.
   String? _compose() {
     final a = _codeAddr;
     if (a == null) return null;
-    final large = _largeWhy(_codeAmount) != null;
+    final large = _largeWhyFor(_codeAsset, _codeAmount) != null;
+    final some = _assetAtoms(_codeAsset, _codeAmount) != null;
     try {
       return PayCode(
               address: a,
-              amount: _amountOf(_codeAmount)?.$1,
+              amount: _codeAsset == 'BTC' ? _amountOf(_codeAmount)?.$1 : null,
               lightning: large ? null : _codeInvoice,
+              lnurl: some ? null : PaymentNameService.instance.lnurl,
               ark: large ? null : _codeArk,
               sequentia: _codeSeq)
           .build();
@@ -2228,13 +2349,16 @@ class _ReceiveTabState extends State<ReceiveTab> {
     try {
       final m = await WalletRepository.instance.readMnemonic();
       if (m == null) return;
-      if (_codeAddr == null || fresh) {
-        _codeAddr = (await core.receiveAddressAt(mnemonic: m, index: _index, confidential: false)).address;
-        if (_code == null) _show();
+      if (_codeAddr == null || fresh || _codeIndex != _index) {
+        final i = _index;
+        _codeAddr = (await core.receiveAddressAt(mnemonic: m, index: i, confidential: false)).address;
+        _codeIndex = i;
+        _show();
       }
       final ark = ArkBtcService.instance;
-      // The ark's address is asked apart too: the ark wallet may be busy with its own work.
-      if (ark.open && _codeArk == null && !_arkAsking) {
+      // The ark's address is asked apart too: the ark wallet may be busy with its own work. A new
+      // code asks a new one; the one shown stays until it is there.
+      if (ark.open && (_codeArk == null || fresh) && !_arkAsking) {
         _arkAsking = true;
         unawaited(ark.address().then((a) {
           if (!mounted) return;
@@ -2244,21 +2368,44 @@ class _ReceiveTabState extends State<ReceiveTab> {
       }
       // The amount's part first: it waits on the ark alone, never on the leaf wallet's own work.
       final text = _btcAmount.text.trim();
+      final asset = _recvAsset;
       final spent = _invoiceSpent;
       _invoiceSpent = false;
-      if (text != _codeAmount || _codeInvoice == null || fresh || spent) {
+      if (text != _codeAmount || asset != _codeAsset || _codeInvoice == null || fresh || spent) {
         _codeAmount = text;
+        _codeAsset = asset;
         _arkSeen = ark.spendable + ark.arriving;
         _codeInvoice = null;
         _codeInvoiceHash = null;
-        final amount = _amountOf(text);
-        // Nor an amount above the most the operator takes in one payment over Lightning
-        // (ln_max_payment.dart): the code then carries the address and the ark's, no invoice.
-        if (amount != null && ark.open && _largeWhy(text) == null && LeafService.instance.lnFitsNow('BTC', 'in', amount.$2)) {
-          try {
-            _codeInvoice = await ark.invoice(amount.$2);
-            _codeInvoiceHash = '${decodeBtcInvoice(_codeInvoice!)['payment_hash']}';
-          } catch (_) {}
+        _invWatch++;
+        if (asset == 'BTC') {
+          final amount = _amountOf(text);
+          // Nor an amount above the most the operator takes in one payment over Lightning
+          // (ln_max_payment.dart): the code then carries the address and the ark's, no invoice.
+          if (amount != null && ark.open && _largeWhy(text) == null && LeafService.instance.lnFitsNow('BTC', 'in', amount.$2)) {
+            try {
+              _codeInvoice = await ark.invoice(amount.$2);
+              _codeInvoiceHash = '${decodeBtcInvoice(_codeInvoice!)['payment_hash']}';
+            } catch (_) {}
+          }
+        } else {
+          // An amount in an asset: the operator's invoice in it, paid into the wallet's leaf (the
+          // leaf library's `lightning_receive`), which a wallet of another operator pays.
+          final atoms = _assetAtoms(asset, text);
+          final key = '$asset:$atoms';
+          if (atoms != null && _invFailed != key && _largeWhyFor(asset, text) == null &&
+              _recvChoices().contains(asset) && LeafService.instance.lnFitsNow(asset, 'in', atoms)) {
+            try {
+              final inv = await LeafService.instance
+                  .run('lightning_receive', {'asset': asset, 'amount': '$atoms', 'description': 'Receive'}) as Map;
+              _codeInvoice = '${inv['invoice']}';
+              _codeInvoiceHash = '${inv['payment_hash']}';
+              unawaited(_watchAssetInvoice(_codeInvoiceHash!, (inv['expires_at'] as num?)?.toInt()));
+            } catch (e) {
+              _invFailed = key;
+              debugPrint('[ambra-receive] no invoice in the asset: $e');
+            }
+          }
         }
         _show();
       }
@@ -2282,7 +2429,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
             _paidAt = LeafService.instance.arrivedCount;
             _show();
             await WalletCache.saveReceiveCode(
-                {'address': _codeAddr, 'ark': _codeArk, 'sequentia': _codeSeq, 'until': _codeUntil});
+                {'address': _codeAddr, 'index': _codeIndex, 'ark': _codeArk, 'sequentia': _codeSeq, 'until': _codeUntil});
           }).whenComplete(() {
             _seqAsking = false;
             if (_seqStale) _onLeaves();
@@ -2290,18 +2437,21 @@ class _ReceiveTabState extends State<ReceiveTab> {
         }
       }
       await WalletCache.saveReceiveCode(
-          {'address': _codeAddr, 'ark': _codeArk, 'sequentia': _codeSeq, 'until': _codeUntil});
+          {'address': _codeAddr, 'index': _codeIndex, 'ark': _codeArk, 'sequentia': _codeSeq, 'until': _codeUntil});
     } catch (e) {
       // The code shown stays; the next change of the wallet's state tries again.
       debugPrint('[ambra-receive] the code not drawn now: $e');
     }
   }
 
+  /// A scan saw the address shown used (on either chain): the code moves to the next unused one.
   void _onUnified() {
     final next = BtcState.instance.unifiedNext;
     if (next > _index && mounted) {
       setState(() => _index = next);
       _load();
+      if (_conf) unawaited(_drawConf());
+      _onLeaves();
     }
   }
 
@@ -2311,6 +2461,9 @@ class _ReceiveTabState extends State<ReceiveTab> {
     LeafService.instance.removeListener(_onLeaves);
     ArkBtcService.instance.removeListener(_onLeaves);
     DevMode.instance.removeListener(_onMode);
+    PaymentNameService.instance.removeListener(_onName);
+    PaymentNameService.instance.receiveIndex = () => BtcState.instance.unifiedNext;
+    _invWatch++;
     _amountDebounce?.cancel();
     _btcAmount.dispose();
     super.dispose();
@@ -2354,6 +2507,30 @@ class _ReceiveTabState extends State<ReceiveTab> {
     }
   }
 
+  /// What Receive shows as its code: the confidential address while [_conf] is on, else the code.
+  String? get _shown => _conf ? _confAddr : _code;
+
+  /// The menu of what the amount is in: BTC, and each asset the operator receives in.
+  Widget _assetMenu() {
+    final choices = _recvChoices();
+    final value = choices.contains(_recvAsset) ? _recvAsset : 'BTC';
+    return DropdownButton<String>(
+      key: const Key('receive-amount-asset'),
+      value: value,
+      underline: const SizedBox.shrink(),
+      dropdownColor: AmbraColors.panel,
+      items: [
+        for (final id in choices)
+          DropdownMenuItem(value: id, child: Text(id == 'BTC' ? 'BTC' : SeqAssets.labelFor(id).ticker, style: AmbraText.body)),
+      ],
+      onChanged: (v) {
+        if (v == null || v == _recvAsset) return;
+        setState(() => _recvAsset = v);
+        _onLeaves();
+      },
+    );
+  }
+
   void _copy(String text, String msg) {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -2367,16 +2544,23 @@ class _ReceiveTabState extends State<ReceiveTab> {
         const Text('Receive', style: AmbraText.h1),
         const SizedBox(height: 20),
         if (_codeMode) ...[
-          if (_code != null) ...[
+          if (_shown != null) ...[
             Center(
               child: Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
-                child: QrImageView.withQr(
-                    key: const Key('receive-code-qr'),
-                    qr: payCodeQr(_code!),
-                    size: 288,
-                    backgroundColor: Colors.white),
+                child: _conf
+                    ? QrImageView(
+                        key: const Key('receive-code-qr'),
+                        data: _confAddr!,
+                        version: QrVersions.auto,
+                        size: 288,
+                        backgroundColor: Colors.white)
+                    : QrImageView.withQr(
+                        key: const Key('receive-code-qr'),
+                        qr: payCodeQr(_code!),
+                        size: 288,
+                        backgroundColor: Colors.white),
               ),
             ),
             const SizedBox(height: 18),
@@ -2385,19 +2569,21 @@ class _ReceiveTabState extends State<ReceiveTab> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               const SectionLabel(DefaultWords.receiveCode),
               const SizedBox(height: 12),
-              if (_code == null)
+              if (_shown == null)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 18),
                   child: Center(child: CircularProgressIndicator(color: AmbraColors.amber)),
                 )
               else ...[
-                const Text(DefaultWords.receiveCodeLine, style: AmbraText.sub),
-                const SizedBox(height: 14),
+                if (!_conf) ...[
+                  const Text(DefaultWords.receiveCodeLine, style: AmbraText.sub),
+                  const SizedBox(height: 14),
+                ],
                 SecondaryButton(
                   key: const Key('receive-code-copy'),
                   label: DefaultWords.copyCode,
                   icon: Icons.copy,
-                  onPressed: () => _copy(_code!, DefaultWords.codeCopied),
+                  onPressed: () => _copy(_shown!, DefaultWords.codeCopied),
                 ),
                 const SizedBox(height: 10),
                 SecondaryButton(
@@ -2406,23 +2592,44 @@ class _ReceiveTabState extends State<ReceiveTab> {
                   icon: Icons.refresh,
                   onPressed: _newCode,
                 ),
-                if (ArkBtcService.instance.open) ...[
+                if (!_conf && (ArkBtcService.instance.open || _recvChoices().length > 1)) ...[
                   const SizedBox(height: 14),
                   AmbraField(
                       key: const Key('receive-btc-amount'),
-                      label: DefaultWords.amountInBtc,
+                      label: _recvAsset == 'BTC' ? DefaultWords.amountInBtc : DefaultWords.amountOptional,
                       controller: _btcAmount,
                       hint: '0.0',
-                      onChanged: _onAmount),
-                  if (_largeWhy(_codeAmount) != null) ...[
+                      onChanged: _onAmount,
+                      suffix: _recvChoices().length > 1 ? _assetMenu() : null),
+                  if (_largeWhyFor(_codeAsset, _codeAmount) != null) ...[
                     const SizedBox(height: 8),
-                    Text(_largeWhy(_codeAmount)!, key: const Key('receive-why'), style: AmbraText.sub),
+                    Text(_largeWhyFor(_codeAsset, _codeAmount)!, key: const Key('receive-why'), style: AmbraText.sub),
                   ],
                 ],
               ],
+              const SizedBox(height: 6),
+              SwitchListTile(
+                key: const Key('receive-confidential'),
+                contentPadding: EdgeInsets.zero,
+                activeThumbColor: AmbraColors.amber,
+                value: _conf,
+                onChanged: (v) {
+                  setState(() {
+                    _conf = v;
+                    _confAddr = null;
+                  });
+                  if (v) unawaited(_drawConf());
+                },
+                title: const Text(DefaultWords.confidential, style: AmbraText.body),
+                subtitle: const Text(DefaultWords.confidentialLine, style: AmbraText.sub),
+              ),
+              if (_conf) Text(DefaultWords.confidentialOn, key: const Key('receive-confidential-on'), style: AmbraText.sub),
             ]),
           ),
-
+          if (PaymentNameService.instance.available) ...[
+            const SizedBox(height: 18),
+            const PaymentNameCard(),
+          ],
         ] else ...[
         if (_address != null) ...[
           Center(
@@ -2500,8 +2707,8 @@ class _ReceiveTabState extends State<ReceiveTab> {
           onPressed: _address == null
               ? null
               : () {
-                  _index++;
-                  BtcState.instance.bumpTo(_index); // keep the cross-chain cycle in step
+                  // The next address, within what a scan from the phrase finds (nextReceiveIndex).
+                  setState(() => _index = nextReceiveIndex(_index, _nextUnused));
                   _load();
                 },
         ),
@@ -2517,6 +2724,10 @@ class _ReceiveTabState extends State<ReceiveTab> {
           title: const Text('Show confidential address', style: AmbraText.body),
           subtitle: const Text('A private address that hides the amount and asset.', style: AmbraText.sub),
         ),
+        if (PaymentNameService.instance.available) ...[
+          const SizedBox(height: 18),
+          const PaymentNameCard(),
+        ],
         const SizedBox(height: 18),
         const AccountKeyCard(),
         // General Lightning receive — generate a BOLT11 into the user's own hosted node. Mounted
@@ -2661,6 +2872,7 @@ class MoreTab extends StatelessWidget {
       // its own.
       await LeafService.instance.forget();
       ArkBtcService.instance.stop();
+      PaymentNameService.instance.stop();
       await WalletRepository.instance.removeWallet();
       await WalletCache.clear();
       StakeHoldings.instance.clear();
