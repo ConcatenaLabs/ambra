@@ -410,8 +410,11 @@ module that implements it.
     code or a name (an address, an invoice, an account id) takes the path it always took.
     An address send the chain cannot cover is paid out of the leaves (the library's
     `offboard_quote`, then `offboard` on the quote shown): "Send <amt> <TICKER>?", "It
-    arrives in a few minutes." (the operator's round interval), and the fee when there is
-    one. A quote the library refuses reads "This amount can't be sent to an address right
+    arrives within <N> minutes." (the most the whole way to the other wallet takes: the
+    operator's round interval, four blocks and four minutes, rounded up to five minutes,
+    `addressArrivalMinutes`; ten on the testnet), and the fee when there is one. The same
+    amount to the same address asked again while the first is on its way is that first
+    payment: the wallet says it is already on its way and sends nothing more. A quote the library refuses reads "This amount can't be sent to an address right
     now. Send it to a receive code, or pay an invoice."
     A confidential address (`tsqb1…`) is paid on the chain so that its amount is hidden
     (`confidential_pay.dart`, the web wallet's `confidential-pay.js`): beside the payment, a
@@ -431,7 +434,10 @@ module that implements it.
     same asset, on the fee quoted), never while something a person asked for runs or in
     the minute after it, since the leaf wallet spends the same addresses' coins, nor while
     coins moved out for a person's payment, stake or mix wait to be used (up to an hour). What is
-    not final yet shows as "<amount> <ticker> arriving" under the asset's figure. Before
+    not final yet shows as "<amount> <ticker> arriving" under the asset's figure. The
+    coins a board spends come off the chain's part of the figure only until a scan begun
+    after the board reads the chain (`onchainLessBoards`), so a coin that reached the
+    address meanwhile stays in the figure. Before
     boarding, the leaf wallet is handed keys (its `address` command) until it has handed
     out as many as the main wallet, so it reads every key the balance can show a coin at:
     it finds its on-chain coins by a gap past the last key holding an unspent coin, the

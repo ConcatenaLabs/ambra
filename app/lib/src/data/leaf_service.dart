@@ -565,18 +565,36 @@ class LeafService extends ChangeNotifier {
   final Map<String, ({BigInt spent, BigInt below, DateTime at})> _boardSpent = {};
 
   @visibleForTesting
-  void debugBoarded(String asset, {required BigInt spent, required BigInt held}) =>
-      _boardSpent[asset] = (spent: spent, below: held - spent, at: DateTime.now());
+  void debugBoarded(String asset, {required BigInt spent, required BigInt held, DateTime? at}) =>
+      _boardSpent[asset] = (spent: spent, below: held - spent, at: at ?? DateTime.now());
 
   /// [onchain] atoms of [asset] as the main wallet's chain reading shows them, less what a board
-  /// the wallet just made spent and that reading does not show spent yet (it sees a spend once
-  /// confirmed, a block later): the board's coins are counted as arriving in the leaves
-  /// meanwhile, never twice. Taken as seen once the reading drops to what the board left, or
-  /// after half an hour.
-  BigInt onchainLessBoards(String asset, BigInt onchain) {
+  /// the wallet just made spent and that reading does not hold yet: the board's coins are counted
+  /// as arriving in the leaves meanwhile, never twice.
+  ///
+  /// [readFrom] is when the scan that made that reading began. A scan begun after the board was
+  /// broadcast holds it (its spend, and any coin that reached the address since), so the reading
+  /// is taken as it is from then on. Before that, only what the reading still holds of the coins
+  /// the board spent comes off: the library read `held` (below + spent) when it boarded, and a
+  /// reading short of that has not seen part of them yet. Comparing the reading with what the
+  /// board left instead read a coin arriving after the board as the board's own, and it vanished
+  /// from the figure until the next board or half an hour (sequentia-web-wallet#574). Without
+  /// [readFrom] the board is taken as seen once the reading drops to what it left. Never longer
+  /// than half an hour. The web wallet's `onchainLessBoards` (default-arca.js).
+  BigInt onchainLessBoards(String asset, BigInt onchain, {DateTime? readFrom}) {
     final b = _boardSpent[asset];
     if (b == null) return onchain;
-    if (onchain <= b.below || DateTime.now().difference(b.at) > const Duration(minutes: 30)) {
+    if (DateTime.now().difference(b.at) > const Duration(minutes: 30) || (readFrom != null && readFrom.isAfter(b.at))) {
+      _boardSpent.remove(asset);
+      return onchain;
+    }
+    if (readFrom != null) {
+      final held = b.below + b.spent;
+      final missing = held > onchain ? held - onchain : BigInt.zero;
+      final off = b.spent > missing ? b.spent - missing : BigInt.zero;
+      return onchain - off;
+    }
+    if (onchain <= b.below) {
       _boardSpent.remove(asset);
       return onchain;
     }
@@ -653,13 +671,13 @@ class LeafService extends ChangeNotifier {
     return d is num ? d.toInt() : null;
   }
 
-  /// The operator's round interval in whole minutes (`info.fills.round_interval_seconds`),
-  /// or null when it publishes none: how long a payment to an address takes.
-  int? roundMinutes() {
+  /// How long a payment to an address out of the tree takes to reach the other wallet's figure,
+  /// in whole minutes, from the operator's `info.fills` ([addressArrivalMinutes]), or null when
+  /// it publishes no round interval.
+  int? addressMinutes() {
     final si = info?['server_info'];
     final fills = si is Map && si['fills'] is Map ? si['fills'] as Map : (info?['fills'] is Map ? info!['fills'] as Map : null);
-    final s = fills?['round_interval_seconds'];
-    return s is num && s > 0 ? (s / 60).ceil() : null;
+    return addressArrivalMinutes(fills?['round_interval_seconds'], fills?['block_seconds']);
   }
 
   /// Whether one payment of [atoms] of [kind] ('BTC', or an asset id) fits the most the operator
@@ -1904,6 +1922,29 @@ Future<(BigInt, BigInt)?> boardAll(Future<dynamic> Function(String, [Map<String,
   }
   return null;
 }
+
+/// The most minutes a payment to an address out of the tree takes to reach the receiving
+/// wallet's figure, from the operator's interval between settlements ([roundSeconds]) and the
+/// chain's block interval ([blockSeconds], 60 when it says none). The whole way, not the
+/// settlement alone: the settlement's block, the paying wallet handing over its part once that
+/// block is in, the operator's payment to the address and its block, and the wallets' own passes
+/// and reads of the chain: four blocks and four minutes beside the settlement, rounded up to five
+/// minutes. On the testnet (a settlement a minute, a block a minute) that is ten minutes; payments
+/// measured there took four to seven. The web wallet's `arrivalMinutes` (default-arca.js).
+int? addressArrivalMinutes(Object? roundSeconds, Object? blockSeconds) {
+  final n = roundSeconds is num ? roundSeconds : num.tryParse('${roundSeconds ?? ''}');
+  if (n == null || n <= 0) return null;
+  final b0 = blockSeconds is num ? blockSeconds : num.tryParse('${blockSeconds ?? ''}');
+  final b = b0 != null && b0 > 0 ? b0 : 60;
+  final m = ((n + 4 * b + 240) / 60).ceil();
+  final five = (m / 5).ceil() * 5;
+  return five < 5 ? 5 : five;
+}
+
+/// Whether the library's answer to an `offboard` is a payment already on its way: the same amount
+/// of the same asset to the same address asked while the first is still under way, which the
+/// library goes on with and does not send again. The web wallet's `offboardOutcome`.
+bool offboardAlready(Object? answer) => answer is Map && answer['already'] == true;
 
 /// A board quote's fee in atoms of the boarded asset (`{"fee": {"asset", "amount"}}`).
 BigInt? boardFee(Object? quote) {

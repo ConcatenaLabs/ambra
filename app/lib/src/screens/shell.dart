@@ -217,6 +217,9 @@ class BalanceTab extends StatefulWidget {
 
 class _BalanceTabState extends State<BalanceTab> {
   core.WalletSync? _sync;
+  /// When the scan that gave [_sync] began: a board the leaf wallet broadcast before it is held
+  /// in that reading (LeafService.onchainLessBoards).
+  DateTime? _syncFrom;
   core.BtcBalance? _btc; // parent-chain (testnet4) balance, first-class like any asset
   String? _btcCachedSats; // last-known BTC sats from disk, shown if a fresh scan fails
   bool _btcStale = false; // true when the shown BTC balance is last-known (scan failed)
@@ -333,6 +336,7 @@ class _BalanceTabState extends State<BalanceTab> {
       // Lightning). Non-blocking so the balance render never waits on the LSP.
       final lnBalances = _sync?.balances ?? _cachedBalances ?? const <core.AssetBalance>[];
       unawaited(_refreshLn(m, lnBalances));
+      final from = DateTime.now();
       final s = await core.syncWallet(mnemonic: m, esploraUrl: Backend.esplora);
       final btc = await btcF;
       final amp = await ampF;
@@ -349,6 +353,7 @@ class _BalanceTabState extends State<BalanceTab> {
       if (mounted) {
         setState(() {
           _sync = s;
+          _syncFrom = from;
           _openamp = amp;
           _lastSync = DateTime.now();
           _syncFailed = false;
@@ -425,7 +430,8 @@ class _BalanceTabState extends State<BalanceTab> {
     final vesting = vestingAtomsOf(vestingLines);
     final onchainOf = {
       for (final b in onchainBalances ?? const <core.AssetBalance>[])
-        b.assetId: LeafService.instance.onchainLessBoards(b.assetId, BigInt.tryParse(b.atoms) ?? BigInt.zero)
+        b.assetId: LeafService.instance.onchainLessBoards(b.assetId, BigInt.tryParse(b.atoms) ?? BigInt.zero,
+            readFrom: _sync != null ? _syncFrom : null)
     };
     final chans = _lnChannels.cast<Map>();
     // What is on its way from a channel to the tree stays in the figure until its leaf counts.

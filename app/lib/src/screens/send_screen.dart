@@ -801,7 +801,7 @@ class _SendTabState extends State<SendTab> {
     if (!mounted) return;
     final amountStr = formatAtoms(atoms.toString(), label.precision);
     final feeAtoms = BigInt.tryParse('${(quote['fee'] is Map) ? (quote['fee'] as Map)['amount'] : 0}') ?? BigInt.zero;
-    final arrives = DefaultWords.arrivesIn(LeafService.instance.roundMinutes());
+    final arrives = DefaultWords.arrivesIn(LeafService.instance.addressMinutes());
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -823,12 +823,17 @@ class _SendTabState extends State<SendTab> {
     if (ok != true || !mounted) return;
     setState(() => _sendingInTree = true);
     try {
-      await LeafService.instance.pay('offboard', {...args, 'shown': quote}, true);
-      unawaited(_logSent(label.ticker, atoms, label.precision, 'address'));
+      final v = await LeafService.instance.pay('offboard', {...args, 'shown': quote}, true);
+      // The same payment asked again while the first is on its way is that first one: nothing
+      // more is sent or written down, and the person is told so, never "Sent" a second time.
+      final already = offboardAlready(v);
+      if (!already) unawaited(_logSent(label.ticker, atoms, label.precision, 'address'));
       if (!mounted) return;
       _addr.clear();
       _amount.clear();
-      ScaffoldMessenger.of(context).showSnackBar(ambraSnack(DefaultWords.sentThen(amountStr, label.ticker, arrives)));
+      ScaffoldMessenger.of(context).showSnackBar(ambraSnack(already
+          ? DefaultWords.sentAlready(amountStr, label.ticker, arrives)
+          : DefaultWords.sentThen(amountStr, label.ticker, arrives)));
       await LeafService.instance.refresh();
     } catch (e) {
       if (mounted) _snack(LeafRefusal.of(e).message);

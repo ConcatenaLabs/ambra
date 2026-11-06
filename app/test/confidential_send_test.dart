@@ -44,8 +44,8 @@ void main() {
   });
 
   test('what the screen says while the coins move is the contract\'s sentence', () {
-    expect(DefaultWords.movingOut('1.00004 USDX', DefaultWords.confidentialPurpose, 1),
-        'Moving 1.00004 USDX out of the Ark so it can be sent confidentially. They are ready in a few minutes. Keep this screen open.');
+    expect(DefaultWords.movingOut('1.00004 USDX', DefaultWords.confidentialPurpose, 10),
+        'Moving 1.00004 USDX out of the Ark so it can be sent confidentially. They are ready within 10 minutes. Keep this screen open.');
     expect(DefaultWords.notEnough('1', 'USDX'), 'Not enough USDX: 1 USDX short.');
     // A stake says the same sentences.
     expect(StakeWords.movingOut('1 tSEQ', StakeWords.purposeStake), DefaultWords.movingOut('1 tSEQ', 'staked', null));

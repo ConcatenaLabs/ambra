@@ -129,7 +129,7 @@ Future<bool> ensureOnChain({
     final fundable = operatorFundable(leaves.info, asset);
     if (fundable != null && pays > fundable) throw OnChainRefusal(DefaultWords.cannotMoveNow(words(missing)));
     moving = missing;
-    say(DefaultWords.movingOut(words(missing), purpose, leaves.roundMinutes()));
+    say(DefaultWords.movingOut(words(missing), purpose, leaves.addressMinutes()));
     // The wallet's own boarding leaves these coins on the chain while they move, and after.
     leaves.keepOnChain(kMoveWait + kKeepOnChain);
     debugPrint('[on chain] moving $missing out');
@@ -141,7 +141,7 @@ Future<bool> ensureOnChain({
     }
   } else {
     leaves.keepOnChain(kMoveWait + kKeepOnChain);
-    say(DefaultWords.movingOut(words(coming), purpose, leaves.roundMinutes()));
+    say(DefaultWords.movingOut(words(coming), purpose, leaves.addressMinutes()));
   }
   final until = DateTime.now().add(kMoveWait);
   var n = 0;
