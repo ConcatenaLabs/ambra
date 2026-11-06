@@ -294,8 +294,9 @@ const int kReadyTries = 90;
 const Duration kConfirmShownFor = Duration(milliseconds: 1500);
 
 /// How long a person waits on Review at most, whatever a source or the wallet is doing: then a
-/// plain reason (the engine's own deadline is shorter; this is the last guard).
-const Duration kReviewAtMost = Duration(seconds: 25);
+/// plain reason (the engine's own deadline, [kQuoteFirmMs] from the asking and [kQuoteReadMs] more
+/// for its own check of a price it was given, is shorter; this is the last guard).
+const Duration kReviewAtMost = Duration(seconds: 60);
 
 class _UserComposerState extends State<UserComposer> {
   String? _pay, _get;
@@ -308,6 +309,8 @@ class _UserComposerState extends State<UserComposer> {
   Ticket? _ticket;
   Candidate? _choice;
   bool _busy = false;
+  /// Review has run past the makers' window: the wallet still checks a price it was given.
+  bool _pricingLong = false;
   String? _note, _error;
   List<Map<String, dynamic>> _trades = [];
   List<String> _admitted = [];
@@ -580,6 +583,10 @@ class _UserComposerState extends State<UserComposer> {
     setState(() {
       _busy = true;
       _reviewing = true;
+      _pricingLong = false;
+    });
+    final longTimer = Timer(const Duration(milliseconds: kQuoteFirmMs + 1000), () {
+      if (mounted && _busy && _ticket == null) setState(() => _pricingLong = true);
     });
     final t0 = DateTime.now();
     var again = false;
@@ -625,10 +632,12 @@ class _UserComposerState extends State<UserComposer> {
       debugPrint('[user composer] quote: $e');
       if (mounted) setState(() => _error = e is LeafRefusal && e.plain ? e.message : UserWords.notOffered(widget.ticker(get), widget.ticker(pay)));
     } finally {
+      longTimer.cancel();
       if (mounted) {
         setState(() {
           _busy = false;
           _reviewing = false;
+          _pricingLong = false;
         });
       }
     }
@@ -908,7 +917,7 @@ class _UserComposerState extends State<UserComposer> {
       const SizedBox(height: 12),
       if (t == null)
         FilledButton(key: const ValueKey('ucReview'), onPressed: _busy || _pay == null || _get == null ? null : _review,
-            child: Text(_busy ? UserWords.pricing : UserWords.review))
+            child: Text(_busy ? (_pricingLong ? UserWords.pricingLong : UserWords.pricing) : UserWords.review))
       else
         Row(children: [
           FilledButton(key: const ValueKey('ucConfirm'), onPressed: _busy ? null : _confirm, child: Text(_busy ? UserWords.sending : UserWords.confirm)),

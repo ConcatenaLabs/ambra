@@ -24,7 +24,12 @@ class StandIn {
   bool away = false;
   String? stored;
 
+  /// Commands that answer only after this long (ms): the wallet's library busy with something else.
+  final slowCommands = <String, int>{};
+
   Future<dynamic> run(String cmd, Map<String, dynamic> a) async {
+    final wait = slowCommands[cmd];
+    if (wait != null) await Future<void>.delayed(Duration(milliseconds: wait));
     switch (cmd) {
       case 'coins':
         return [for (final c in coins) Map<String, dynamic>.from(c)];
@@ -120,7 +125,7 @@ class StandIn {
   }
 
   UserTradeEngine engine({List<String> sources = const ['leaf-maker'], List<String> makers = const ['http://m'], required int Function() now,
-          Future<BigInt> Function(String)? held, void Function(String)? prepare, int? Function()? anchorDepth, int? quoteFirmMs}) =>
+          Future<BigInt> Function(String)? held, void Function(String)? prepare, int? Function()? anchorDepth, int? quoteFirmMs, int? quoteReadMs}) =>
       UserTradeEngine(UserTradeDeps(
         run: run,
         fetchJson: fetchJson,
@@ -146,6 +151,7 @@ class StandIn {
         prepare: prepare,
         anchorDepth: anchorDepth,
         quoteFirmMs: quoteFirmMs,
+        quoteReadMs: quoteReadMs,
       ));
 }
 
@@ -173,6 +179,32 @@ void main() {
     expect(q.why, 'no-firm-offer');
     expect(DateTime.now().difference(t0).inMilliseconds, lessThan(1500));
     expect(forbiddenIn(UserWords.noFirmOffer), isEmpty);
+  });
+
+  // TR1: the wallet's library answers one command at a time, and a quote's steps on it (what it can
+  // pay, its check of an offer) waited behind a sync and ate the makers' window (ambra#227).
+  test('quote: an offer that came in time is priced although the wallet\'s check of it waits behind its library', () async {
+    final s = StandIn()..slowCommands['swap_read'] = 300;
+    final eng = s.engine(now: () => DateTime.now().millisecondsSinceEpoch, quoteFirmMs: 100, quoteReadMs: 2000);
+    final t0 = DateTime.now();
+    final q = await eng.quote(pay: x, receive: y, amount: BigInt.from(400000));
+    expect(q.ok, isTrue, reason: q.why);
+    expect(DateTime.now().difference(t0).inMilliseconds, greaterThanOrEqualTo(300));
+  });
+
+  test('quote: what the wallet can pay is taken from its last reading while fresh, never waited for', () async {
+    final s = StandIn();
+    final eng = s.engine(now: () => DateTime.now().millisecondsSinceEpoch);
+    final q1 = await eng.quote(pay: x, receive: y, amount: BigInt.from(400000));
+    expect(q1.ok, isTrue, reason: q1.why);
+    eng.drop(q1.choice!);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    s.slowCommands['coins'] = 1000;
+    s.slowCommands['plans'] = 1000;
+    final t0 = DateTime.now();
+    final q2 = await eng.quote(pay: x, receive: y, amount: BigInt.from(400000));
+    expect(q2.ok, isTrue, reason: q2.why);
+    expect(DateTime.now().difference(t0).inMilliseconds, lessThan(600));
   });
 
   // #165: a trade being confirmed is not looked for by a pass over open trades meanwhile (which
