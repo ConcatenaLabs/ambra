@@ -541,7 +541,11 @@ class _SendTabState extends State<SendTab> {
     if (atoms >= (BigInt.one << 64)) return _snack('Amount is too large.'); // u64 FFI guard
     final notVested = _notVested(atoms);
     if (notVested != null) return _snack(notVested);
-    final bal = BigInt.tryParse(_selected?.atoms ?? '0') ?? BigInt.zero;
+    final read = BigInt.tryParse(_selected?.atoms ?? '0') ?? BigInt.zero;
+    // What a board just spent is not the chain's to pay from, though this reading may still list
+    // it: the chain is only tried with what is left beside the board, so a payment right after a
+    // board never signs a spent coin.
+    final bal = DevMode.instance.on ? read : LeafService.instance.onchainLessBoards(_assetId, read);
     // Default mode: a payment to a confidential address is made so that its amount is hidden
     // (confidential_pay.dart, the web wallet's Send): on the chain, beside a second blinded output
     // to the wallet's own confidential address. When the chain holds too little, a round amount is
