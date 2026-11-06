@@ -11,8 +11,6 @@
 //     --target=integration_test/receive_drive_test.dart -d <device> --dart-define=AMBRA_RECEIVE_DRIVE=true
 //
 // Without AMBRA_RECEIVE_DRIVE it does nothing: it needs the live testnet and makes a payment name.
-import 'dart:math';
-
 import 'package:ambra/src/data/ark_btc_service.dart';
 import 'package:ambra/src/data/dev_mode.dart';
 import 'package:ambra/src/data/leaf_service.dart';
@@ -69,15 +67,17 @@ void main() {
     expect(a2, isNot(equals(a1)));
     await binding.takeScreenshot('ambra-2-new-code');
 
-    final name = 'am5m${Random().nextInt(1 << 30).toRadixString(36)}';
-    await PaymentNameService.instance.register(name);
+    // Get a name: the wallet's word name, shown with a capital for each word.
+    await PaymentNameService.instance.claimWordName();
+    expect(PaymentNameService.instance.isWordName, isTrue);
+    note('word name: ${PaymentNameService.instance.display}');
     note('name: ${PaymentNameService.instance.address}');
     await until(() => false, 8);
     expect(find.byKey(const Key('receive-name-qr')), findsOneWidget);
     expect(find.byKey(const Key('receive-name-public')), findsOneWidget);
     expect(find.byKey(const Key('receive-code-new')), findsNothing);
     // One card says the name once: no second name card under it while the name view is on.
-    expect(find.text(PaymentNameService.instance.address!), findsOneWidget);
+    expect(find.text(PaymentNameService.instance.display!), findsOneWidget);
     expect(find.byKey(const Key('receive-name-remove')), findsOneWidget);
     await binding.takeScreenshot('ambra-3-name');
     final stocked = await until(() => PaymentNameService.instance.stocked >= 10, 120);

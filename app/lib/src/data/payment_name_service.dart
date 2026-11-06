@@ -43,6 +43,12 @@ class PaymentNameService extends ChangeNotifier {
   bool get available => _a != null;
   String? get name => _a?.name;
   String? get address => _a?.address;
+
+  /// The name as a person reads it: a word name with a capital for each word.
+  String? get display => _a?.display;
+
+  /// Whether the name held is this wallet's word name.
+  bool get isWordName => _a?.isWordName ?? false;
   String? get lnurl => _a?.lnurl;
 
   /// How many signed codes this wallet has left with the service, as last topped up.
@@ -110,6 +116,13 @@ class PaymentNameService extends ChangeNotifier {
   }
 
   Future<void> release() async => _a?.release();
+
+  /// Gives the wallet its word name in one step (Get a name, Use a word name instead).
+  Future<String> claimWordName() async {
+    final a = _a;
+    if (a == null) throw const LnAddressError('The name could not be saved. Check your connection and try again.');
+    return a.claimWordName();
+  }
 
   /// The key each payment name was first paid at, for the wallet now open: Send refuses a code
   /// under another key (lnaddr.dart [resolveLnAddress]).

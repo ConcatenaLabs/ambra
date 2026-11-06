@@ -348,6 +348,15 @@ module that implements it.
     once to a Sequentia wallet paying the name, open or closed, then the most recent again,
     paid without its single-use part. Developer mode calls it **Lightning address**. Only the
     default node has names.
+    Without a name the card offers **Get a name**, with **Choose your own** as a quiet link.
+    **Get a name** gives the wallet its word name in one tap (`word_name.dart`, the web wallet's
+    `word-name.js`): two words from a list, written together and shown with a capital for each
+    word (`AmberFalcon@sequentiatestnet.com`), derived from the name's key, so a wallet restored
+    from its phrase gets the same name back; a third word is added only when the two-word name is
+    taken. The QR code, Copy and every lookup use the name in lower case, and lookups ignore case.
+    The words are the EFF short wordlist less every BIP39 word, so no word of a recovery phrase is
+    ever part of a public name (credit in `NOTICE`). A wallet holding a name of its own choosing
+    sees **Use a word name instead**, a quiet link that swaps it for its word name.
   - With a name, no amount and Confidential off, Receive shows the **name** as its QR code
     (`nameQrText`: the bare `name@domain` in lower case, the spelling every wallet that pays
     names reads from a scan), as one card that says the name once: the name, "Any asset, any

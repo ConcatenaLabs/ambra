@@ -66,6 +66,34 @@ class _PaymentNameCardState extends State<PaymentNameCard> {
     }
   }
 
+  /// Get a name / Use a word name instead: the wallet's word name, in one tap.
+  Future<void> _words() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _status = null;
+    });
+    try {
+      await PaymentNameService.instance.claimWordName();
+      _editing = false;
+    } catch (e) {
+      _status = '$e';
+      _err = true;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Widget _quiet(Key key, String label, VoidCallback? onPressed) => Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton(
+          key: key,
+          style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 4), foregroundColor: AmbraColors.dim),
+          onPressed: onPressed,
+          child: Text(label, style: const TextStyle(decoration: TextDecoration.underline, color: AmbraColors.dim)),
+        ),
+      );
+
   Future<void> _remove() async {
     if (_busy) return;
     setState(() {
@@ -112,28 +140,35 @@ class _PaymentNameCardState extends State<PaymentNameCard> {
                     _editing = false;
                     _status = null;
                   })),
-        ] else if (name == null)
-          SecondaryButton(
-            key: const Key('payment-name-choose'),
-            label: NameWords.choose,
-            icon: Icons.alternate_email,
-            onPressed: () => setState(() {
-              _editing = true;
-              _status = null;
-            }),
-          )
-        else ...[
-          SelectableText(name, key: const Key('payment-name-address'), style: AmbraText.mono.copyWith(fontSize: 15)),
+        ] else if (name == null) ...[
+          // Get a name: the wallet's word name in one tap; Choose your own, a quiet link.
+          PrimaryButton(
+            key: const Key('payment-name-get'),
+            label: _busy ? NameWords.getting : NameWords.getName,
+            busy: _busy,
+            onPressed: _words,
+          ),
+          const SizedBox(height: 4),
+          _quiet(const Key('payment-name-choose'), NameWords.choose, _busy
+              ? null
+              : () => setState(() {
+                    _editing = true;
+                    _status = null;
+                  })),
+        ] else ...[
+          // Shown with a capital for each word of a word name; copied in lower case, as the QR holds it.
+          SelectableText(svc.display ?? name, key: const Key('payment-name-address'), style: AmbraText.mono.copyWith(fontSize: 15)),
           const SizedBox(height: 12),
           SecondaryButton(
             label: NameWords.copy,
             icon: Icons.copy,
             onPressed: () {
-              Clipboard.setData(ClipboardData(text: name));
+              Clipboard.setData(ClipboardData(text: nameQrText(name)));
               ScaffoldMessenger.of(context).showSnackBar(ambraSnack(NameWords.copied));
             },
           ),
           GhostButton(label: _busy ? NameWords.removing : NameWords.remove, onPressed: _remove),
+          if (!svc.isWordName) _quiet(const Key('payment-name-words'), _busy ? NameWords.getting : NameWords.useWords, _busy ? null : _words),
         ],
         if (_status != null) ...[
           const SizedBox(height: 8),

@@ -1,0 +1,794 @@
+{
+ "listSha256": "fb2954dccc87b4db6399683028b284a1a04fb326f505a267b39ca74827b7f5c7",
+ "count": 831,
+ "candidates": 8,
+ "keys": [
+  {
+   "pub": "31b688e134f8cfbfc917f900e9461b620747bff60ae82a193ca7f9b0a1b8c9a6",
+   "candidates": [
+    {
+     "name": "nannyneat",
+     "words": [
+      "nanny",
+      "neat"
+     ]
+    },
+    {
+     "name": "aminograsplip",
+     "words": [
+      "amino",
+      "grasp",
+      "lip"
+     ]
+    },
+    {
+     "name": "grasprobecurvy",
+     "words": [
+      "grasp",
+      "robe",
+      "curvy"
+     ]
+    },
+    {
+     "name": "tugflopquilt",
+     "words": [
+      "tug",
+      "flop",
+      "quilt"
+     ]
+    },
+    {
+     "name": "pluscleatcache",
+     "words": [
+      "plus",
+      "cleat",
+      "cache"
+     ]
+    },
+    {
+     "name": "squadgolfbloat",
+     "words": [
+      "squad",
+      "golf",
+      "bloat"
+     ]
+    },
+    {
+     "name": "culttwinewoven",
+     "words": [
+      "cult",
+      "twine",
+      "woven"
+     ]
+    },
+    {
+     "name": "evenkungflick",
+     "words": [
+      "even",
+      "kung",
+      "flick"
+     ]
+    }
+   ],
+   "display": [
+    "NannyNeat",
+    "AminoGraspLip",
+    "GraspRobeCurvy",
+    "TugFlopQuilt",
+    "PlusCleatCache",
+    "SquadGolfBloat",
+    "CultTwineWoven",
+    "EvenKungFlick"
+   ]
+  },
+  {
+   "pub": "fb4c3bdd5c749d4dd36b947770f7c28061013788035e854a7d18f430505bf6be",
+   "candidates": [
+    {
+     "name": "muskyrepay",
+     "words": [
+      "musky",
+      "repay"
+     ]
+    },
+    {
+     "name": "wirycivicspree",
+     "words": [
+      "wiry",
+      "civic",
+      "spree"
+     ]
+    },
+    {
+     "name": "barnhazelhatch",
+     "words": [
+      "barn",
+      "hazel",
+      "hatch"
+     ]
+    },
+    {
+     "name": "blinkdukelasso",
+     "words": [
+      "blink",
+      "duke",
+      "lasso"
+     ]
+    },
+    {
+     "name": "friskreamspoke",
+     "words": [
+      "frisk",
+      "ream",
+      "spoke"
+     ]
+    },
+    {
+     "name": "bunnypantsclear",
+     "words": [
+      "bunny",
+      "pants",
+      "clear"
+     ]
+    },
+    {
+     "name": "slipstashbash",
+     "words": [
+      "slip",
+      "stash",
+      "bash"
+     ]
+    },
+    {
+     "name": "shadyduskhash",
+     "words": [
+      "shady",
+      "dusk",
+      "hash"
+     ]
+    }
+   ],
+   "display": [
+    "MuskyRepay",
+    "WiryCivicSpree",
+    "BarnHazelHatch",
+    "BlinkDukeLasso",
+    "FriskReamSpoke",
+    "BunnyPantsClear",
+    "SlipStashBash",
+    "ShadyDuskHash"
+   ]
+  },
+  {
+   "pub": "ff7027d5fc575e945ab06e87251c13ef2f9a119dc821e00534ea60be7dfa0e92",
+   "candidates": [
+    {
+     "name": "sixthplead",
+     "words": [
+      "sixth",
+      "plead"
+     ]
+    },
+    {
+     "name": "lurchcrampritzy",
+     "words": [
+      "lurch",
+      "cramp",
+      "ritzy"
+     ]
+    },
+    {
+     "name": "presseaselswore",
+     "words": [
+      "press",
+      "easel",
+      "swore"
+     ]
+    },
+    {
+     "name": "maltaffixscuba",
+     "words": [
+      "malt",
+      "affix",
+      "scuba"
+     ]
+    },
+    {
+     "name": "dandystallflint",
+     "words": [
+      "dandy",
+      "stall",
+      "flint"
+     ]
+    },
+    {
+     "name": "agilecolaland",
+     "words": [
+      "agile",
+      "cola",
+      "land"
+     ]
+    },
+    {
+     "name": "envoymaltuncut",
+     "words": [
+      "envoy",
+      "malt",
+      "uncut"
+     ]
+    },
+    {
+     "name": "cheernuttysedan",
+     "words": [
+      "cheer",
+      "nutty",
+      "sedan"
+     ]
+    }
+   ],
+   "display": [
+    "SixthPlead",
+    "LurchCrampRitzy",
+    "PressEaselSwore",
+    "MaltAffixScuba",
+    "DandyStallFlint",
+    "AgileColaLand",
+    "EnvoyMaltUncut",
+    "CheerNuttySedan"
+   ]
+  },
+  {
+   "pub": "cc5d6185aa69cfed9f12ce7875142a51d67668d5905cd60b2ae45545a28ea05d",
+   "candidates": [
+    {
+     "name": "sneerplank",
+     "words": [
+      "sneer",
+      "plank"
+     ]
+    },
+    {
+     "name": "jotpermdisco",
+     "words": [
+      "jot",
+      "perm",
+      "disco"
+     ]
+    },
+    {
+     "name": "agedsatinacre",
+     "words": [
+      "aged",
+      "satin",
+      "acre"
+     ]
+    },
+    {
+     "name": "wicksectangel",
+     "words": [
+      "wick",
+      "sect",
+      "angel"
+     ]
+    },
+    {
+     "name": "alikeslurpunify",
+     "words": [
+      "alike",
+      "slurp",
+      "unify"
+     ]
+    },
+    {
+     "name": "lassomacewired",
+     "words": [
+      "lasso",
+      "mace",
+      "wired"
+     ]
+    },
+    {
+     "name": "slashbloatfoe",
+     "words": [
+      "slash",
+      "bloat",
+      "foe"
+     ]
+    },
+    {
+     "name": "ebookcrumbwages",
+     "words": [
+      "ebook",
+      "crumb",
+      "wages"
+     ]
+    }
+   ],
+   "display": [
+    "SneerPlank",
+    "JotPermDisco",
+    "AgedSatinAcre",
+    "WickSectAngel",
+    "AlikeSlurpUnify",
+    "LassoMaceWired",
+    "SlashBloatFoe",
+    "EbookCrumbWages"
+   ]
+  },
+  {
+   "pub": "ac3dbdcc2168ee8385814326d8ef7975488210cea0059338480c7b2347ea2425",
+   "candidates": [
+    {
+     "name": "capetwirl",
+     "words": [
+      "cape",
+      "twirl"
+     ]
+    },
+    {
+     "name": "wipehalomulch",
+     "words": [
+      "wipe",
+      "halo",
+      "mulch"
+     ]
+    },
+    {
+     "name": "stoodetchwispy",
+     "words": [
+      "stood",
+      "etch",
+      "wispy"
+     ]
+    },
+    {
+     "name": "cheekreambush",
+     "words": [
+      "cheek",
+      "ream",
+      "bush"
+     ]
+    },
+    {
+     "name": "sweptcrumbcurry",
+     "words": [
+      "swept",
+      "crumb",
+      "curry"
+     ]
+    },
+    {
+     "name": "yummydocksling",
+     "words": [
+      "yummy",
+      "dock",
+      "sling"
+     ]
+    },
+    {
+     "name": "kneltclampoasis",
+     "words": [
+      "knelt",
+      "clamp",
+      "oasis"
+     ]
+    },
+    {
+     "name": "dozedrankoat",
+     "words": [
+      "doze",
+      "drank",
+      "oat"
+     ]
+    }
+   ],
+   "display": [
+    "CapeTwirl",
+    "WipeHaloMulch",
+    "StoodEtchWispy",
+    "CheekReamBush",
+    "SweptCrumbCurry",
+    "YummyDockSling",
+    "KneltClampOasis",
+    "DozeDrankOat"
+   ]
+  },
+  {
+   "pub": "c3df97341957f610679aefc50dcb1d2d4d60f64067c8e2ef9f722e45feb3a3d4",
+   "candidates": [
+    {
+     "name": "scowlprops",
+     "words": [
+      "scowl",
+      "props"
+     ]
+    },
+    {
+     "name": "clashbrookkeg",
+     "words": [
+      "clash",
+      "brook",
+      "keg"
+     ]
+    },
+    {
+     "name": "darngraveboned",
+     "words": [
+      "darn",
+      "grave",
+      "boned"
+     ]
+    },
+    {
+     "name": "nailcopefilth",
+     "words": [
+      "nail",
+      "cope",
+      "filth"
+     ]
+    },
+    {
+     "name": "growljotthud",
+     "words": [
+      "growl",
+      "jot",
+      "thud"
+     ]
+    },
+    {
+     "name": "aliaselfream",
+     "words": [
+      "alias",
+      "elf",
+      "ream"
+     ]
+    },
+    {
+     "name": "viralwavydiner",
+     "words": [
+      "viral",
+      "wavy",
+      "diner"
+     ]
+    },
+    {
+     "name": "atlassleptflint",
+     "words": [
+      "atlas",
+      "slept",
+      "flint"
+     ]
+    }
+   ],
+   "display": [
+    "ScowlProps",
+    "ClashBrookKeg",
+    "DarnGraveBoned",
+    "NailCopeFilth",
+    "GrowlJotThud",
+    "AliasElfReam",
+    "ViralWavyDiner",
+    "AtlasSleptFlint"
+   ]
+  },
+  {
+   "pub": "b0b806d51ec4a97f97d538ec36ba667fccd4ae5375e6835c6221d907afcdd4bd",
+   "candidates": [
+    {
+     "name": "lilachull",
+     "words": [
+      "lilac",
+      "hull"
+     ]
+    },
+    {
+     "name": "flinglilacbasil",
+     "words": [
+      "fling",
+      "lilac",
+      "basil"
+     ]
+    },
+    {
+     "name": "zippyomenchip",
+     "words": [
+      "zippy",
+      "omen",
+      "chip"
+     ]
+    },
+    {
+     "name": "salsafledkeg",
+     "words": [
+      "salsa",
+      "fled",
+      "keg"
+     ]
+    },
+    {
+     "name": "debtsnoreposer",
+     "words": [
+      "debt",
+      "snore",
+      "poser"
+     ]
+    },
+    {
+     "name": "arsonrecapgala",
+     "words": [
+      "arson",
+      "recap",
+      "gala"
+     ]
+    },
+    {
+     "name": "gropecrookmousy",
+     "words": [
+      "grope",
+      "crook",
+      "mousy"
+     ]
+    },
+    {
+     "name": "ruinsetdebt",
+     "words": [
+      "ruin",
+      "set",
+      "debt"
+     ]
+    }
+   ],
+   "display": [
+    "LilacHull",
+    "FlingLilacBasil",
+    "ZippyOmenChip",
+    "SalsaFledKeg",
+    "DebtSnorePoser",
+    "ArsonRecapGala",
+    "GropeCrookMousy",
+    "RuinSetDebt"
+   ]
+  },
+  {
+   "pub": "12bd33cae7fc30f100888bd76e427f42cede30522c96bcbb630d60133cefbc72",
+   "candidates": [
+    {
+     "name": "staincurse",
+     "words": [
+      "stain",
+      "curse"
+     ]
+    },
+    {
+     "name": "payersavorstir",
+     "words": [
+      "payer",
+      "savor",
+      "stir"
+     ]
+    },
+    {
+     "name": "duojeepbrook",
+     "words": [
+      "duo",
+      "jeep",
+      "brook"
+     ]
+    },
+    {
+     "name": "heapstoutcoat",
+     "words": [
+      "heap",
+      "stout",
+      "coat"
+     ]
+    },
+    {
+     "name": "bunnyflicksweat",
+     "words": [
+      "bunny",
+      "flick",
+      "sweat"
+     ]
+    },
+    {
+     "name": "lilacrantfoyer",
+     "words": [
+      "lilac",
+      "rant",
+      "foyer"
+     ]
+    },
+    {
+     "name": "presstulipplant",
+     "words": [
+      "press",
+      "tulip",
+      "plant"
+     ]
+    },
+    {
+     "name": "tacopepdebt",
+     "words": [
+      "taco",
+      "pep",
+      "debt"
+     ]
+    }
+   ],
+   "display": [
+    "StainCurse",
+    "PayerSavorStir",
+    "DuoJeepBrook",
+    "HeapStoutCoat",
+    "BunnyFlickSweat",
+    "LilacRantFoyer",
+    "PressTulipPlant",
+    "TacoPepDebt"
+   ]
+  },
+  {
+   "pub": "3bcf325df72d34263780367abbe72f3477b68e54c3fa7f07b9186698ce15740f",
+   "candidates": [
+    {
+     "name": "buckblog",
+     "words": [
+      "buck",
+      "blog"
+     ]
+    },
+    {
+     "name": "valuefromutter",
+     "words": [
+      "value",
+      "from",
+      "utter"
+     ]
+    },
+    {
+     "name": "cubmusewimp",
+     "words": [
+      "cub",
+      "muse",
+      "wimp"
+     ]
+    },
+    {
+     "name": "relicspreecreme",
+     "words": [
+      "relic",
+      "spree",
+      "creme"
+     ]
+    },
+    {
+     "name": "wageshavenskit",
+     "words": [
+      "wages",
+      "haven",
+      "skit"
+     ]
+    },
+    {
+     "name": "navyshreddodge",
+     "words": [
+      "navy",
+      "shred",
+      "dodge"
+     ]
+    },
+    {
+     "name": "scoffromanebay",
+     "words": [
+      "scoff",
+      "roman",
+      "ebay"
+     ]
+    },
+    {
+     "name": "gigpepheave",
+     "words": [
+      "gig",
+      "pep",
+      "heave"
+     ]
+    }
+   ],
+   "display": [
+    "BuckBlog",
+    "ValueFromUtter",
+    "CubMuseWimp",
+    "RelicSpreeCreme",
+    "WagesHavenSkit",
+    "NavyShredDodge",
+    "ScoffRomanEbay",
+    "GigPepHeave"
+   ]
+  },
+  {
+   "pub": "320735223e6a2f4ea11ed46139f6e9cba34a545c446f6ff415bcd4da157ea3dc",
+   "candidates": [
+    {
+     "name": "affixneat",
+     "words": [
+      "affix",
+      "neat"
+     ]
+    },
+    {
+     "name": "slacksixthgeek",
+     "words": [
+      "slack",
+      "sixth",
+      "geek"
+     ]
+    },
+    {
+     "name": "permflintfloss",
+     "words": [
+      "perm",
+      "flint",
+      "floss"
+     ]
+    },
+    {
+     "name": "hategagnutty",
+     "words": [
+      "hate",
+      "gag",
+      "nutty"
+     ]
+    },
+    {
+     "name": "mullslitmost",
+     "words": [
+      "mull",
+      "slit",
+      "most"
+     ]
+    },
+    {
+     "name": "tintdimeslug",
+     "words": [
+      "tint",
+      "dime",
+      "slug"
+     ]
+    },
+    {
+     "name": "mateevaderope",
+     "words": [
+      "mate",
+      "evade",
+      "rope"
+     ]
+    },
+    {
+     "name": "mottoagilepasta",
+     "words": [
+      "motto",
+      "agile",
+      "pasta"
+     ]
+    }
+   ],
+   "display": [
+    "AffixNeat",
+    "SlackSixthGeek",
+    "PermFlintFloss",
+    "HateGagNutty",
+    "MullSlitMost",
+    "TintDimeSlug",
+    "MateEvadeRope",
+    "MottoAgilePasta"
+   ]
+  }
+ ],
+ "others": [
+  {
+   "name": "alice",
+   "pub": "31b688e134f8cfbfc917f900e9461b620747bff60ae82a193ca7f9b0a1b8c9a6",
+   "display": "alice"
+  }
+ ]
+}

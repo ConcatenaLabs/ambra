@@ -2615,7 +2615,9 @@ class _ReceiveTabState extends State<ReceiveTab> {
               const SizedBox(height: 12),
               if (_nameView) ...[
                 // One card says the name once: the name, what it does, that it is public.
-                SelectableText(PaymentNameService.instance.address!, key: const Key('receive-name'), style: AmbraText.mono),
+                // A word name with a capital for each word; the QR code and Copy hold it in lower case.
+                SelectableText(PaymentNameService.instance.display ?? PaymentNameService.instance.address!,
+                    key: const Key('receive-name'), style: AmbraText.mono),
                 const SizedBox(height: 8),
                 const Text(NameWords.qrTip, key: Key('receive-name-tip'), style: AmbraText.sub),
                 const SizedBox(height: 6),
@@ -2625,7 +2627,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
                   key: const Key('receive-name-copy'),
                   label: NameWords.copyName,
                   icon: Icons.copy,
-                  onPressed: () => _copy(PaymentNameService.instance.address!, NameWords.copiedName),
+                  onPressed: () => _copy(nameQrText(PaymentNameService.instance.address!), NameWords.copiedName),
                 ),
                 const SizedBox(height: 10),
                 SecondaryButton(

@@ -1,0 +1,7 @@
+Third-party material in this repository
+
+app/lib/src/data/word_name_list.dart holds a list of words taken from the EFF short wordlist 1
+(https://www.eff.org/dice), by the Electronic Frontier Foundation, licensed under the
+Creative Commons Attribution 3.0 United States licence
+(https://creativecommons.org/licenses/by/3.0/us/). The list here leaves out every word that is
+also in the BIP39 English wordlist and the one entry that is not letters alone.
