@@ -1,0 +1,203 @@
+{
+ "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+ "domain": "sequentiatestnet.com",
+ "name": "alice",
+ "pubkey": "31b688e134f8cfbfc917f900e9461b620747bff60ae82a193ca7f9b0a1b8c9a6",
+ "codes": [
+  {
+   "id": "52b6568fb4d3cbca4c78e6b77aa14bb3",
+   "code": "BITCOIN:TB1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KXPJZSX?ark=tark1qexample&sequentia=sqr1qyqqzqsrqszsvpcgqyrswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8quqfqae4jsqqmsngq9",
+   "sig": "08cb652709380ee557990a0fe06af960111629a991d57a1af573c760db45e37d37f04e1c818616c687a5208d2f0b755d664741b8c5f77e1269a954afa81c6e4f",
+   "until": 2000000000
+  },
+  {
+   "id": "aa7423d755c56ed3c6799b6364a34f9f",
+   "code": "BITCOIN:TB1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KXPJZSX",
+   "sig": "1fe789f9c3b788788d798b00ac874e7bf98b9c7c4b7fb856805f2e88c893469978b70d4ebd379a88cc06679d1bc7926671ad3c35f031bf862eeeec2e642a1559",
+   "until": null
+  },
+  {
+   "id": "1b85421bc571a664c16cc74eeabad62d",
+   "code": "BITCOIN:TB1QXYZ?sequentia=hello%20world",
+   "sig": "2ece5448660fb7f7c4f81c9bf8363dfccc78bb9f64e2ca77b7c826e706309ce895e685b525bd34909fc88682c9a38bd3f4d945fe857ba2f87e2d9a7403464fff",
+   "until": null
+  }
+ ],
+ "live": {
+  "id": "abababababababababababababababab",
+  "code": "BITCOIN:TB1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KXPJZSX?ark=tark1qexample&sequentia=sqr1qyqqzqsrqszsvpcgqyrswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8quqfqae4jsqqmsngq9",
+  "sig": "8213795bbe67a25e21696c1c60eb36b60c60b50698f69ecb99fbb270a94ebec25b22e928e4a61fb2e89edc55f84d5fa9817730af655e561062f6886dc9b7f799"
+ },
+ "digests": [
+  {
+   "action": "stock",
+   "fields": [
+    1700000000,
+    "52b6568fb4d3cbca4c78e6b77aa14bb3,aa7423d755c56ed3c6799b6364a34f9f",
+    ""
+   ],
+   "hex": "cbe64da1b749dd03f63665982cd805be96f2388ef1a5ae230d28e9548abce6ad"
+  },
+  {
+   "action": "code",
+   "fields": [
+    "52b6568fb4d3cbca4c78e6b77aa14bb3",
+    "BITCOIN:TB1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KXPJZSX?ark=tark1qexample&sequentia=sqr1qyqqzqsrqszsvpcgqyrswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8quqfqae4jsqqmsngq9"
+   ],
+   "hex": "c6e1bc465dd1edc5b85d33d5d93bddc67dc52f205c81cf9fdd1729d0bedc6615"
+  }
+ ],
+ "qr": [
+  {
+   "in": "Alice@SequentiaTestnet.com",
+   "out": "alice@sequentiatestnet.com"
+  },
+  {
+   "in": " alice@sequentiatestnet.com ",
+   "out": "alice@sequentiatestnet.com"
+  }
+ ],
+ "parse": [
+  {
+   "in": "alice@sequentiatestnet.com",
+   "out": {
+    "name": "alice",
+    "domain": "sequentiatestnet.com"
+   }
+  },
+  {
+   "in": "lightning:alice@sequentiatestnet.com",
+   "out": {
+    "name": "alice",
+    "domain": "sequentiatestnet.com"
+   }
+  },
+  {
+   "in": "LIGHTNING:ALICE@SEQUENTIATESTNET.COM",
+   "out": {
+    "name": "alice",
+    "domain": "sequentiatestnet.com"
+   }
+  },
+  {
+   "in": "₿alice@sequentiatestnet.com",
+   "out": {
+    "name": "alice",
+    "domain": "sequentiatestnet.com"
+   }
+  },
+  {
+   "in": "alice",
+   "out": null
+  },
+  {
+   "in": "bitcoin:tb1q@x.com",
+   "out": null
+  }
+ ],
+ "pick": [
+  {
+   "count": 3,
+   "nextUnused": 5,
+   "held": [
+    5,
+    7
+   ],
+   "handed": [],
+   "out": [
+    6,
+    8,
+    9
+   ]
+  },
+  {
+   "count": 3,
+   "nextUnused": 0,
+   "held": [],
+   "handed": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "gap": 5,
+   "out": [
+    4,
+    0,
+    1
+   ]
+  },
+  {
+   "count": 50,
+   "nextUnused": 10,
+   "held": [
+    12
+   ],
+   "handed": [
+    11,
+    30
+   ],
+   "out": [
+    10,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    11
+   ]
+  }
+ ],
+ "plan": {
+  "mine": {
+   "a": {
+    "index": 1,
+    "until": 1259200
+   },
+   "b": {
+    "index": 2,
+    "until": 1000060
+   },
+   "c": {
+    "index": 3,
+    "until": null
+   },
+   "d": {
+    "index": 4
+   }
+  },
+  "held": [
+   "a",
+   "b",
+   "c",
+   "x"
+  ],
+  "nowS": 1000000,
+  "size": 10,
+  "out": {
+   "served": [
+    "d"
+   ],
+   "drop": [
+    "b"
+   ],
+   "keep": [
+    "a",
+    "c"
+   ],
+   "make": 7
+  }
+ }
+}

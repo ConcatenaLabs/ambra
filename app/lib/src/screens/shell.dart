@@ -21,6 +21,7 @@ import '../data/home_coins.dart';
 import '../data/hidden_assets.dart';
 import '../data/lightning_to_ark.dart';
 import '../data/pay_code.dart';
+import '../data/lnaddr.dart' show NameWords, nameQrText;
 import '../data/payment_name_service.dart';
 import '../data/receive_index.dart';
 import '../data/ln_max_payment.dart' show receivableAssets, receiveState;
@@ -2073,6 +2074,9 @@ class _ReceiveTabState extends State<ReceiveTab> {
   // Receive opens: confidentiality is chosen per payment.
   bool _conf = false;
   String? _confAddr;
+  // With a payment name: Receive shows the name as its QR code until "Show full code" ([_showFull]),
+  // an amount or Confidential asks for the full code. Off each time Receive opens.
+  bool _showFull = false;
   // What the optional amount is in: 'BTC', or an asset the operator receives in over Lightning.
   String _recvAsset = 'BTC';
   String _codeAsset = 'BTC';
@@ -2288,6 +2292,8 @@ class _ReceiveTabState extends State<ReceiveTab> {
   BigInt _arkSeen = BigInt.zero;
 
   void _onAmount(String _) {
+    // The name shows while no amount is typed; an amount shows the full code at once.
+    if (_named) setState(() {});
     _amountDebounce?.cancel();
     _amountDebounce = Timer(const Duration(milliseconds: 800), _onLeaves);
   }
@@ -2510,6 +2516,13 @@ class _ReceiveTabState extends State<ReceiveTab> {
   /// What Receive shows as its code: the confidential address while [_conf] is on, else the code.
   String? get _shown => _conf ? _confAddr : _code;
 
+  /// The wallet's payment name can stand for its code: it has one, no amount is typed and
+  /// Confidential is off (DEFAULT_MODE.md, Receive).
+  bool get _named => PaymentNameService.instance.address != null && !_conf && _btcAmount.text.trim().isEmpty;
+
+  /// Receive shows the name as its QR code ([nameQrText]).
+  bool get _nameView => _named && !_showFull;
+
   /// The menu of what the amount is in: BTC, and each asset the operator receives in.
   Widget _assetMenu() {
     final choices = _recvChoices();
@@ -2544,7 +2557,21 @@ class _ReceiveTabState extends State<ReceiveTab> {
         const Text('Receive', style: AmbraText.h1),
         const SizedBox(height: 20),
         if (_codeMode) ...[
-          if (_shown != null) ...[
+          if (_nameView) ...[
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+                child: QrImageView(
+                    key: const Key('receive-name-qr'),
+                    data: nameQrText(PaymentNameService.instance.address!),
+                    version: QrVersions.auto,
+                    size: 288,
+                    backgroundColor: Colors.white),
+              ),
+            ),
+            const SizedBox(height: 18),
+          ] else if (_shown != null) ...[
             Center(
               child: Container(
                 padding: const EdgeInsets.all(14),
@@ -2567,16 +2594,36 @@ class _ReceiveTabState extends State<ReceiveTab> {
           ],
           AmbraCard(
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              const SectionLabel(DefaultWords.receiveCode),
+              SectionLabel(_nameView ? NameWords.label : DefaultWords.receiveCode),
               const SizedBox(height: 12),
-              if (_shown == null)
+              if (_nameView) ...[
+                const Text(NameWords.qrTip, style: AmbraText.sub),
+                const SizedBox(height: 12),
+                SelectableText(PaymentNameService.instance.address!, key: const Key('receive-name'), style: AmbraText.mono),
+                const SizedBox(height: 6),
+                const Text(NameWords.public, key: Key('receive-name-public'), style: AmbraText.sub),
+                const SizedBox(height: 14),
+                SecondaryButton(
+                  key: const Key('receive-name-copy'),
+                  label: NameWords.copyName,
+                  icon: Icons.copy,
+                  onPressed: () => _copy(PaymentNameService.instance.address!, NameWords.copiedName),
+                ),
+                const SizedBox(height: 10),
+                SecondaryButton(
+                  key: const Key('receive-show-full'),
+                  label: NameWords.showFull,
+                  icon: Icons.qr_code,
+                  onPressed: () => setState(() => _showFull = true),
+                ),
+              ] else if (_shown == null)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 18),
                   child: Center(child: CircularProgressIndicator(color: AmbraColors.amber)),
                 )
               else ...[
                 if (!_conf) ...[
-                  const Text(DefaultWords.receiveCodeLine, style: AmbraText.sub),
+                  Text(_named ? NameWords.fullTip : DefaultWords.receiveCodeLine, style: AmbraText.sub),
                   const SizedBox(height: 14),
                 ],
                 SecondaryButton(
@@ -2592,6 +2639,17 @@ class _ReceiveTabState extends State<ReceiveTab> {
                   icon: Icons.refresh,
                   onPressed: _newCode,
                 ),
+                if (_named) ...[
+                  const SizedBox(height: 10),
+                  SecondaryButton(
+                    key: const Key('receive-show-name'),
+                    label: NameWords.showName,
+                    icon: Icons.alternate_email,
+                    onPressed: () => setState(() => _showFull = false),
+                  ),
+                ],
+              ],
+              if (_shown != null || _nameView) ...[
                 if (!_conf && (ArkBtcService.instance.open || _recvChoices().length > 1)) ...[
                   const SizedBox(height: 14),
                   AmbraField(

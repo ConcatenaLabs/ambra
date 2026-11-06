@@ -31,6 +31,7 @@ import '../widgets/asset_sheet.dart';
 import '../widgets/ln_cards.dart';
 import '../widgets/widgets.dart';
 import 'scan_screen.dart';
+import '../data/payment_name_service.dart';
 import '../data/lnaddr.dart' show parseLnAddress, resolveLnAddress, LnAddressError;
 
 class SendTab extends StatefulWidget {
@@ -437,6 +438,12 @@ class _SendTabState extends State<SendTab> {
     } on FormatException catch (e) {
       return _snack(e.message);
     }
+    // A payment name, in any spelling a QR code carries it (bare, lightning:, BIP353's ₿).
+    final name = parseLnAddress(raw);
+    if (name != null) {
+      setState(() => _addr.text = '${name.name}@${name.domain}');
+      return;
+    }
     var s = raw.trim();
     if (s.contains(':')) s = s.substring(s.indexOf(':') + 1); // drop any URI scheme
     String? amount;
@@ -455,9 +462,10 @@ class _SendTabState extends State<SendTab> {
     _route = null;
     _byAddress = false;
     _why = null;
-    // A payment name (lnaddr.dart) is paid as what it stands for: one at the node's own domain at
-    // the receive code its wallet gives now, any asset; another service's in BTC, at the invoice
-    // it makes for the amount.
+    // A payment name (lnaddr.dart) is paid as what it stands for: one at the node's own domain at a
+    // receive code its wallet left signed with the service, any asset, once the signature checks out
+    // against the name's key and the key this wallet paid it at before; another service's in BTC, at
+    // the invoice it makes for the amount.
     var input = _addr.text;
     if (parseLnAddress(input) != null) {
       try {
@@ -469,6 +477,7 @@ class _SendTabState extends State<SendTab> {
           domain: Backend.lnaddrDomain,
           base: Backend.lsp,
           decodeMsat: (pr) => decodeBtcInvoice(pr)['msat'] as BigInt,
+          pins: PaymentNameService.instance.pins,
         );
         if (!mounted) return;
         if (t.invoice != null) _route = t.invoice;
