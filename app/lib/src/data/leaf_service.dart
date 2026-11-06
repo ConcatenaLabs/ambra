@@ -744,6 +744,60 @@ class LeafService extends ChangeNotifier {
   int _running = 0;
 
   // -------------------------------------------------------------------------
+  // A payment another service made to the receive code: taken in at once
+  // -------------------------------------------------------------------------
+
+  /// Every coin the library took in, by whichever read (a sync, the mailbox read, a channel's),
+  /// with its asset and when: for [takeIn].
+  final List<(String, DateTime)> _arrived = [];
+  void _noteArrived(Map a) {
+    _arrived.add(('${a['asset'] ?? ''}'.toLowerCase(), DateTime.now()));
+    if (_arrived.length > 50) _arrived.removeAt(0);
+  }
+
+  /// Whether a coin of [asset] (hex) was taken in at or after [since], by any read.
+  bool arrivedSince(String asset, DateTime since) =>
+      _arrived.any((x) => x.$1 == asset.toLowerCase() && !x.$2.isBefore(since));
+
+  /// The faucet answers once its coin is in the wallet's mailbox, so `mailbox` (a read of
+  /// seconds) takes it in, never a whole sync, which can sit in a round for a minute or more.
+  /// It counts as something a person asked for, so the wallet's own upkeep waits; it waits
+  /// only for a command of the library already running. It reads again every [takeInEvery]
+  /// until a coin of [asset] has arrived since [since] (by this read or any other) or [within]
+  /// has passed; then the balance is read again, so the figure holds the coin before the screen
+  /// says Received. Answers whether it arrived.
+  Future<bool> takeIn(String asset, {required DateTime since, Duration within = takeInWithin}) async {
+    if (!open) return false;
+    _asking++;
+    try {
+      final got = await readUntil(
+        came: () => arrivedSince(asset, since),
+        within: within,
+        every: takeInEvery,
+        read: () async {
+          final mb = await run('mailbox');
+          for (final a in arrivals(mb)) {
+            arrivedCount++;
+            _noteArrived(a);
+            await notifyArrived(a, channel: _channel);
+          }
+        },
+      );
+      if (got) {
+        try {
+          balance = await run('balance') as Map<String, dynamic>?;
+        } catch (_) {}
+        notifyListeners();
+        unawaited(refresh());
+      }
+      return got;
+    } finally {
+      _asking--;
+      personActed();
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Channels: a payment into one is in the asset's figure within a second
   // -------------------------------------------------------------------------
 
@@ -819,6 +873,7 @@ class LeafService extends ChangeNotifier {
             } catch (_) {}
             for (final a in came) {
               arrivedCount++;
+              _noteArrived(a);
               debugPrint('[leaves] channel ${a['leaf_id']} paid ${a['value']} of ${'${a['asset']}'.substring(0, 8)}');
               unawaited(notifyArrived(a, channel: _channel));
             }
@@ -880,6 +935,7 @@ class LeafService extends ChangeNotifier {
           noteUnreachable(unreachableOf(v, 'sync'));
           for (final a in arrivals(v is Map ? v['mailbox'] : null)) {
             arrivedCount++;
+            _noteArrived(a);
           await notifyArrived(a, channel: _channel);
           }
         },
@@ -1028,6 +1084,7 @@ class LeafService extends ChangeNotifier {
     lastSync = DateTime.now();
     for (final a in arrivals(r['mailbox'])) {
       arrivedCount++;
+      _noteArrived(a);
           await notifyArrived(a, channel: _channel);
     }
     await careIfDue();
@@ -1226,6 +1283,7 @@ class LeafService extends ChangeNotifier {
         final mb = await run('mailbox');
         for (final a in arrivals(mb)) {
           arrivedCount++;
+          _noteArrived(a);
           await notifyArrived(a, channel: _channel);
         }
         if (arrivals(mb).isNotEmpty) await refresh();
@@ -1454,6 +1512,42 @@ Future<dynamic> payThroughRelease(
     later: (care['not_yet_planned'] as num?)?.toInt() ?? 0,
     refusals: refusals,
   );
+}
+
+/// How long [LeafService.takeIn] reads the mailbox for a payment another service says it made,
+/// and how often.
+const takeInWithin = Duration(seconds: 45);
+const takeInEvery = Duration(seconds: 2);
+
+/// Reads ([read]: the wallet's mailbox) until [came] says what is awaited has arrived, or [within]
+/// has passed: a read that has not answered by then is not waited for (the library may be busy
+/// with a sync; what it takes in later is told as any arrival is), and the next read comes
+/// [every] after the last. Answers [came].
+Future<bool> readUntil({
+  required bool Function() came,
+  required Future<void> Function() read,
+  Duration within = takeInWithin,
+  Duration every = takeInEvery,
+  DateTime Function()? now,
+  Future<void> Function(Duration)? sleep,
+}) async {
+  final clock = now ?? DateTime.now;
+  final wait = sleep ?? (d) => Future<void>.delayed(d);
+  final until = clock().add(within);
+  Duration left() {
+    final d = until.difference(clock());
+    return d.isNegative ? Duration.zero : d;
+  }
+
+  while (!came() && left() > Duration.zero) {
+    final answered = await Future.any<bool>([
+      read().then((_) => true, onError: (_) => true),
+      Future<bool>.delayed(left(), () => false),
+    ]);
+    if (!answered || came() || left() == Duration.zero) break;
+    await wait(every < left() ? every : left());
+  }
+  return came();
 }
 
 /// The coins a mailbox read accepted.

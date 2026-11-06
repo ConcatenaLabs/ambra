@@ -44,6 +44,9 @@ class DefaultWords {
   /// Held where it cannot be sent in seconds (a wallet made before), on its way to where it can.
   static String moving(String amount, String ticker) => 'Moving $amount $ticker so it can be sent in seconds.';
   static String received(String amount, String ticker) => 'Received $amount $ticker.';
+  /// The faucet has paid and the wallet has not taken the coin in yet (it was busy with an update).
+  static String faucetOnItsWay(String amount, String ticker) =>
+      'The faucet sent $amount $ticker. It shows in your balance as soon as your wallet has taken it in, usually within a few minutes.';
   /// What the wallet holds that nothing can move before a date (a vesting allocation): part of the
   /// figure, one line under it for each date, never counted as what can be spent ([vestingLots]).
   static String vests(String amount, String ticker, String date) => '$amount $ticker vests on $date';

@@ -8,24 +8,32 @@ import 'config.dart';
 /// A faucet answer that is not a payout: its own words, and whether it says the wallet already
 /// has the asset (then no other route is tried).
 class FaucetRefused implements Exception {
-  FaucetRefused(this.message, {this.alreadyPaid = false, this.asset});
+  FaucetRefused(this.message, {this.alreadyPaid = false, this.asset, this.status = 0, this.reason});
   factory FaucetRefused.of(int status, Map<String, dynamic> j) => FaucetRefused(
         j['error']?.toString() ?? 'HTTP $status',
         alreadyPaid: status == 429 && j['claimed'] == true,
         asset: j['asset']?.toString(),
+        status: status,
+        reason: j['reason']?.toString(),
       );
   final String message;
   final bool alreadyPaid;
   final String? asset;
+  /// The HTTP status, and the faucet's `reason` (`busy`: it is paying other requests now).
+  final int status;
+  final String? reason;
+  bool get busy => reason == 'busy';
   @override
   String toString() => message;
 }
 
 class FaucetResult {
-  FaucetResult(this.amount, this.asset, this.txid);
+  FaucetResult(this.amount, this.asset, this.txid, {this.leafAsset});
   final String amount;
   final String asset;
   final String txid;
+  /// A payment to a receive request: the asset id of the coin the faucet paid.
+  final String? leafAsset;
 }
 
 /// A restricted asset as described by the OpenAMP enclave (`GET /v1/assets`).
@@ -164,7 +172,8 @@ class ApiClient {
         .timeout(const Duration(seconds: 90));
     final j = jsonDecode(r.body) as Map<String, dynamic>;
     if (r.statusCode != 200) throw FaucetRefused.of(r.statusCode, j);
-    return FaucetResult('${j['amount']}', '${j['asset']}', '');
+    final leaf = j['leaf'];
+    return FaucetResult('${j['amount']}', '${j['asset']}', '', leafAsset: leaf is Map ? leaf['asset']?.toString() : null);
   }
 
   /// The producer fee-acceptance set: {("bitcoin"=tSEQ | ticker | hex): rate}.
