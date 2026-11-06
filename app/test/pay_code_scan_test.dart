@@ -73,4 +73,21 @@ void main() {
     final r = PayCode.read(readAt(q, 400)!)!;
     expect(r.sequentia, c['short']);
   });
+
+  test('a code carrying the longest payment name still reads, and reads back whole', () {
+    final named = PayCode(
+            address: v['address'] as String,
+            ark: v['ark'] as String,
+            sequentia: c['library'] as String,
+            lnurl: 'https://sequentiatestnet.com/.well-known/lnurlp/${'n' * 32}')
+        .build();
+    final q = payCodeQr(named), q0 = payCodeQr(code);
+    final n = smallestReadable(q, named), n0 = smallestReadable(q0, code);
+    // ignore: avoid_print
+    print('smallest readable picture: without a name v${q0.typeNumber} ${n0}px, with the longest name v${q.typeNumber} ${n}px');
+    expect(n, greaterThan(0));
+    final r = PayCode.read(readAt(q, 400)!)!;
+    expect(r.lnurl, 'https://sequentiatestnet.com/.well-known/lnurlp/${'n' * 32}');
+    expect(r.sequentia, c['short']);
+  });
 }

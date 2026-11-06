@@ -92,7 +92,10 @@ module that implements it.
 
 **Receive**
 - One shared `tb1...` address for both chains, with QR code and cross-chain index
-  cycling ("New address" advances both chains together, discouraging reuse).
+  cycling ("New address" and "New code" move to the next address, discouraging reuse). A new
+  address is never 20 or more past the first one no scan has seen used: past that it goes back
+  to that one, so every address handed out is found by a scan from the phrase alone after a
+  restore (`app/lib/src/data/receive_index.dart`).
 - Opt-in confidential Sequentia address (blech32, `tsqb1...`) that hides amount and
   asset on-chain; the screen then also shows the matching transparent `tb1` form, which
   is the one that can receive Bitcoin.
@@ -302,12 +305,36 @@ module that implements it.
     (`payCodeQr`), so it scans at a glance from another screen. The code shows at once from
     what the wallet last drew, syncing or not, gains a way to be paid in place when one opens,
     and is replaced when it is paid, when its request is within a day of lapsing, or on
-    "New code" (the old one stays until the new one is ready). With BTC on the ark, Receive has
-    one optional field, "Amount in BTC (optional)": with an amount the code also carries
-    `amount=` and a `lightning=` invoice from the Bitcoin ark for exactly that amount
+    "New code", which also moves the code to the next address (the old one stays until the new
+    one is ready). Receive has one optional field, "Amount in BTC (optional)", with a menu
+    beside it of what the amount is in: BTC, and each asset the operator receives over
+    Lightning (the menu shows only when there is more than BTC; for an asset the field reads
+    "Amount (optional)"). With an amount in BTC the code also carries `amount=` and a
+    `lightning=` invoice from the Bitcoin ark for exactly that amount
     (`BITCOIN:<ADDRESS>?amount=<BTC>&lightning=<INVOICE>&ark=…&sequentia=…`), claimed while
-    the wallet is open; a new invoice comes with each new code and each new amount. No
-    invoice is made for more than the operator takes in one payment over Lightning (below).
+    the wallet is open. With an amount in an asset it carries instead the operator's invoice in
+    that asset (the leaf library's `lightning_receive`), which a wallet of another operator pays,
+    and no `amount=`; once a payment is held for it the wallet syncs, which claims it. A new
+    invoice comes with each new code and each new amount. No invoice is made for more than the
+    operator takes in one payment over Lightning (below). Without an amount, a wallet with a
+    payment name carries the name's LNURL-pay in `lightning=` (LUD-01 bech32, `LNURL1…`), which
+    any Lightning wallet pays in an amount it chooses; readers give it apart (`PayCode.lnurl`),
+    never as an invoice.
+  - Under the code, one switch, **Confidential**: "Hides the asset and amount of a payment from
+    everyone but you and the payer." On, the code is the wallet's confidential address at the
+    same index alone (`tsqb1…`), and a second line says what stays public: that a payment was
+    made; that a payment arriving in seconds is never confidential (the operator publishes each
+    batch's leaves, asset and value), so this one arrives after the next block; and that BTC is
+    never confidential, so receiving BTC needs the switch off. It is off each time Receive opens.
+  - **Your payment name**, under the code (`app/lib/src/data/lnaddr.dart`, the web wallet's
+    `lnaddr.js`; `payment_name_service.dart`): a name of the wallet's own at the node's domain
+    (`name@sequentiatestnet.com`), which another wallet pays in an amount it chooses, a
+    Lightning wallet included (it is a Lightning address, LNURL-pay). The name is held by a
+    BIP340 key of the phrase (`m/1017'/16'/0'`, `name_key.dart`), the same key the web wallet
+    holds it with, so the phrase shows it again in either wallet. While the app runs it answers
+    the service (the web wallet's `tooling/lsp/lnaddr.mjs`): an invoice of the Bitcoin ark for
+    the amount a payer chose, or a new receive code. Developer mode calls it **Lightning
+    address**. Only the default node has names.
     While a code handed out in the
     last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
     the address alone; so does user mode until the wallet holds coins with the operator or
@@ -340,8 +367,11 @@ module that implements it.
     of its own, and only when the operator publishes none holds one payment to 1,500 USD. A bare receive
     request is paid the same way. Every payment that leaves is in History at once, pending
     until its block when it waits for one, and BTC arriving at the wallet's latest addresses
-    shows there as soon as the Bitcoin network has it. Anything that is not a code (an
-    address, an invoice, an account id) takes the path it always took.
+    shows there as soon as the Bitcoin network has it. A payment name (`name@domain`) is paid as
+    what it stands for: a name at the node's own domain at the receive code its wallet gives at
+    that moment, any asset, as any code is; a name at another domain in BTC only, at the invoice
+    that service makes, which must be for BTC and for exactly the amount. Anything that is not a
+    code or a name (an address, an invoice, an account id) takes the path it always took.
     An address send the chain cannot cover is paid out of the leaves (the library's
     `offboard_quote`, then `offboard` on the quote shown): "Send <amt> <TICKER>?", "It
     arrives in a few minutes." (the operator's round interval), and the fee when there is

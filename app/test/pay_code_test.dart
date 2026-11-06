@@ -110,4 +110,70 @@ void main() {
     expect(r.address, isNull);
     expect(r.ark, ark);
   });
+
+  group('a payment name in the code', () {
+    const url = 'https://sequentiatestnet.com/.well-known/lnurlp/alice';
+    // An independent bech32 library's output for the same URL (and LUD-01's own example).
+    const lnurl = 'LNURL1DP68GURN8GHJ7UM9W96K2MN5D9SHGETNW3HX2APWVDHK6TEWWAJKCMPDDDHX7AMW9AKXUATJD3CZ7CTVD93K2Y93MNY';
+
+    test('LUD-01: the URL as bech32 with the human part lnurl, read back', () {
+      expect(lnurlEncode(url).toUpperCase(), lnurl);
+      expect(lnurlDecode(lnurl), url);
+      expect(lnurlDecode(lnurl.toLowerCase()), url);
+      expect(
+          lnurlDecode('LNURL1DP68GURN8GHJ7UM9WFMXJCM99E3K7MF0V9CXJ0M385EKVCENXC6R2C35XVUKXEFCV5MKVV34X5EKZD3EV56NYD3HXQURZEPEXEJXXEPNXSCRVWFNV9NXZCN9XQ6XYEFHVGCXXCMYXYMNSERXFQ5FNS'),
+          'https://service.com/api?q=3fc3645b439ce8e7f2553a69e5267081d96dcd340693afabe04be7b0ccd178df');
+      // Not an LNURL: an invoice, a bech32m string, a broken checksum.
+      expect(lnurlDecode('lntb1500n1pjqqqqq'), isNull);
+      expect(lnurlDecode(lnurl.substring(0, lnurl.length - 1) + (lnurl.endsWith('Y') ? 'Q' : 'Y')), isNull);
+    });
+
+    test('without an amount the code carries it as lightning=, read as lnurl and never as an invoice', () {
+      final c = (vectors['cases'] as List).first as Map<String, dynamic>;
+      final code = PayCode(address: tb1, ark: vectors['ark'] as String, sequentia: c['library'] as String, lnurl: url).build();
+      expect(code, contains('lightning=$lnurl'));
+      final r = PayCode.read(code)!;
+      expect(r.lnurl, url);
+      expect(r.lightning, isNull);
+      expect(r.address, tb1);
+      expect(r.ark, vectors['ark']);
+      expect(r.sequentia, c['short']);
+      // An invoice wins over the name: a code with an amount carries the invoice.
+      final withInv = PayCode(address: tb1, lightning: 'lntb1500n1pjabc', lnurl: url).build();
+      expect(PayCode.read(withInv)!.lightning, 'lntb1500n1pjabc');
+      expect(PayCode.read(withInv)!.lnurl, isNull);
+      // A code with only the name and an address is still a code.
+      expect(PayCode.read('BITCOIN:?lightning=$lnurl')!.lnurl, url);
+    });
+
+    test('the picture stays within the size a phone scans at a glance', () {
+      final c = (vectors['cases'] as List).first as Map<String, dynamic>;
+      final plain = PayCode(address: vectors['address'] as String, ark: vectors['ark'] as String, sequentia: c['library'] as String).build();
+      final named = PayCode(
+              address: vectors['address'] as String,
+              ark: vectors['ark'] as String,
+              sequentia: c['library'] as String,
+              lnurl: 'https://sequentiatestnet.com/.well-known/lnurlp/${'n' * 32}')
+          .build();
+      // The same code with an amount carries an invoice instead, which is longer than the name's
+      // LNURL: a Bitcoin testnet invoice with a description and a route hint runs to some 330
+      // characters (this one is a real one's length, its body a placeholder).
+      final invoice = 'lntb15u1p${'q' * 321}';
+      final withAmount = PayCode(
+              address: vectors['address'] as String,
+              ark: vectors['ark'] as String,
+              sequentia: c['library'] as String,
+              amount: '0.000015',
+              lightning: invoice)
+          .build();
+      final q = payCodeQr(named), qa = payCodeQr(withAmount);
+      // ignore: avoid_print
+      print('receive code ${plain.length} chars v${payCodeQr(plain).typeNumber}; with the longest name ${named.length} chars '
+          'v${q.typeNumber}; with an amount ${withAmount.length} chars v${qa.typeNumber}');
+      expect(q.errorCorrectLevel, QrErrorCorrectLevel.M);
+      // Never denser than the code with an amount, which the wallet already shows.
+      expect(q.typeNumber, lessThanOrEqualTo(qa.typeNumber));
+      expect(q.typeNumber, lessThanOrEqualTo(16));
+    });
+  });
 }

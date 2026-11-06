@@ -77,6 +77,11 @@ class Backend {
   /// hosted LSP serves both clients. See [lnWsUrl] for the on-device signer link.
   static String get lsp => '$_origin/lsp';
 
+  /// The domain of payment names (`name@<domain>`), served by the service at [lsp]: the default
+  /// node's only, since a name's invoices come from the Bitcoin ark ([bitcoinArk]). The web
+  /// wallet's SEQ_LNADDR_DOMAIN.
+  static String? get lnaddrDomain => isDefault ? Uri.parse(defaultOrigin).host : null;
+
   // -- Lightning (hosted-SeqLN LSP) transport config -------------------------
   // Mirrors the web wallet's window.SEQ_LSP_* globals. Empty [lnWsUrl] /
   // [lnHostPubkey] => Lightning is NOT deployed for this build: the on-device

@@ -69,3 +69,34 @@ bool lnFits(Map? info, String kind, String dir, Object? atoms, {required double?
   if (max == null) return lnFallbackFits(atoms, price: price, precision: precision);
   return fitsMax(atoms, max);
 }
+
+/// The assets the operator receives in over Lightning, from its `info`: each asset it serves that
+/// is not supervised and whose Lightning is up and takes payments in (the web wallet's
+/// `receivableAssets`, asset-lightning.js). A receive code asks an amount in BTC or in one of these.
+List<String> receivableAssets(Map? info) {
+  if (info == null) return const [];
+  final si = info['server_info'] is Map ? info['server_info'] as Map : info;
+  final assets = si['assets'];
+  if (assets is! List) return const [];
+  return [
+    for (final a in assets)
+      if (a is Map && a['asset'] is String && a['supervised'] == null && a['lightning'] is Map &&
+          (a['lightning'] as Map)['state'] == 'up' && (a['lightning'] as Map)['receives'] == true)
+        a['asset'] as String,
+  ];
+}
+
+/// What a Lightning receive the wallet asked for, as the leaf library lists it
+/// (`lightning_receives` under its hash), means for the code that carries its invoice: 'open'
+/// while it can still be paid, 'paid' once a payment is held for it (the code then shows a new
+/// one), 'gone' when it lapsed or failed (the web wallet's `receiveState`).
+String receiveState(Object? rec, int nowSeconds) {
+  if (rec is! Map) return 'gone';
+  final s = '${rec['state'] ?? ''}';
+  if (s == 'requested' || s == 'waiting') {
+    final e = rec['expires_at'];
+    return e == null || (num.tryParse('$e') ?? 0) > nowSeconds ? 'open' : 'gone';
+  }
+  if (s == 'failed') return 'gone';
+  return 'paid';
+}

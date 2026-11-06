@@ -87,4 +87,30 @@ void main() {
       expect(forbiddenIn(w), isEmpty, reason: w);
     }
   });
+
+  test('what a receive code can ask an amount in: assets whose Lightning is up and takes payments in', () {
+    final info = {
+      'server_info': {
+        'assets': [
+          {'asset': 'aa' * 32, 'lightning': {'state': 'up', 'receives': true}},
+          {'asset': 'bb' * 32, 'lightning': {'state': 'down', 'receives': true}},
+          {'asset': 'cc' * 32, 'lightning': {'state': 'up', 'receives': false}},
+          {'asset': 'dd' * 32, 'supervised': {'landing_allowance': '1'}, 'lightning': {'state': 'up', 'receives': true}},
+          {'asset': 'ee' * 32},
+        ],
+      },
+    };
+    expect(receivableAssets(info), ['aa' * 32]);
+    expect(receivableAssets(null), isEmpty);
+  });
+
+  test('a receive the code carries: open, paid or gone', () {
+    expect(receiveState({'state': 'waiting', 'expires_at': 200}, 100), 'open');
+    expect(receiveState({'state': 'requested'}, 100), 'open');
+    expect(receiveState({'state': 'waiting', 'expires_at': 100}, 100), 'gone');
+    expect(receiveState({'state': 'failed'}, 100), 'gone');
+    expect(receiveState(null, 100), 'gone');
+    expect(receiveState({'state': 'held'}, 100), 'paid');
+    expect(receiveState({'state': 'settled'}, 100), 'paid');
+  });
 }

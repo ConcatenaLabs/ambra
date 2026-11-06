@@ -10,6 +10,7 @@ import '../data/ark_btc_service.dart';
 import '../data/asset_picker.dart';
 import '../data/btc_state.dart';
 import '../data/config.dart';
+import '../data/btc_lightning.dart' show decodeBtcInvoice;
 import '../data/default_words.dart';
 import '../data/dev_mode.dart';
 import '../data/fee_asset_rule.dart';
@@ -30,6 +31,7 @@ import '../widgets/asset_sheet.dart';
 import '../widgets/ln_cards.dart';
 import '../widgets/widgets.dart';
 import 'scan_screen.dart';
+import '../data/lnaddr.dart' show parseLnAddress, resolveLnAddress, LnAddressError;
 
 class SendTab extends StatefulWidget {
   const SendTab({super.key, this.isActive = false});
@@ -425,7 +427,7 @@ class _SendTabState extends State<SendTab> {
     // A receive code is kept whole: its other ways to pay (instant ones) are in its query.
     try {
       final code = PayCode.read(raw);
-      if (code != null && (code.ark != null || code.sequentia != null || code.lightning != null)) {
+      if (code != null && (code.ark != null || code.sequentia != null || code.lightning != null || code.lnurl != null)) {
         setState(() {
           _addr.text = raw.trim();
           if (_isBtc && code.amount != null && double.tryParse(code.amount!) != null) _amount.text = code.amount!;
@@ -453,8 +455,30 @@ class _SendTabState extends State<SendTab> {
     _route = null;
     _byAddress = false;
     _why = null;
+    // A payment name (lnaddr.dart) is paid as what it stands for: one at the node's own domain at
+    // the receive code its wallet gives now, any asset; another service's in BTC, at the invoice
+    // it makes for the amount.
+    var input = _addr.text;
+    if (parseLnAddress(input) != null) {
+      try {
+        final sats = _isBtc ? parseAtoms(_amount.text, 8) : null;
+        final t = await resolveLnAddress(
+          text: input,
+          btc: _isBtc,
+          msat: sats == null ? null : sats * BigInt.from(1000),
+          domain: Backend.lnaddrDomain,
+          base: Backend.lsp,
+          decodeMsat: (pr) => decodeBtcInvoice(pr)['msat'] as BigInt,
+        );
+        if (!mounted) return;
+        if (t.invoice != null) _route = t.invoice;
+        input = t.code ?? t.invoice!;
+      } on LnAddressError catch (e) {
+        return _snack(e.message);
+      }
+    }
     try {
-      final code = PayCode.read(_addr.text);
+      final code = PayCode.read(input);
       if (code != null) {
         _route = _routeOf(code);
         if (_route == null) return _snack(DefaultWords.codeTakesAssets);

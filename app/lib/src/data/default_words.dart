@@ -8,8 +8,18 @@ class DefaultWords {
   static const codeCopied = 'Receive code copied';
   static const newCode = 'New code';
   static const amountInBtc = 'Amount in BTC (optional)';
+  /// The amount's label when it is asked in an asset rather than BTC.
+  static const amountOptional = 'Amount (optional)';
+
+  /// The switch under the receive code that makes it the confidential address, and what it means.
+  static const confidential = 'Confidential';
+  static const confidentialLine = 'Hides the asset and amount of a payment from everyone but you and the payer.';
+  static const confidentialOn = 'Everyone can still see that a payment was made. A payment that arrives in seconds is '
+      'never confidential, so this one arrives after the next block, in about a minute. '
+      'BTC is never confidential: to receive BTC, turn this off.';
+  static const addressCopied = 'Copied';
   static const recipient = 'Recipient';
-  static const recipientHint = 'a receive code, an address or an invoice';
+  static const recipientHint = 'a receive code, a payment name, an address or an invoice';
   static String review(String amount, String ticker) => 'Send $amount $ticker?';
   static const reviewLine = 'It arrives in seconds.';
   static String sent(String amount, String ticker, double secs) => 'Sent $amount $ticker (${secs.toStringAsFixed(1)} s).';
@@ -125,7 +135,8 @@ class DefaultWords {
 
   /// Every sentence above, filled with sample values: what the test reads.
   static List<String> all() => [
-        receiveCode, receiveCodeLine, copyCode, codeCopied, newCode, amountInBtc,
+        receiveCode, receiveCodeLine, copyCode, codeCopied, newCode, amountInBtc, amountOptional,
+        confidential, confidentialLine, confidentialOn, addressCopied,
         recipient, recipientHint, review('5', 'USDX'), reviewLine, sent('5', 'USDX', 1.2), stillArriving('USDX'),
         codeTakesAssets, addressNotNow, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)),
         fee('5', 'USDX'), arriving('5', 'USDX'), redoing('5', 'USDX'), keptSafe('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
