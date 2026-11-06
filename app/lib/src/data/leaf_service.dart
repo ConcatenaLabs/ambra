@@ -176,6 +176,20 @@ class LeafService extends ChangeNotifier {
 
   /// Opens the leaf wallet this phone holds for the wallet's mnemonic, if any, and
   /// starts its schedule. Called once the wallet is unlocked.
+  /// The library's refusal while another opener holds the store.
+  static bool _openElsewhere(LeafRefusal r) => r.message.contains('open elsewhere');
+
+  Timer? _startTimer;
+  int _startTries = 0;
+
+  /// [start] asked again in a few seconds, while the store is held elsewhere (for two minutes at most).
+  void _startAgainSoon() {
+    if (_startTries++ >= 24 || (_startTimer?.isActive ?? false)) return;
+    _startTimer = Timer(const Duration(seconds: 5), () {
+      if (!open) unawaited(start());
+    });
+  }
+
   Future<void> start() async {
     final m = await WalletRepository.instance.readMnemonic();
     if (m == null) return;
@@ -183,8 +197,16 @@ class LeafService extends ChangeNotifier {
     try {
       joined = await leaves.leavesExists(dir: dir, mnemonic: m);
     } catch (e) {
-      lastError = LeafRefusal.of(e);
-      joined = false;
+      final r = LeafRefusal.of(e);
+      // A store open elsewhere holds a wallet: this process still holds it open from a screen closed
+      // before (the app swiped away while its scheduled pass kept the process), or that pass has it
+      // now. It is this phone's leaf wallet, and is opened below (ambra#220); never "none held".
+      if (_openElsewhere(r)) {
+        joined = true;
+      } else {
+        lastError = r;
+        joined = false;
+      }
     }
     operator = await savedOperator();
     await _loadClaims();
@@ -202,11 +224,14 @@ class LeafService extends ChangeNotifier {
       await leaves.leavesOpen(dir: dir, mnemonic: m, nodePassword: await nodePassword() ?? '');
       open = true;
       lastError = null;
+      _startTries = 0;
       debugPrint('[leaves] open in ${DateTime.now().difference(t0).inMilliseconds} ms');
       await _setWatchtowers();
     } catch (e) {
       lastError = LeafRefusal.of(e);
       debugPrint('[leaves] open refused after ${DateTime.now().difference(t0).inMilliseconds} ms: $e');
+      // The scheduled pass holds the store for its own open: asked again once it has let go.
+      if (_openElsewhere(lastError!)) _startAgainSoon();
     }
     notifyListeners();
     if (open) {
@@ -324,6 +349,17 @@ class LeafService extends ChangeNotifier {
   /// wallet's own upkeep keeps off the coins for [boardQuiet].
   void personActed() => _personAt = DateTime.now();
 
+  /// Coins the wallet moved out of the Ark for something a person asked for (a confidential
+  /// payment, a stake, a pool's membership, a mix; on_chain_need.dart) are left on the chain for
+  /// [d]: the wallet's own boarding would otherwise put them back before they are used.
+  void keepOnChain(Duration d) {
+    final until = DateTime.now().add(d);
+    if (_keepUntil == null || until.isAfter(_keepUntil!)) _keepUntil = until;
+  }
+
+  DateTime? _keepUntil;
+  bool get _keptOnChain => _keepUntil != null && DateTime.now().isBefore(_keepUntil!);
+
   /// Whether something a person asked for runs now or ran within [boardQuiet]: the
   /// wallet's own upkeep (a board, here or on the Bitcoin side) waits.
   bool get personBusy {
@@ -388,7 +424,9 @@ class LeafService extends ChangeNotifier {
                 ? 'a board runs'
                 : personBusy
                     ? 'something a person asked for runs ($_asking asking)'
-                    : null;
+                    : _keptOnChain
+                        ? 'coins moved out for a payment are kept on the chain until ${_keepUntil!.toIso8601String()}'
+                        : null;
     if (skip != null || DevMode.instance.on) return _boardWhy(skip);
     // The library must read every key the balance may show a coin at, first.
     if (await _coverReceiveKeys() > 0) {
@@ -730,8 +768,17 @@ class LeafService extends ChangeNotifier {
   Future<dynamic> run(String command, [Map<String, dynamic> args = const {}]) async {
     if (!open) throw LeafRefusal('refused', 'the leaf wallet is not open');
     _running++;
+    final t0 = DateTime.now();
     try {
       final out = jsonDecode(await leaves.leavesRun(command: command, argsJson: jsonEncode(args)));
+      // A command over ten seconds says where its time went (the library's own costs), so a slow
+      // phone can be read from its log.
+      final ms = DateTime.now().difference(t0).inMilliseconds;
+      if (ms > 10000 && out is Map) {
+        final r = out['result'];
+        final t = jsonEncode({'cost': out['cost'], 'steps': r is Map ? r['cost_by_step'] : null});
+        debugPrint('[leaves] slow $command $ms ms: ${t.length > 900 ? t.substring(0, 900) : t}');
+      }
       return (out as Map)['result'];
     } catch (e) {
       throw LeafRefusal.of(e);

@@ -170,8 +170,14 @@ module that implements it.
     asked for firm terms), with "The book can fill up to … now." when it cannot, and reads
     "about" until Review. Under You pay, its balance and **Max**; between the two, **⇅** swaps
     the sides, each amount riding with its asset;
-  - **Review** ("Getting the exact price…": every source asked at once, a firm price within
-    8 s, 20 s when the BTC desk is the only source, a late answer left out and released), then
+  - **Review** ("Getting the exact price…": the best four sources asked at once, the next four
+    when none answers, each given 8 s from the asking (20 s when the BTC desk is the only
+    source), a late answer left out and released; what the wallet itself checks of a price
+    given in time is waited for up to 30 s more while no other is in hand, and the button then
+    reads "Still getting the exact price: this can take up to half a minute…"; what the wallet
+    can pay is taken from its last reading, never waited for behind the library; with no price
+    45 s after Review it says "Your wallet is still finishing something it started, so it could
+    not get a price in time…" and lets a later price go), then
     **Trade**, which frees the screen after 1.5 s: the trade goes on under Open as "Sending…",
     then Sent, "Received, settling" and Settled, the same words as History.
   - What was entered, and a price being asked for, is kept across the background, the app lock
@@ -397,10 +403,24 @@ module that implements it.
     arrives in a few minutes." (the operator's round interval), and the fee when there is
     one. A quote the library refuses reads "This amount can't be sent to an address right
     now. Send it to a receive code, or pay an invoice."
+    A confidential address (`tsqb1…`) is paid on the chain so that its amount is hidden
+    (`confidential_pay.dart`, the web wallet's `confidential-pay.js`): beside the payment, a
+    second blinded output to the wallet's own confidential address takes what the inputs hold
+    beyond the payment and its fee, so the chain shows only the two together. When the chain holds
+    too little, a round amount is moved out of the leaves to the wallet's own address first (all
+    of the asset held there, or the next power of ten above the need, whichever is smaller;
+    `on_chain_need.dart`, as for a stake), under the button: "Moving <amount> <TICKER> out of the
+    Ark so it can be sent confidentially. They are ready in a few minutes. Keep this screen
+    open." The review says "Anyone reading the chain can see that this payment is <TICKER>, but
+    not how much." (this wallet spends only coins of the asset paid), or, when too little is held
+    beside the payment, that its amount and asset can still be worked out. A move already under
+    way is waited for, never asked twice; when none can be made, one sentence says why and
+    nothing moves.
   - Coins that arrive on the chain, of every asset the operator serves, are boarded by
     the wallet itself (amount = what the chain holds less the board's fee, paid in the
     same asset, on the fee quoted), never while something a person asked for runs or in
-    the minute after it, since the leaf wallet spends the same addresses' coins. What is
+    the minute after it, since the leaf wallet spends the same addresses' coins, nor while
+    coins moved out for a person's payment, stake or mix wait to be used (up to an hour). What is
     not final yet shows as "<amount> <ticker> arriving" under the asset's figure. Before
     boarding, the leaf wallet is handed keys (its `address` command) until it has handed
     out as many as the main wallet, so it reads every key the balance can show a coin at:

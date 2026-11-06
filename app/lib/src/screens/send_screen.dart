@@ -33,6 +33,8 @@ import '../widgets/widgets.dart';
 import 'scan_screen.dart';
 import '../data/payment_name_service.dart';
 import '../data/lnaddr.dart' show parseLnAddress, resolveLnAddress, LnAddressError;
+import '../data/confidential_pay.dart';
+import '../data/on_chain_need.dart';
 
 class SendTab extends StatefulWidget {
   const SendTab({super.key, this.isActive = false});
@@ -55,6 +57,8 @@ class _SendTabState extends State<SendTab> {
   bool _feeManual = false; // true once the user explicitly picks a fee asset
   bool _loading = true;
   bool _sendingInTree = false; // a payment to a receive code is on its way
+  /// What the screen says while coins move out of the Ark for a confidential payment.
+  String? _moveSay;
 
   /// The way chosen out of a receive code in the recipient field (its receive request,
   /// its ark address or its address), for the payment being reviewed; null when the field
@@ -458,7 +462,7 @@ class _SendTabState extends State<SendTab> {
     });
   }
 
-  Future<void> _review() async {
+  Future<void> _review({bool moved = false}) async {
     _route = null;
     _byAddress = false;
     _why = null;
@@ -538,8 +542,61 @@ class _SendTabState extends State<SendTab> {
     final notVested = _notVested(atoms);
     if (notVested != null) return _snack(notVested);
     final bal = BigInt.tryParse(_selected?.atoms ?? '0') ?? BigInt.zero;
+    // Default mode: a payment to a confidential address is made so that its amount is hidden
+    // (confidential_pay.dart, the web wallet's Send): on the chain, beside a second blinded output
+    // to the wallet's own confidential address. When the chain holds too little, a round amount is
+    // moved out of the Ark to the wallet's own address first, saying so, never the payment's own.
+    var own = BigInt.zero;
+    String? confidentialSaid;
+    if (!DevMode.instance.on && isConfidentialAddress(addr)) {
+      final rate = _rateFor(_assetId);
+      if (rate == null) return _snack(DefaultWords.addressNotNow);
+      final margin = feeMarginAtoms(rate);
+      final leaves = LeafService.instance;
+      // What the chain holds now, read again: a figure read before the wallet moved its coins into
+      // the Ark by itself still counts them.
+      final onchain = moved ? bal : await _onChainAtoms(_assetId);
+      if (!mounted) return;
+      debugPrint('[ambra-send] confidential: $atoms of ${_assetId.substring(0, 8)}, $onchain on the chain, ${leaves.open ? leaves.spendableAtoms(_assetId) : 0} held for instant payments');
+      final minLeaf = leaves.open ? minLeaves(leaves.info)[_assetId] : null;
+      var plan = confidentialPlan(
+        amount: atoms,
+        margin: margin,
+        onchain: onchain,
+        instant: leaves.open ? leaves.spendableAtoms(_assetId) : null,
+        minLeaf: minLeaf,
+        precision: label.precision,
+      );
+      // Part of what is held for instant payments may not be movable now (a channel's balance, a
+      // coin not final yet): the library says how much is, and the plan is made on that.
+      if (plan.move > BigInt.zero && !moved && leaves.open) {
+        try {
+          final m = await WalletRepository.instance.readMnemonic();
+          if (m != null) {
+            await leaves.run('offboard_quote', {'asset': _assetId, 'amount': '${plan.move}', 'address': await core.receiveAddress(mnemonic: m)});
+          }
+        } catch (e) {
+          final live = liveFromRefusal('$e');
+          debugPrint('[ambra-send] what can move now: $live');
+          if (live != null) {
+            plan = confidentialPlan(amount: atoms, margin: margin, onchain: onchain, instant: live, minLeaf: minLeaf, precision: label.precision);
+            if (plan.short != null) return _snack(DefaultWords.notMoved);
+          }
+        }
+        if (!mounted) return;
+      }
+      if (plan.short != null) {
+        // What is still arriving would cover it: said so, rather than that the wallet holds too little.
+        if (onchain + _leafAtoms(_assetId) >= atoms + margin) return _snack(DefaultWords.stillArriving(label.ticker));
+        return _snack(DefaultWords.notEnough(formatAtoms('${plan.short}', label.precision), label.ticker));
+      }
+      debugPrint('[ambra-send] confidential plan: $plan');
+      if (plan.move > BigInt.zero && !moved) return _moveOutThenReview(label.ticker, label.precision, onchain + plan.move);
+      own = ownShare(amount: atoms, margin: margin, onchain: onchain);
+      confidentialSaid = own > BigInt.zero ? DefaultWords.confidentialAmountHidden(label.ticker) : DefaultWords.confidentialSeen;
+    }
     // User mode: what the chain cannot cover the instant part pays, out to the address.
-    if (atoms > bal && !DevMode.instance.on && LeafService.instance.open) {
+    if (atoms > bal && !DevMode.instance.on && LeafService.instance.open && confidentialSaid == null) {
       if (atoms <= LeafService.instance.spendableAtoms(_assetId)) return _reviewOffboard(addr, atoms);
       if (atoms <= bal + _leafAtoms(_assetId)) return _snack(DefaultWords.addressNotNow);
     }
@@ -571,12 +628,25 @@ class _SendTabState extends State<SendTab> {
       feeRateSatKvb = fr * math.pow(10, label.precision) * feeRate.toDouble() / 100000;
     }
 
+    // The wallet's own confidential output goes to an address of its own that is not the one coins
+    // are moved out to (index 0): a script seen twice would tell the outputs apart.
+    final extra = <core.Recipient>[];
+    if (own > BigInt.zero) {
+      final m = await WalletRepository.instance.readMnemonic();
+      if (m == null) return _snack(DefaultWords.couldNotSend);
+      final idx = BtcState.instance.unifiedNext < 1 ? 1 : BtcState.instance.unifiedNext;
+      final me = await core.receiveAddressAt(mnemonic: m, index: idx, confidential: true);
+      extra.add(core.Recipient(address: me.address, assetId: _assetId, satoshi: own));
+      if (!mounted) return;
+    }
+    final note = [_addressNote(DefaultWords.arrivesNextBlock), confidentialSaid].whereType<String>().join(' ');
     final txid = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: AmbraColors.panel,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(AmbraRadii.card))),
       builder: (_) => _ReviewSheet(
+        extra: extra,
         address: addr,
         assetId: _assetId,
         atoms: atoms,
@@ -585,7 +655,7 @@ class _SendTabState extends State<SendTab> {
         feeAsset: feeAsset,
         feeLabel: _feeLabel,
         feeRateSatKvb: feeRateSatKvb,
-        note: _addressNote(DefaultWords.arrivesNextBlock),
+        note: note.isEmpty ? null : note,
       ),
     );
     if (txid != null && mounted) {
@@ -650,6 +720,69 @@ class _SendTabState extends State<SendTab> {
       ));
       _load();
     }
+  }
+
+  /// What the wallet holds of [asset] on the chain now, read again.
+  Future<BigInt> _onChainAtoms(String asset) async {
+    final m = await WalletRepository.instance.readMnemonic();
+    if (m == null) return BigInt.zero;
+    final s = await core.syncWallet(mnemonic: m, esploraUrl: Backend.esplora);
+    for (final b in s.balances) {
+      if (b.assetId == asset) return BigInt.tryParse(b.atoms) ?? BigInt.zero;
+    }
+    return BigInt.zero;
+  }
+
+  /// User mode, a confidential address: [need] atoms of the asset (the amount and a margin for its
+  /// fee) are moved out of the Ark to the wallet's own address, the screen saying so while they
+  /// move, and the payment is then reviewed on the chain. When they cannot be moved, one sentence
+  /// says why and nothing moves.
+  Future<void> _moveOutThenReview(String ticker, int precision, BigInt need) async {
+    final asset = _assetId;
+    setState(() {
+      _sendingInTree = true;
+      _moveSay = null;
+    });
+    try {
+      await ensureOnChain(
+        asset: asset,
+        ticker: ticker,
+        precision: precision,
+        need: need,
+        onChain: () => _onChainAtoms(asset),
+        purpose: DefaultWords.confidentialPurpose,
+        say: (t) {
+          if (mounted) setState(() => _moveSay = t);
+        },
+      );
+    } on OnChainRefusal catch (e) {
+      if (mounted) {
+        setState(() {
+          _sendingInTree = false;
+          _moveSay = null;
+        });
+        _snack(e.message);
+      }
+      return;
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _sendingInTree = false;
+          _moveSay = null;
+        });
+        _snack(DefaultWords.notMoved);
+      }
+      return;
+    }
+    if (!mounted) return;
+    await _load();
+    if (!mounted) return;
+    setState(() {
+      _sendingInTree = false;
+      _moveSay = null;
+    });
+    if (_assetId != asset) return;
+    return _review(moved: true);
   }
 
   /// User mode: a payment to an address out of the leaves (the library's `offboard`),
@@ -1022,6 +1155,10 @@ class _SendTabState extends State<SendTab> {
                 ],
               ],
             ],
+            if (_moveSay != null) ...[
+              const SizedBox(height: 16),
+              Text(_moveSay!, key: const Key('send-moving'), style: AmbraText.sub),
+            ],
           ]),
         ),
         if (canSend)
@@ -1077,7 +1214,10 @@ class _ReviewSheet extends StatefulWidget {
     required this.feeLabel,
     required this.feeRateSatKvb,
     this.note,
+    this.extra = const [],
   });
+  /// Outputs beside the payment: a confidential payment's own output to the wallet.
+  final List<core.Recipient> extra;
   /// A plain sentence over the figures (a receive code paid at its address, and why).
   final String? note;
   final String address;
@@ -1115,7 +1255,7 @@ class _ReviewSheetState extends State<_ReviewSheet> {
       final pset = await core.buildSendTx(
         mnemonic: m,
         esploraUrl: Backend.esplora,
-        recipients: [core.Recipient(address: widget.address, assetId: widget.assetId, satoshi: widget.atoms)],
+        recipients: [core.Recipient(address: widget.address, assetId: widget.assetId, satoshi: widget.atoms), ...widget.extra],
         feeRateSatKvb: widget.feeRateSatKvb,
         feeAsset: widget.feeAsset,
       );

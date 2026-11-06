@@ -293,9 +293,9 @@ const int kReadyTries = 90;
 /// goes on in Open as "Sending…", and the person can leave and come back.
 const Duration kConfirmShownFor = Duration(milliseconds: 1500);
 
-/// How long a person waits on Review at most, whatever a source or the wallet is doing: then a
-/// plain reason (the engine's own deadline is shorter; this is the last guard).
-const Duration kReviewAtMost = Duration(seconds: 25);
+/// How long a person waits on Review at most, whatever the wallet's library is doing: then the
+/// wallet says it is busy, and a price that comes later is let go of. The web wallet's QUOTE_MOST_MS.
+const Duration kReviewAtMost = Duration(seconds: 45);
 
 class _UserComposerState extends State<UserComposer> {
   String? _pay, _get;
@@ -308,6 +308,8 @@ class _UserComposerState extends State<UserComposer> {
   Ticket? _ticket;
   Candidate? _choice;
   bool _busy = false;
+  /// Review has run past the makers' window: the wallet still checks a price it was given.
+  bool _pricingLong = false;
   String? _note, _error;
   List<Map<String, dynamic>> _trades = [];
   List<String> _admitted = [];
@@ -580,14 +582,24 @@ class _UserComposerState extends State<UserComposer> {
     setState(() {
       _busy = true;
       _reviewing = true;
+      _pricingLong = false;
+    });
+    final longTimer = Timer(const Duration(milliseconds: kQuoteFirmMs + 1000), () {
+      if (mounted && _busy && _ticket == null) setState(() => _pricingLong = true);
     });
     final t0 = DateTime.now();
     var again = false;
     try {
       // The engine answers within its own deadline; this guards a wait on anything else.
-      final q = await widget.engine.quote(pay: pay, receive: get, amount: atoms).timeout(kReviewAtMost, onTimeout: () {
+      var late = false;
+      final asked = widget.engine.quote(pay: pay, receive: get, amount: atoms).then((q) {
+        if (late && q.ok) widget.engine.drop(q.choice);
+        return q;
+      });
+      final q = await asked.timeout(kReviewAtMost, onTimeout: () {
+        late = true;
         debugPrint('[user composer] quote: no answer in ${kReviewAtMost.inSeconds} s');
-        return QuoteResult.no('no-firm-offer');
+        return QuoteResult.no('wallet-busy');
       });
       debugPrint('[user composer] quote ${q.ok ? 'ticket' : q.why} in ${DateTime.now().difference(t0).inMilliseconds} ms');
       if (!mounted) return;
@@ -614,6 +626,7 @@ class _UserComposerState extends State<UserComposer> {
             'part-ready' => UserWords.partReady(_amt(pay, q.ready ?? BigInt.zero), p, q.soon),
             'too-small' => UserWords.tooSmall,
             'no-firm-offer' => UserWords.noFirmOffer,
+            'wallet-busy' => UserWords.walletBusy,
             'opening' => UserWords.opening,
             'not-listed' => UserWords.notListed(g, p),
             _ => UserWords.notOffered(g, p),
@@ -625,10 +638,12 @@ class _UserComposerState extends State<UserComposer> {
       debugPrint('[user composer] quote: $e');
       if (mounted) setState(() => _error = e is LeafRefusal && e.plain ? e.message : UserWords.notOffered(widget.ticker(get), widget.ticker(pay)));
     } finally {
+      longTimer.cancel();
       if (mounted) {
         setState(() {
           _busy = false;
           _reviewing = false;
+          _pricingLong = false;
         });
       }
     }
@@ -908,7 +923,7 @@ class _UserComposerState extends State<UserComposer> {
       const SizedBox(height: 12),
       if (t == null)
         FilledButton(key: const ValueKey('ucReview'), onPressed: _busy || _pay == null || _get == null ? null : _review,
-            child: Text(_busy ? UserWords.pricing : UserWords.review))
+            child: Text(_busy ? (_pricingLong ? UserWords.pricingLong : UserWords.pricing) : UserWords.review))
       else
         Row(children: [
           FilledButton(key: const ValueKey('ucConfirm'), onPressed: _busy ? null : _confirm, child: Text(_busy ? UserWords.sending : UserWords.confirm)),

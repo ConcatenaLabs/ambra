@@ -13,7 +13,7 @@ class DefaultWords {
 
   /// The switch under the receive code that makes it the confidential address, and what it means.
   static const confidential = 'Confidential';
-  static const confidentialLine = 'Hides the asset and amount of a payment from everyone but you and the payer.';
+  static const confidentialLine = 'Asks the payer to hide the amount, and the asset where it can, from everyone but you and them.';
   static const confidentialOn = 'Everyone can still see that a payment was made. A payment that arrives in seconds is '
       'never confidential, so this one arrives after the next block, in about a minute. '
       'BTC is never confidential: to receive BTC, turn this off.';
@@ -27,6 +27,35 @@ class DefaultWords {
   static const codeTakesAssets = 'A receive code takes Sequentia assets. For BTC, use an address or an invoice.';
   static const addressNotNow = "This amount can't be sent to an address right now. "
       'Send it to a receive code, or pay an invoice.';
+
+  /// What the wallet holds for instant payments is never confidential, so a payment to a
+  /// confidential address is paid on the chain: what it needs is moved out of the Ark first,
+  /// by the wallet itself, saying so ([movingOut] with [confidentialPurpose]). The same
+  /// sentences say it for a stake, a pool's membership and a mix (stake_words.dart). The
+  /// contract says "page"; a phone has a screen.
+  static const confidentialPurpose = 'sent confidentially';
+  /// The review of a payment to a confidential address (confidential_pay.dart): what anyone
+  /// reading the chain can still see. This wallet spends only coins of the asset paid, so the
+  /// asset can be seen; the amount is hidden beside the wallet's own confidential output, unless
+  /// too little is held beside the payment.
+  static String confidentialAmountHidden(String ticker) =>
+      'Anyone reading the chain can see that this payment is $ticker, but not how much.';
+  static const confidentialSeen = 'This payment\u2019s amount and asset can still be worked out by anyone reading the chain.';
+  /// When coins moved out of the Ark are ready, from the operator's interval in minutes.
+  static String readyIn(int? minutes) => minutes == null
+      ? 'They are ready shortly.'
+      : (minutes <= 5 ? 'They are ready in a few minutes.' : 'They are ready in about $minutes minutes.');
+  static String movingOut(String what, String purpose, int? minutes) =>
+      'Moving $what out of the Ark so it can be $purpose. ${readyIn(minutes)} Keep this screen open.';
+  /// A move still waiting for the network after a few minutes: it goes ahead by itself.
+  static String movingWaits(String what, String purpose) =>
+      '$what cannot be moved out of the Ark yet: the network moves it as soon as it can, and it stays yours meanwhile. '
+      'It is $purpose then, while this screen is open; or come back later and press the button again.';
+  static String cannotMoveNow(String what) =>
+      '$what cannot be moved out of the Ark right now: the network has too little of it free. Nothing has moved: try again later.';
+  static String notEnough(String amount, String ticker) => 'Not enough $ticker: $amount $ticker short.';
+  static const notMoved = 'This could not be moved out of the Ark just now. Nothing was spent: try again in a moment.';
+  static const notReady = 'What was moved out of the Ark has not arrived yet. It stays yours: try again in a few minutes.';
 
   /// When a payment to an address from the instant part arrives: [minutes] is the
   /// operator's round interval in whole minutes, null when it publishes none.
@@ -141,7 +170,9 @@ class DefaultWords {
         receiveCode, receiveCodeLine, copyCode, codeCopied, newCode, amountInBtc, amountOptional,
         confidential, confidentialLine, confidentialOn, addressCopied,
         recipient, recipientHint, review('5', 'USDX'), reviewLine, sent('5', 'USDX', 1.2), stillArriving('USDX'),
-        codeTakesAssets, addressNotNow, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)),
+        codeTakesAssets, addressNotNow, confidentialPurpose, confidentialAmountHidden('USDX'), confidentialSeen, readyIn(null), readyIn(1), readyIn(12),
+        movingOut('1.00004 USDX', confidentialPurpose, 1), movingWaits('1.00004 USDX', confidentialPurpose),
+        cannotMoveNow('1.00004 USDX'), notEnough('1', 'USDX'), notMoved, notReady, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)),
         fee('5', 'USDX'), arriving('5', 'USDX'), redoing('5', 'USDX'), keptSafe('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
         arrivesAfterBlock, noFees, btcSentAfterBlock('0.001'),
         btcUpTo('0.001'), couldNotSend, byAddress(arrivesAfterBlock), arrivesNextBlock, moving('0.001', 'BTC'),
