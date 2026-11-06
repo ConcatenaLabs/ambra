@@ -172,6 +172,8 @@ class UserWords {
       : 'Getting your $pay ready for this trade: it is ready once the next Bitcoin blocks settle it. Nothing has moved.';
   static const opening = 'Your wallet is still opening: try again in a moment. Nothing has moved.';
   static const noFirmOffer = 'Nobody could confirm a price for this just now. Nothing has moved: try again in a moment.';
+  /// The wallet's own library was busy finishing something it started for longer than Review waits.
+  static const walletBusy = 'Your wallet is still finishing something it started, so it could not get a price in time. Nothing has moved: try again in a moment.';
   // Held, and shown in the balance, but not where a trade pays from yet (just arrived, or still
   // being moved in by the wallet), while too little of it is ready for any offer.
   static String partReady(String ready, String pay, [bool soon = false]) => soon
@@ -238,6 +240,7 @@ class UserWords {
     pricing,
     pricingLong,
     noFirmOffer,
+    walletBusy,
     opening,
     readying('XT'),
     readying('XT', true),

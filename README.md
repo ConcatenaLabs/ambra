@@ -175,7 +175,9 @@ module that implements it.
     source), a late answer left out and released; what the wallet itself checks of a price
     given in time is waited for up to 30 s more while no other is in hand, and the button then
     reads "Still getting the exact price: this can take up to half a minute…"; what the wallet
-    can pay is taken from its last reading, never waited for behind the library), then
+    can pay is taken from its last reading, never waited for behind the library; with no price
+    45 s after Review it says "Your wallet is still finishing something it started, so it could
+    not get a price in time…" and lets a later price go), then
     **Trade**, which frees the screen after 1.5 s: the trade goes on under Open as "Sending…",
     then Sent, "Received, settling" and Settled, the same words as History.
   - What was entered, and a price being asked for, is kept across the background, the app lock
