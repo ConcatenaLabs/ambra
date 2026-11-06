@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'name_key.dart';
 import 'name_stock.dart';
 import 'pay_code.dart';
+import 'word_name.dart';
 
 /// A wallet's payment name: `name@sequentiatestnet.com`, a Lightning address (LNURL-pay, LUD-06 and
 /// LUD-16) that any Lightning wallet pays in an amount it chooses, and that a Sequentia wallet pays
@@ -43,8 +44,12 @@ class NameWords {
   static const label = 'Your payment name';
   static const tip = 'Other wallets can pay you at this name, in any amount they choose. A Sequentia wallet can pay it '
       'while this wallet is closed; other wallets, while it is open.';
-  static const none = 'Choose a name other wallets can pay you at, in any amount they choose.';
-  static const choose = 'Choose a name';
+  static const none = 'Get a name other wallets can pay you at, in any amount they choose.';
+  static const choose = 'Choose your own';
+  static const getName = 'Get a name';
+  static const getting = 'Getting a name…';
+  static const useWords = 'Use a word name instead';
+  static const noWordName = 'No word name is free for this wallet now. Choose your own instead.';
   static const hint = 'yourname';
   static const save = 'Save';
   static const cancel = 'Cancel';
@@ -80,7 +85,7 @@ class NameWords {
 
   static List<String> all() => [label, tip, none, choose, hint, save, cancel, saving, copy, copied, remove, removing,
         badName, taken, noWallet, offline, qrTip, public, copyName, copiedName, showFull, showName, fullTip, unsigned,
-        changed, busy];
+        changed, busy, getName, getting, useWords, noWordName];
 }
 
 /// Why [name] can't be a name, or null.
@@ -360,6 +365,30 @@ class LnAddress {
 
   String? get name => _name;
   String? get address => _name == null ? null : '$_name@$domain';
+
+  /// The name as shown: a word name with each word's capital (AmberFalcon@domain), any other as it
+  /// is. The name itself, the QR code and Copy stay in lower case.
+  String? get display {
+    final n = _name;
+    if (n == null) return null;
+    String? pub;
+    try {
+      pub = key()?.pub;
+    } catch (_) {}
+    return '${displayName(n, pub)}@$domain';
+  }
+
+  /// Whether the name held is one of this key's word names.
+  bool get isWordName {
+    final n = _name;
+    if (n == null) return false;
+    try {
+      final k = key();
+      return k != null && wordNameCandidates(k.pub).any((c) => c.name == n);
+    } catch (_) {
+      return false;
+    }
+  }
   bool get running => _running;
 
   /// The LNURL-pay a receive code carries for the name, or null without one.
@@ -527,6 +556,21 @@ class LnAddress {
     await _keepStock(rec);
     _toppedAt = _now();
     return (j['held'] as List? ?? const []).length;
+  }
+
+  /// The wallet's word name (word_name.dart): the first of its key's candidates the service does
+  /// not hold already. Registering it releases any other name the key holds.
+  Future<String> claimWordName() async {
+    final k = _keyOrThrow();
+    for (final c in wordNameCandidates(k.pub)) {
+      try {
+        return await register(c.name);
+      } on LnAddressError catch (e) {
+        if (e.status == 409) continue;
+        rethrow;
+      }
+    }
+    throw const LnAddressError(NameWords.noWordName);
   }
 
   Future<String> register(String wanted) async {
