@@ -293,10 +293,9 @@ const int kReadyTries = 90;
 /// goes on in Open as "Sending…", and the person can leave and come back.
 const Duration kConfirmShownFor = Duration(milliseconds: 1500);
 
-/// How long a person waits on Review at most, whatever a source or the wallet is doing: then a
-/// plain reason (the engine's own deadline, [kQuoteFirmMs] from the asking and [kQuoteReadMs] more
-/// for its own check of a price it was given, is shorter; this is the last guard).
-const Duration kReviewAtMost = Duration(seconds: 60);
+/// How long a person waits on Review at most, whatever the wallet's library is doing: then the
+/// wallet says it is busy, and a price that comes later is let go of. The web wallet's QUOTE_MOST_MS.
+const Duration kReviewAtMost = Duration(seconds: 45);
 
 class _UserComposerState extends State<UserComposer> {
   String? _pay, _get;
@@ -592,9 +591,15 @@ class _UserComposerState extends State<UserComposer> {
     var again = false;
     try {
       // The engine answers within its own deadline; this guards a wait on anything else.
-      final q = await widget.engine.quote(pay: pay, receive: get, amount: atoms).timeout(kReviewAtMost, onTimeout: () {
+      var late = false;
+      final asked = widget.engine.quote(pay: pay, receive: get, amount: atoms).then((q) {
+        if (late && q.ok) widget.engine.drop(q.choice);
+        return q;
+      });
+      final q = await asked.timeout(kReviewAtMost, onTimeout: () {
+        late = true;
         debugPrint('[user composer] quote: no answer in ${kReviewAtMost.inSeconds} s');
-        return QuoteResult.no('no-firm-offer');
+        return QuoteResult.no('wallet-busy');
       });
       debugPrint('[user composer] quote ${q.ok ? 'ticket' : q.why} in ${DateTime.now().difference(t0).inMilliseconds} ms');
       if (!mounted) return;
@@ -621,6 +626,7 @@ class _UserComposerState extends State<UserComposer> {
             'part-ready' => UserWords.partReady(_amt(pay, q.ready ?? BigInt.zero), p, q.soon),
             'too-small' => UserWords.tooSmall,
             'no-firm-offer' => UserWords.noFirmOffer,
+            'wallet-busy' => UserWords.walletBusy,
             'opening' => UserWords.opening,
             'not-listed' => UserWords.notListed(g, p),
             _ => UserWords.notOffered(g, p),
