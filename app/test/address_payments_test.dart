@@ -126,6 +126,8 @@ void main() {
     }))));
     expect(find.text('Not sent'), findsOneWidget);
     expect(find.textContaining('Nothing left your wallet.'), findsOneWidget);
+    // Never "Sent" beside "Not sent" (seen on the device: "Sent · <time> · Nothing left your wallet.").
+    expect(find.textContaining('Sent'), findsNothing);
     final amt = t.widget<Text>(find.byKey(const Key('payment-not-made-amount')));
     expect(amt.style!.decoration, TextDecoration.lineThrough);
   });
