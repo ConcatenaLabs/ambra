@@ -27,7 +27,9 @@ class StandIn {
   /// Commands that answer only after this long (ms): the wallet's library busy with something else.
   final slowCommands = <String, int>{};
 
+  int syncs = 0;
   Future<dynamic> run(String cmd, Map<String, dynamic> a) async {
+    if (cmd == 'sync') syncs++;
     final wait = slowCommands[cmd];
     if (wait != null) await Future<void>.delayed(Duration(milliseconds: wait));
     switch (cmd) {
@@ -513,5 +515,25 @@ void main() {
     final q = await e.quote(pay: x, receive: y, amount: BigInt.from(400000));
     expect([q.why, q.soon], ['freeing', true]);
     expect(released, ['k1']);
+  });
+
+  test('engine: one sync serves trades moving on together, and the next waits twice what the last took', () async {
+    final s = StandIn()..slowCommands['sync'] = 30;
+    var t = 0;
+    final eng = s.engine(now: () => t);
+    final q = await eng.quote(pay: x, receive: y, amount: BigInt.from(400000));
+    await eng.confirm(q.choice!, q.ticket!);
+    final rec = (await eng.records()).first;
+    final before = s.syncs;
+    // Three passes at once: one sync.
+    await Future.wait([eng.advance(rec), eng.advance(rec), eng.advance(rec)]);
+    expect(s.syncs - before, 1);
+    // Just after it: none again.
+    await eng.advance((await eng.records()).first);
+    expect(s.syncs - before, 1);
+    // Ten seconds on: the next.
+    t += 10001;
+    await eng.advance((await eng.records()).first);
+    expect(s.syncs - before, 2);
   });
 }
