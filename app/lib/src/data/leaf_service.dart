@@ -866,7 +866,19 @@ class LeafService extends ChangeNotifier {
       }
       return (out as Map)['result'];
     } catch (e) {
-      throw LeafRefusal.of(e);
+      // A command refused after holding the library over ten seconds is named as one that
+      // answered is: a refusal holds every command behind it just as long.
+      final ms = DateTime.now().difference(t0).inMilliseconds;
+      final refusal = LeafRefusal.of(e);
+      // Refused for what the wallet holds out of round (a large payment just received, such as
+      // the faucet's five assets): what it received is given up at the next turn, not after the
+      // refresh's usual pace, so room comes back sooner (faucet#30).
+      if (holdingRefusal(refusal)) _refreshedAt = null;
+      if (ms > 10000) {
+        final t = refusal.message.length > 300 ? refusal.message.substring(0, 300) : refusal.message;
+        debugPrint('[leaves] slow $command $ms ms, refused: $t');
+      }
+      throw refusal;
     } finally {
       _running--;
     }
@@ -1989,6 +2001,7 @@ LeafRefusal plainRefusal(LeafRefusal e) {
     return LeafRefusal(e.kind, kUpdateRefusal, code: e.code, status: e.status, plain: true);
   }
   if (e.code == 'declined') return LeafRefusal(e.kind, kDeclinedRefusal, code: e.code, status: e.status, plain: true);
+  if (holdingRefusal(e)) return LeafRefusal(e.kind, kHoldingRefusal, code: e.code, status: e.status, plain: true);
   if (bondRefusal(e)) return LeafRefusal(e.kind, kBondRefusal, code: e.code, status: e.status, plain: true);
   if (e.code == 'frozen' || RegExp(r'\bfrozen\b|\bpaused\b', caseSensitive: false).hasMatch(e.message)) {
     return LeafRefusal(e.kind, kFrozenRefusal, code: e.code, status: e.status, plain: true);
@@ -2034,6 +2047,15 @@ bool bondRefusal(LeafRefusal e) => RegExp(r'\bbond\b', caseSensitive: false).has
 /// User mode's words for it.
 const kBondRefusal = 'Not accepted: the security deposit that backs these instant payments is missing or being withdrawn, '
     'so this wallet takes no payment that rests on it. Nothing was signed.';
+
+/// The library's refusal of a payment that would leave the wallet holding more out of round than
+/// the bond covers, or than its instant budget: the bond stands, and room comes back once what the
+/// wallet holds is settled in the next round (the web wallet's `holdingRefusal`).
+bool holdingRefusal(LeafRefusal e) => RegExp(r'would hold out of round', caseSensitive: false).hasMatch(e.message);
+
+/// User mode's words for it.
+const kHoldingRefusal = 'Not yet: this wallet is settling what it was just paid, and takes a new instant payment once that '
+    'is done, in a few minutes. Nothing was signed.';
 
 /// Leaf atoms per asset, as the asset's figure counts them: the library's `held` (its
 /// leaves and its own on-chain coins together, a leaf whose exit's claim is out counted

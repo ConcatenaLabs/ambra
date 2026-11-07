@@ -386,6 +386,15 @@ void main() {
           'Not accepted: the security deposit that backs these instant payments is missing or being withdrawn, so this wallet takes no payment that rests on it. Nothing was signed.');
       expect(forbiddenIn(kBondRefusal), isEmpty);
       expect(bondRefusal(LeafRefusal('refused', 'a bondage of words')), isFalse);
+      // The bond stands and the wallet holds what it was just paid out of round up to what it
+      // covers (faucet#30: a new wallet's five faucet assets): said as settling, not as missing.
+      final held = plainRefusal(LeafRefusal('refused',
+          'refused: with this payment the wallet would hold out of round 204008250000000 atoms of the reference unit at this node\'s rates, more than the bond\'s 175368870000000: a double-sign would pay the operator more than its bond costs it; have coins refreshed in a round first'));
+      expect(held.message, kHoldingRefusal);
+      expect(held.plain, isTrue);
+      expect(kHoldingRefusal,
+          'Not yet: this wallet is settling what it was just paid, and takes a new instant payment once that is done, in a few minutes. Nothing was signed.');
+      expect(forbiddenIn(kHoldingRefusal), isEmpty);
       expect(plainRefusal(LeafRefusal('refused', 'the request was paid already')).plain, isFalse);
     });
   });
