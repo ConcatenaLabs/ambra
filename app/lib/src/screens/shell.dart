@@ -65,6 +65,9 @@ import 'sites_screen.dart';
 import 'stake_screen.dart';
 import 'swap_screen.dart';
 
+
+/// How often Balance, while in front, reads the chain again: about one block of the network.
+const kChainReadEvery = Duration(seconds: 60);
 class Shell extends StatefulWidget {
   const Shell({super.key});
   @override
@@ -251,7 +254,17 @@ class _BalanceTabState extends State<BalanceTab> {
     RegistryService.instance.addListener(_onPrice);
     _loadCached(); // show outdated balances at once, refresh below
     _refresh(); // eager: every tab loads at launch (cheap now that the wallet is cached)
+    // While Balance is in front, the chain is read again about once a block, so a payment to the
+    // address shows without leaving the tab; the figures stay as they are meanwhile.
+    _chainWatch = Timer.periodic(kChainReadEvery, (_) {
+      if (!mounted || !widget.isActive || _refreshing) return;
+      _refreshing = true;
+      _refresh().whenComplete(() => _refreshing = false);
+    });
   }
+
+  Timer? _chainWatch;
+  bool _refreshing = false;
 
   Future<void> _loadCached() async {
     final b = await WalletCache.loadBalances();
@@ -307,6 +320,7 @@ class _BalanceTabState extends State<BalanceTab> {
     ArkBtcService.instance.removeListener(_onPrice);
     StakeHoldings.instance.removeListener(_onPrice);
     RegistryService.instance.removeListener(_onPrice);
+    _chainWatch?.cancel();
     super.dispose();
   }
 

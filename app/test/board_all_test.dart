@@ -1,9 +1,12 @@
 // The automatic board of everything held less its own fee, against a library that prices a
 // board's coins at a size before it knows the real one (wallet.rs board_tx: value plus the fee of
 // 300 vB must be held, then the real fee of the smaller transaction is charged).
+import 'dart:io';
+
 import 'package:ambra/src/data/default_words.dart';
 import 'package:ambra/src/data/leaf_service.dart';
 import 'package:ambra/src/data/stake_words.dart';
+import 'package:ambra/src/screens/shell.dart' show kChainReadEvery;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -95,5 +98,16 @@ void main() {
         '1 OILX to this address is already on its way, so nothing more was sent. It arrives within 10 minutes. Keep this screen open meanwhile. To pay the same again, send once it has arrived.');
     expect(DefaultWords.sentThen('1', 'OILX', '${DefaultWords.arrivesIn(10)} ${DefaultWords.keepOpen}'),
         'Sent 1 OILX. It arrives within 10 minutes. Keep this screen open meanwhile.');
+  });
+
+  test('a payment to the address shows while Balance stays in front, and is boarded without waiting for a sync', () {
+    // Balance read the chain only when its tab became active, and the board looked at the balance
+    // the last sync read: a phone left on Balance showed nothing for half an hour (#574).
+    final shell = File('lib/src/screens/shell.dart').readAsStringSync();
+    expect(shell, contains('Timer.periodic(kChainReadEvery'));
+    expect(kChainReadEvery, const Duration(seconds: 60));
+    final leaves = File('lib/src/data/leaf_service.dart').readAsStringSync();
+    expect(RegExp(r"difference\(readAt\) >= boardRead\) \{\s*try \{\s*balance = await run\('balance'\)").hasMatch(leaves), isTrue);
+    expect(LeafService.boardRead <= const Duration(seconds: 60), isTrue);
   });
 }

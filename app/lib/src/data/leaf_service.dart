@@ -329,6 +329,10 @@ class LeafService extends ChangeNotifier {
   /// address, both chains), so a board must never race a send or a trade.
   static const boardQuiet = Duration(seconds: 60);
 
+  /// How often the automatic board reads the library's balance again, at most: about a block.
+  static const boardRead = Duration(seconds: 55);
+  DateTime? _boardReadAt;
+
   /// How long an asset whose board was refused is left before it is tried again.
   static const boardBackoff = Duration(minutes: 10);
 
@@ -428,10 +432,15 @@ class LeafService extends ChangeNotifier {
                         ? 'coins moved out for a payment are kept on the chain until ${_keepUntil!.toIso8601String()}'
                         : null;
     if (skip != null || DevMode.instance.on) return _boardWhy(skip);
-    // The library must read every key the balance may show a coin at, first.
-    if (await _coverReceiveKeys() > 0) {
+    // The library must read every key the balance may show a coin at, first. Then its balance is
+    // read again (at most once a [boardRead]): the balance last read by a sync can be hours old,
+    // and a coin paid to the address since would wait for an unrelated sync to be boarded.
+    final handed = await _coverReceiveKeys() > 0;
+    final readAt = _boardReadAt;
+    if (handed || readAt == null || DateTime.now().difference(readAt) >= boardRead) {
       try {
         balance = await run('balance') as Map<String, dynamic>?;
+        _boardReadAt = DateTime.now();
       } catch (_) {}
     }
     final served = minLeaves(info);
