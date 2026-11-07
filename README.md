@@ -382,7 +382,10 @@ module that implements it.
     while the app is in view and was used, opened, paid or showed a receive code within three
     minutes, else every five seconds, never while another leaf command runs or a person's
     payment is being reviewed (`holdReads`); a channel paid moves the asset's figure at once
-    and Receive draws a new code. Developer mode's Leaves has a Channels card (each channel's
+    and Receive draws a new code. The wallet's own upkeep (a sync, then care, the claims and
+    the bond's watch) reads the mailbox and the channels between each of its commands when a
+    read is due (the mailbox every 4 s while a receive code handed out lately waits, else every
+    10 s), so a payment waits at most for the one command running, not for the whole pass. Developer mode's Leaves has a Channels card (each channel's
     sides and credit, with Read, Fold and Exit). The leaf library is arca at the revision
     `ambra_core/Cargo.toml` names, which carries the channel commands and the claim of a
     channel's credit after someone else closed it.
