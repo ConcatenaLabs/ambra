@@ -41,10 +41,11 @@ class DefaultWords {
   static String confidentialAmountHidden(String ticker) =>
       'Anyone reading the chain can see that this payment is $ticker, but not how much.';
   static const confidentialSeen = 'This payment\u2019s amount and asset can still be worked out by anyone reading the chain.';
-  /// When coins moved out of the Ark are ready, from the operator's interval in minutes.
+  /// When coins moved out of the Ark are ready: [minutes] is the most it takes
+  /// (addressArrivalMinutes), null when the operator publishes no round interval.
   static String readyIn(int? minutes) => minutes == null
       ? 'They are ready shortly.'
-      : (minutes <= 5 ? 'They are ready in a few minutes.' : 'They are ready in about $minutes minutes.');
+      : 'They are ready within $minutes minute${minutes == 1 ? '' : 's'}.';
   static String movingOut(String what, String purpose, int? minutes) =>
       'Moving $what out of the Ark so it can be $purpose. ${readyIn(minutes)} Keep this screen open.';
   /// A move still waiting for the network after a few minutes: it goes ahead by itself.
@@ -57,12 +58,21 @@ class DefaultWords {
   static const notMoved = 'This could not be moved out of the Ark just now. Nothing was spent: try again in a moment.';
   static const notReady = 'What was moved out of the Ark has not arrived yet. It stays yours: try again in a few minutes.';
 
-  /// When a payment to an address from the instant part arrives: [minutes] is the
-  /// operator's round interval in whole minutes, null when it publishes none.
+  /// When a payment to an address from the instant part arrives: [minutes] is the whole way to
+  /// the other wallet in whole minutes (addressArrivalMinutes), null when the operator publishes
+  /// no round interval.
   static String arrivesIn(int? minutes) => minutes == null
       ? 'It arrives shortly.'
-      : (minutes <= 5 ? 'It arrives in a few minutes.' : 'It arrives in about $minutes minutes.');
+      : 'It arrives within $minutes minute${minutes == 1 ? '' : 's'}.';
+  /// A payment to an address out of the tree is made in the operator's next settlement, which the
+  /// paying wallet signs its part of as it is made: a wallet closed before then makes nothing (its
+  /// coins stay its own), so the review and "Sent" both ask for the screen to stay open.
+  static const keepOpen = 'Keep this screen open meanwhile.';
   static String sentThen(String amount, String ticker, String arrives) => 'Sent $amount $ticker. $arrives';
+  /// The same amount of the same asset to the same address, asked while the first is still on
+  /// its way: the library goes on with the first (`already`) and sends nothing more.
+  static String sentAlready(String amount, String ticker, String arrives) =>
+      '$amount $ticker to this address is already on its way, so nothing more was sent. $arrives To pay the same again, send once it has arrived.';
   static String fee(String amount, String ticker) => 'Fee $amount $ticker';
   static String arriving(String amount, String ticker) => '$amount $ticker arriving';
   /// Held, spendable before, and taken back out of the chain with the Bitcoin block it rested on.
@@ -172,7 +182,7 @@ class DefaultWords {
         recipient, recipientHint, review('5', 'USDX'), reviewLine, sent('5', 'USDX', 1.2), stillArriving('USDX'),
         codeTakesAssets, addressNotNow, confidentialPurpose, confidentialAmountHidden('USDX'), confidentialSeen, readyIn(null), readyIn(1), readyIn(12),
         movingOut('1.00004 USDX', confidentialPurpose, 1), movingWaits('1.00004 USDX', confidentialPurpose),
-        cannotMoveNow('1.00004 USDX'), notEnough('1', 'USDX'), notMoved, notReady, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)),
+        cannotMoveNow('1.00004 USDX'), notEnough('1', 'USDX'), notMoved, notReady, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)), sentAlready('5', 'USDX', arrivesIn(5)), keepOpen,
         fee('5', 'USDX'), arriving('5', 'USDX'), redoing('5', 'USDX'), keptSafe('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
         arrivesAfterBlock, noFees, btcSentAfterBlock('0.001'),
         btcUpTo('0.001'), couldNotSend, byAddress(arrivesAfterBlock), arrivesNextBlock, moving('0.001', 'BTC'),
