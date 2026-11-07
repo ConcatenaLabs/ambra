@@ -982,11 +982,24 @@ class LeafService extends ChangeNotifier {
     _chanTimer?.cancel();
     if (!open) return;
     _chanTimer = Timer(_channelPace(), () async {
+      if (_running == 0 && !_ticking) await _readChannelsNow();
+      _watchChannels();
+    });
+  }
+
+  DateTime? _chanReadAt;
+
+  /// One read of the channels when the wallet holds a live one, in default mode, while no
+  /// person asks for something and the reads are not held; also between two commands of the
+  /// wallet's own upkeep ([_readsBetween]).
+  Future<void> _readChannelsNow() async {
+    {
       final hold = _holdUntil;
       final live = channels.any((c) => c is Map && c['coin_state'] == 'live');
-      if (live && open && !DevMode.instance.on && _running == 0 && _asking == 0 && !_ticking && !_chanReading &&
+      if (live && open && !DevMode.instance.on && _asking == 0 && !_chanReading &&
           !(hold != null && DateTime.now().isBefore(hold))) {
         _chanReading = true;
+        _chanReadAt = DateTime.now();
         try {
           final before = channels;
           final after = await run('channel_sync');
@@ -1016,8 +1029,45 @@ class LeafService extends ChangeNotifier {
           _chanReading = false;
         }
       }
-      _watchChannels();
-    });
+    }
+  }
+
+  /// The last read of the mailbox, by any path (a sync reads it too).
+  DateTime? _mailReadAt;
+
+  /// How often default mode reads the mailbox while nothing else does: a payment to a receive
+  /// code is taken in within this and the read's own time. With a receive code handed out lately,
+  /// [fastAsk].
+  static const mailboxEvery = Duration(seconds: 10);
+
+  /// Between two commands of the wallet's own upkeep (a sync and the care, claims and bond's watch
+  /// after it): the reads that show a payment to this wallet, when they are due. The upkeep is
+  /// several commands, some of them long, and every other read waits for it, so without this a
+  /// payment to the receive code waited for the whole pass. Default mode only, never while a person
+  /// asks for something.
+  Future<void> _readsBetween() async {
+    if (!open || DevMode.instance.on || _asking > 0) return;
+    final now = DateTime.now();
+    final last = _mailReadAt;
+    if (last == null || now.difference(last) >= (freshRequestWaits(schedule, now) ? fastAsk : mailboxEvery)) {
+      _mailReadAt = now;
+      try {
+        final got = arrivals(await run('mailbox'));
+        for (final a in got) {
+          arrivedCount++;
+          _noteArrived(a);
+          await notifyArrived(a, channel: _channel);
+        }
+        if (got.isNotEmpty) {
+          try {
+            balance = await run('balance') as Map<String, dynamic>?;
+          } catch (_) {}
+          notifyListeners();
+        }
+      } catch (_) {}
+    }
+    final ch = _chanReadAt;
+    if (ch == null || DateTime.now().difference(ch) >= _channelPace()) await _readChannelsNow();
   }
 
   /// The channels as the wallet holds them; when those a payer can pay change, Receive's code is
@@ -1214,13 +1264,17 @@ class LeafService extends ChangeNotifier {
     noteUnreachable(unreachableOf(r, 'sync'));
     _heldFor = null;
     lastSync = DateTime.now();
+    _mailReadAt = lastSync;
     for (final a in arrivals(r['mailbox'])) {
       arrivedCount++;
       _noteArrived(a);
-          await notifyArrived(a, channel: _channel);
+      await notifyArrived(a, channel: _channel);
     }
+    await _readsBetween();
     await careIfDue();
+    await _readsBetween();
     await readClaims();
+    await _readsBetween();
     await refresh();
     return r;
   }
@@ -1250,7 +1304,9 @@ class LeafService extends ChangeNotifier {
     lastCareAt = at;
     await setCareClock(at);
     notifyListeners();
+    await _readsBetween();
     await readClaims(force: true);
+    await _readsBetween();
     await watchBond();
   }
 
@@ -1434,6 +1490,7 @@ class LeafService extends ChangeNotifier {
       if (d.sync) {
         await syncNow(by: d.why!);
       } else if (freshRequestWaits(s, DateTime.now())) {
+        _mailReadAt = DateTime.now();
         final mb = await run('mailbox');
         for (final a in arrivals(mb)) {
           arrivedCount++;
@@ -1443,6 +1500,7 @@ class LeafService extends ChangeNotifier {
         if (arrivals(mb).isNotEmpty) await refresh();
       }
       // What vests later, read at its own pace (at most every two minutes).
+      await _readsBetween();
       await readClaims();
       lastError = null;
       wait = nextAsk(schedule, inFlight(coins, participations));
