@@ -42,4 +42,12 @@ void main() {
     final channel = body('Future<void> _readChannelsNow()', 'DateTime? _mailReadAt;');
     expect(channel.contains('!_ticking'), isFalse);
   });
+
+  test('a send waiting for a round to free its coins leaves the reads on, and the sync it makes shows what came', () {
+    final pay = body('Future<dynamic> pay(String command,', '/// Reads balance, coins, participations and schedule again');
+    expect(pay, contains('hold(w == null);'), reason: 'the hold lets go while the command waits (ambra#244)');
+    expect(pay, contains('hold(false);'));
+    expect(pay, contains("balance = await run('balance')"));
+    expect(pay.contains('_asking++'), isFalse, reason: 'only hold() moves the count');
+  });
 }
