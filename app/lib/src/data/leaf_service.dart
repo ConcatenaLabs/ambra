@@ -866,7 +866,15 @@ class LeafService extends ChangeNotifier {
       }
       return (out as Map)['result'];
     } catch (e) {
-      throw LeafRefusal.of(e);
+      // A command refused after holding the library over ten seconds is named as one that
+      // answered is: a refusal holds every command behind it just as long.
+      final ms = DateTime.now().difference(t0).inMilliseconds;
+      final refusal = LeafRefusal.of(e);
+      if (ms > 10000) {
+        final t = refusal.message.length > 300 ? refusal.message.substring(0, 300) : refusal.message;
+        debugPrint('[leaves] slow $command $ms ms, refused: $t');
+      }
+      throw refusal;
     } finally {
       _running--;
     }

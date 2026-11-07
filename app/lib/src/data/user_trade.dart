@@ -961,8 +961,13 @@ class UserTradeEngine {
   /// Firm terms of a fill of an order resting in the tree, from the library's quote: what leaves the
   /// wallet is the coins it gives less the change; the coins the fill brings are settled in the
   /// next round at the fee a coin of their expiry pays.
+  ///
+  /// Each asking again is one library command more that every other waits behind: none is asked
+  /// again on a refusal the same as the last, which a smaller fill did not change (four such asks
+  /// held a wallet for ten minutes).
   Future<Candidate?> _firmResting(BookEntry e, String pay, String receive, BigInt limit, BigInt first) async {
     var r = first;
+    String? lastRefusal;
     for (var i = 0; i < 4; i++) {
       Map q;
       try {
@@ -971,7 +976,9 @@ class UserTradeEngine {
         // A fill spends only the wallet's coins no older than the order's: when those hold less
         // than the fill takes, the library says how much they hold, and the fill is sized to it.
         final m = RegExp(r'the outputs take (\d+) of asset \S+, more than the (\d+) the inputs hold').firstMatch('$err');
-        if (m != null && BigInt.parse(m.group(1)!) > BigInt.zero) {
+        final same = m != null && lastRefusal == m.group(0);
+        if (m != null) lastRefusal = m.group(0);
+        if (m != null && !same && BigInt.parse(m.group(1)!) > BigInt.zero) {
           final r2 = (r * BigInt.parse(m.group(2)!)) ~/ BigInt.parse(m.group(1)!) - BigInt.one;
           final s2 = r2 > BigInt.zero ? sizeEntry(e, (r2 * e.rateNum) ~/ e.rateDen) : null;
           if (s2 != null && s2.receive < r) {

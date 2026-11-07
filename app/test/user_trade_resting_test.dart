@@ -22,6 +22,8 @@ class Resting {
   BigInt? eligible; // what the wallet's coins no older than the order's hold
   List<Map<String, dynamic>>? book;
   final refuse = <String>{};
+  String? always; // a refusal the library gives whatever amount is asked
+  final asked = <String>[];
 
   Map<String, dynamic> quote(String amount) {
     final a = BigInt.parse(amount);
@@ -46,6 +48,8 @@ class Resting {
       case 'participations':
         return [for (final p in parts) Map<String, dynamic>.from(p)];
       case 'order_fill_resting_quote':
+        asked.add('${a['amount']}');
+        if (always != null) throw Exception(always!);
         if (refuse.contains(a['order'])) throw Exception('refused: the order is filled');
         final takes = BigInt.parse('${a['amount']}') * BigInt.two + BigInt.from(500);
         if (eligible != null && takes > eligible!) throw Exception('refused: the outputs take $takes of asset $x, more than the $eligible the inputs hold');
@@ -173,5 +177,17 @@ void main() {
     final s = Resting()..operator = 'ef' * 32;
     final q = await s.engine().quote(pay: x, receive: y, amount: BigInt.from(400503));
     expect(q.why, 'not-offered');
+  });
+
+  // Seen live (RB4): a resting order whose fill costs more than the wallet's coins hold whatever
+  // amount is asked was asked again and again, each a library command of minutes that held every
+  // other command behind it. A refusal the same as the last is not asked again.
+  test('a resting fill refused the same way twice is not asked a third time', () async {
+    final s = Resting()..always = 'refused: the outputs take 2000000 of asset $x, more than the 1000000 the inputs hold';
+    final q = await s.engine().quote(pay: x, receive: y, amount: BigInt.from(400503));
+    expect(q.ok, isFalse);
+    expect(s.asked.length <= 4 && s.asked.length >= 2, isTrue, reason: 'asked ${s.asked}');
+    final distinct = s.asked.toSet().length;
+    expect(distinct, 2, reason: 'each pass asks at its size and once at the size the refusal names, no smaller: ${s.asked}');
   });
 }
