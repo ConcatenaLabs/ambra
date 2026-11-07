@@ -1045,14 +1045,35 @@ class LeafService extends ChangeNotifier {
   /// several commands, some of them long, and every other read waits for it, so without this a
   /// payment to the receive code waited for the whole pass. Default mode only, never while a person
   /// asks for something.
+  /// When the last mailbox read ended, and what it took: the next waits at least twice that. A read
+  /// the operator answers slowly (10 to 20 s were seen) otherwise kept the library busy all the
+  /// time with reads that found nothing, and every other command of the wallet waited.
+  DateTime? _mailReadEnd;
+  int _mailCostMs = 0;
+  bool _mailDue(DateTime now) {
+    final base = freshRequestWaits(schedule, now) ? fastAsk : mailboxEvery;
+    final gap = _mailCostMs * 2 > base.inMilliseconds ? Duration(milliseconds: _mailCostMs * 2) : base;
+    final end = _mailReadEnd ?? _mailReadAt;
+    return end == null || now.difference(end) >= gap;
+  }
+
+  Future<dynamic> _mailboxRead() async {
+    final t0 = DateTime.now();
+    _mailReadAt = t0;
+    try {
+      return await run('mailbox');
+    } finally {
+      _mailReadEnd = DateTime.now();
+      _mailCostMs = _mailReadEnd!.difference(t0).inMilliseconds;
+    }
+  }
+
   Future<void> _readsBetween() async {
     if (!open || DevMode.instance.on || _asking > 0) return;
     final now = DateTime.now();
-    final last = _mailReadAt;
-    if (last == null || now.difference(last) >= (freshRequestWaits(schedule, now) ? fastAsk : mailboxEvery)) {
-      _mailReadAt = now;
+    if (_mailDue(now)) {
       try {
-        final got = arrivals(await run('mailbox'));
+        final got = arrivals(await _mailboxRead());
         for (final a in got) {
           arrivedCount++;
           _noteArrived(a);
@@ -1126,6 +1147,7 @@ class LeafService extends ChangeNotifier {
         synced: (v) async {
           lastSync = DateTime.now();
           _mailReadAt = lastSync;
+          _mailReadEnd = lastSync;
           noteUnreachable(unreachableOf(v, 'sync'));
           final got = arrivals(v is Map ? v['mailbox'] : null);
           for (final a in got) {
@@ -1286,6 +1308,7 @@ class LeafService extends ChangeNotifier {
     _heldFor = null;
     lastSync = DateTime.now();
     _mailReadAt = lastSync;
+    _mailReadEnd = lastSync;
     for (final a in arrivals(r['mailbox'])) {
       arrivedCount++;
       _noteArrived(a);
@@ -1510,9 +1533,8 @@ class LeafService extends ChangeNotifier {
       _heldFor = d.held;
       if (d.sync) {
         await syncNow(by: d.why!);
-      } else if (freshRequestWaits(s, DateTime.now())) {
-        _mailReadAt = DateTime.now();
-        final mb = await run('mailbox');
+      } else if (freshRequestWaits(s, DateTime.now()) && _mailDue(DateTime.now())) {
+        final mb = await _mailboxRead();
         for (final a in arrivals(mb)) {
           arrivedCount++;
           _noteArrived(a);
