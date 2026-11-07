@@ -35,8 +35,9 @@ void main() {
   test('the reads are the mailbox when due and the channels when due, never while a person asks', () {
     final between = body('Future<void> _readsBetween()', '/// The channels as the wallet holds them;');
     expect(between, contains('_asking > 0'));
-    expect(between, contains("run('mailbox')"));
-    expect(between, contains('freshRequestWaits(schedule, now) ? fastAsk : mailboxEvery'));
+    expect(between, contains('_mailboxRead()'));
+    expect(src, contains('freshRequestWaits(schedule, now) ? fastAsk : mailboxEvery'));
+    expect(between, contains('_mailDue(now)'));
     expect(between, contains('_readChannelsNow()'));
     // A channel read from between the steps does not wait for the pass it is part of.
     final channel = body('Future<void> _readChannelsNow()', 'DateTime? _mailReadAt;');
@@ -49,5 +50,11 @@ void main() {
     expect(pay, contains('hold(false);'));
     expect(pay, contains("balance = await run('balance')"));
     expect(pay.contains('_asking++'), isFalse, reason: 'only hold() moves the count');
+  });
+
+  test('the mailbox is read no oftener than twice what the last read took, on every path', () {
+    expect(src, contains('_mailCostMs * 2 > base.inMilliseconds ? Duration(milliseconds: _mailCostMs * 2) : base'));
+    expect(src, contains("freshRequestWaits(s, DateTime.now()) && _mailDue(DateTime.now())"));
+    expect(RegExp(r"await run\('mailbox'\)").allMatches(src).length, lessThanOrEqualTo(2), reason: 'reads go through _mailboxRead (and takeIn)');
   });
 }
