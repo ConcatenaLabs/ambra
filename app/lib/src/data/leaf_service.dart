@@ -1930,7 +1930,7 @@ Future<(BigInt, BigInt)?> boardAll(Future<dynamic> Function(String, [Map<String,
 /// block is in, the operator's payment to the address and its block, and the wallets' own passes
 /// and reads of the chain: four blocks and four minutes beside the settlement, rounded up to five
 /// minutes. On the testnet (a settlement a minute, a block a minute) that is ten minutes; payments
-/// measured there took four to seven. The web wallet's `arrivalMinutes` (default-arca.js).
+/// measured there took three to six. The web wallet's `arrivalMinutes` (default-arca.js).
 int? addressArrivalMinutes(Object? roundSeconds, Object? blockSeconds) {
   final n = roundSeconds is num ? roundSeconds : num.tryParse('${roundSeconds ?? ''}');
   if (n == null || n <= 0) return null;

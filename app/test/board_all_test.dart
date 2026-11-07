@@ -78,8 +78,8 @@ void main() {
     expect(addressArrivalMinutes(60, 600), 45);
     expect(addressArrivalMinutes(null, 60), isNull);
     expect(addressArrivalMinutes(0, 60), isNull);
-    // Every payment measured on the testnet (223 to 405 s from Send) is within what is stated.
-    for (final s in [223, 356, 405]) {
+    // Every payment measured on the testnet (189 to 356 s from Send) is within what is stated.
+    for (final s in [189, 223, 231, 313, 317, 340, 356]) {
       expect(s <= addressArrivalMinutes(60, 60)! * 60, isTrue);
     }
     expect(DefaultWords.arrivesIn(addressArrivalMinutes(60, 60)), 'It arrives within 10 minutes.');
