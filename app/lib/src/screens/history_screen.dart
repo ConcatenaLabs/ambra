@@ -416,6 +416,10 @@ class _LnHistoryCard extends StatelessWidget {
   }
 }
 
+/// One payment's row, for a widget test.
+@visibleForTesting
+Widget paymentRowForTest(Map<String, dynamic> entry) => _LnRow(entry: entry);
+
 class _LnRow extends StatelessWidget {
   const _LnRow({required this.entry});
   final Map<String, dynamic> entry;
@@ -458,7 +462,11 @@ class _LnRow extends StatelessWidget {
       sub = '$sub · ${entry['chain'] == 'btc' ? 'Waiting for a Bitcoin block' : (entry['hash'] != null ? DefaultWords.onItsWay : 'Pending')}';
     }
     if (returned) sub = '$sub · ${DefaultWords.cameBack}';
-    final title = returned ? DefaultWords.notPaid : DevMode.instance.on
+    // A payment to an address that was not made took nothing from the wallet; one taken back
+    // before it arrived did not reach the address (address_payments.dart).
+    final notMade = entry['stage'] == 'not_made', notArrived = entry['stage'] == 'reclaimed';
+    if (notMade) sub = '$sub · ${DefaultWords.rowNotMadeSub}';
+    final title = notMade ? DefaultWords.rowNotMade : notArrived ? DefaultWords.rowNotArrived : returned ? DefaultWords.notPaid : DevMode.instance.on
         ? (rail == 'lightning'
             ? (incoming ? 'Received over Lightning' : 'Lightning payment')
             : '${incoming ? 'Received' : 'Sent'} · ${const {'btc': 'Bitcoin chain', 'ark': 'Bitcoin ark', 'tree': 'in the tree', 'address': 'out to an address'}[rail] ?? rail}')
@@ -479,7 +487,12 @@ class _LnRow extends StatelessWidget {
         if (amount.isNotEmpty) ...[
           const SizedBox(width: 10),
           Text('${incoming ? '+' : '-'}$amount',
-              style: AmbraText.mono.copyWith(color: color, fontWeight: FontWeight.w700, fontSize: 14)),
+              key: notMade ? const Key('payment-not-made-amount') : null,
+              style: AmbraText.mono.copyWith(
+                  color: notMade ? AmbraColors.dim : color,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  decoration: notMade ? TextDecoration.lineThrough : null)),
         ],
       ]),
     );
