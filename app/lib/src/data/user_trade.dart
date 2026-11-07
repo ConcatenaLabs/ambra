@@ -796,6 +796,29 @@ class UserTradeEngine {
     }
   }
 
+  // One sync serves every trade moving on at the same time, and the next starts no sooner than
+  // 10 s, or twice what the last one took, after it ended: a phone's sync takes 20 to 40 s on a
+  // busy operator, and a sync per open trade every pass kept the library busy all the time, so a
+  // payment to the wallet waited behind them (the web wallet's syncShared, paced by cost).
+  Future<void>? _syncing;
+  int? _syncEnd;
+  int _syncCost = 0;
+  Future<void> _syncShared() {
+    final running = _syncing;
+    if (running != null) return running;
+    final end = _syncEnd;
+    final gap = _syncCost * 2 > 10000 ? _syncCost * 2 : 10000;
+    if (end != null && d.now() - end < gap) return Future.value();
+    final t0 = d.now();
+    final f = _run('sync').then((_) {}, onError: (Object e) => d.log('[user trade] sync: $e')).whenComplete(() {
+      _syncCost = d.now() - t0;
+      _syncEnd = d.now();
+      _syncing = null;
+    });
+    _syncing = f;
+    return f;
+  }
+
   Future<List<Map<String, dynamic>>> records() async {
     try {
       final s = await d.read();
@@ -1769,11 +1792,7 @@ class UserTradeEngine {
       await _put(rec);
       if (rec['state'] != 'sent') return rec;
     }
-    try {
-      await _run('sync');
-    } catch (e) {
-      d.log('[user trade] sync: $e');
-    }
+    await _syncShared();
     if (rec['source'] == 'leaf-resting') {
       // Settled once the relay records the fill final and the coins it brought are settled in a
       // round that is final.
