@@ -35,6 +35,7 @@ import '../data/payment_name_service.dart';
 import '../data/lnaddr.dart' show parseLnAddress, resolveLnAddress, LnAddressError;
 import '../data/confidential_pay.dart';
 import '../data/on_chain_need.dart';
+import '../data/address_payments.dart';
 
 class SendTab extends StatefulWidget {
   const SendTab({super.key, this.isActive = false});
@@ -602,6 +603,14 @@ class _SendTabState extends State<SendTab> {
     // User mode: what the chain cannot cover the instant part pays, out to the address.
     if (atoms > bal && !DevMode.instance.on && LeafService.instance.open && confidentialSaid == null) {
       if (atoms <= LeafService.instance.spendableAtoms(_assetId)) return _reviewOffboard(addr, atoms);
+      // Coins still arriving would cover it (the change of a payment just made, a coin just
+      // received): said, with when, never as not enough (web wallet #607). What a payment still on
+      // its way gives up comes back only as its change.
+      final comingBack = (LeafService.instance.arrivingAtoms()[_assetId] ?? BigInt.zero) - await WalletCache.pendingOutAtoms(_assetId);
+      if (!mounted) return;
+      if (stillArrivingCovers(atoms, LeafService.instance.spendableAtoms(_assetId), comingBack)) {
+        return _snack(DefaultWords.stillArrivingWithin(label.ticker, LeafService.instance.addressMinutes()));
+      }
       if (atoms <= bal + _leafAtoms(_assetId)) return _snack(DefaultWords.addressNotNow);
     }
     if (atoms > bal) return _snack('Amount exceeds your ${label.ticker} balance');
@@ -662,7 +671,14 @@ class _SendTabState extends State<SendTab> {
         note: note.isEmpty ? null : note,
       ),
     );
-    if (txid != null && mounted) {
+    if (txid != null && mounted && !DevMode.instance.on) {
+      // Default mode: what was sent and when it arrives, no transaction id.
+      _addr.clear();
+      _amount.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+          ambraSnack(DefaultWords.sentThen(formatAtoms(atoms.toString(), label.precision), label.ticker, DefaultWords.arrivesNextBlock)));
+      _load();
+    } else if (txid != null && mounted) {
       _addr.clear();
       _amount.clear();
       ScaffoldMessenger.of(context).showSnackBar(ambraSnack(
@@ -826,18 +842,40 @@ class _SendTabState extends State<SendTab> {
     );
     if (ok != true || !mounted) return;
     setState(() => _sendingInTree = true);
+    final messenger = ScaffoldMessenger.of(context);
     try {
       final v = await LeafService.instance.pay('offboard', {...args, 'shown': quote}, true);
       // The same payment asked again while the first is on its way is that first one: nothing
       // more is sent or written down, and the person is told so, never "Sent" a second time.
       final already = offboardAlready(v);
-      if (!already) unawaited(_logSent(label.ticker, atoms, label.precision, 'address'));
+      final id = v is Map && v['offboard'] != null ? '${v['offboard']}' : null;
+      if (!already) {
+        // Written down with the library's id for it, so it is followed to its end (ambra's
+        // address_payments.dart; web wallet #604): "Sent" only once the library has made it.
+        await WalletCache.addPayment({
+          'kind': 'payment',
+          'ticker': label.ticker,
+          'atoms': atoms.toString(),
+          'precision': label.precision,
+          'rail': 'address',
+          'pending': true,
+          'asset': _assetId,
+          'address': address,
+          'fee_atoms': feeAtoms.toString(),
+          'offboard': ?id,
+          if (id != null) 'stage': 'pending',
+        });
+      }
       if (!mounted) return;
       _addr.clear();
       _amount.clear();
-      ScaffoldMessenger.of(context).showSnackBar(ambraSnack(already
-          ? DefaultWords.sentAlready(amountStr, label.ticker, arrives)
-          : DefaultWords.sentThen(amountStr, label.ticker, arrives)));
+      if (already || id == null) {
+        messenger.showSnackBar(ambraSnack(already
+            ? DefaultWords.sentAlready(amountStr, label.ticker, arrives)
+            : DefaultWords.sendingLater(amountStr, label.ticker)));
+      } else {
+        unawaited(_followOffboard(messenger, id, address, amountStr, label.ticker));
+      }
       await LeafService.instance.refresh();
     } catch (e) {
       if (mounted) _snack(LeafRefusal.of(e).message);
@@ -845,6 +883,37 @@ class _SendTabState extends State<SendTab> {
       if (mounted) setState(() => _sendingInTree = false);
     }
     _load();
+  }
+
+  /// A payment to an address out of the tree, followed from Send to its end: "Sending" while the
+  /// library has not made it (this screen open meanwhile signs its part of the settlement), then
+  /// "Sent", or that it was not made. The end is said here once; Balance says it otherwise.
+  Future<void> _followOffboard(ScaffoldMessengerState messenger, String id, String address, String amountStr, String ticker) async {
+    final sending = messenger.showSnackBar(SnackBar(
+      key: const Key('send-offboard-sending'),
+      content: Text(DefaultWords.sendingLater(amountStr, ticker), style: const TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w600)),
+      backgroundColor: AmbraColors.panel,
+      behavior: SnackBarBehavior.floating,
+      persist: false,
+      duration: kOffboardFollow,
+    ));
+    final until = DateTime.now().add(kOffboardFollow);
+    String? stage;
+    while (DateTime.now().isBefore(until)) {
+      await Future<void>.delayed(const Duration(seconds: 5));
+      stage = await LeafService.instance.followAddressPayments(sync: true, id: id);
+      if (stage == 'made' || offboardEnded(stage)) break;
+    }
+    debugPrint('[ambra-send] payment to an address $id: $stage');
+    if (stage == 'made') {
+      sending.close();
+      messenger.showSnackBar(ambraSnack(DefaultWords.sentMade(amountStr, ticker, LeafService.instance.addressMinutes())));
+    } else if (offboardEnded(stage)) {
+      sending.close();
+      await WalletCache.markTold(id);
+      messenger.showSnackBar(ambraSnack(offboardNewsText(stage, address, amountStr, ticker)));
+    }
+    if (mounted) _load();
   }
 
   /// Pays out of the Bitcoin ark when the destination is one it pays and it holds the
@@ -1224,6 +1293,7 @@ class _ReviewSheet extends StatefulWidget {
     required this.feeRateSatKvb,
     this.note,
     this.extra = const [],
+    this.dev,
   });
   /// Outputs beside the payment: a confidential payment's own output to the wallet.
   final List<core.Recipient> extra;
@@ -1237,10 +1307,18 @@ class _ReviewSheet extends StatefulWidget {
   final core.FeeAsset? feeAsset;
   final String feeLabel;
   final double? feeRateSatKvb;
+  /// Developer mode's sheet when true, default mode's when false; the mode now when null.
+  final bool? dev;
 
   @override
   State<_ReviewSheet> createState() => _ReviewSheetState();
 }
+
+/// The review of a payment on the chain from the wallet's own coins, for a widget test.
+@visibleForTesting
+Widget chainReviewSheetForTest({required String address, required String amountStr, required String ticker, required bool dev}) =>
+    _ReviewSheet(extra: const [], address: address, assetId: '00' * 32, atoms: BigInt.one, ticker: ticker, amountStr: amountStr,
+        feeAsset: null, feeLabel: ticker, feeRateSatKvb: null, dev: dev);
 
 class _ReviewSheetState extends State<_ReviewSheet> {
   bool _busy = false; // signing + broadcasting
@@ -1330,8 +1408,60 @@ class _ReviewSheetState extends State<_ReviewSheet> {
     }
   }
 
+  /// The fee as default mode says it: its amount in the asset it is paid in.
+  String _feePlain() {
+    final f = _feeEst!;
+    final label = SeqAssets.labelFor(f.assetId);
+    return DefaultWords.fee(formatAtoms(f.atoms, label.precision), label.ticker);
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => (widget.dev ?? DevMode.instance.on) ? _devSheet(context) : _plainSheet(context);
+
+  /// Default mode's review, the one every other payment has (the web wallet's
+  /// docs/DEFAULT_MODE.md, Send; ambra#241): "Send `amount` `TICKER`?", to whom, the fee, when it
+  /// arrives, and Cancel and Send. No network, no fee asset, no "sign".
+  Widget _plainSheet(BuildContext context) {
+    final a = widget.address;
+    final to = a.length > 24 ? '${a.substring(0, 12)}\u2026${a.substring(a.length - 8)}' : a;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text(DefaultWords.review(widget.amountStr, widget.ticker), key: const Key('send-review-title'), style: AmbraText.h1),
+          const SizedBox(height: 10),
+          if (widget.note != null)
+            Text(widget.note!, key: const Key('send-by-address-note'), style: AmbraText.sub)
+          else
+            const Text(DefaultWords.arrivesNextBlock, style: AmbraText.sub),
+          const SizedBox(height: 18),
+          AmbraCard(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Column(children: [
+              _Row('To', to, mono: true),
+              if (_feeEst != null) Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Align(alignment: Alignment.centerLeft, child: Text(_feePlain(), key: const Key('send-review-fee'), style: AmbraText.body)),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 14),
+          if (_error != null)
+            Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(_error!, style: const TextStyle(color: AmbraColors.red))),
+          PrimaryButton(
+              key: const Key('send-review-send'),
+              label: 'Send',
+              busy: _busy,
+              onPressed: (_busy || _loading || _pset == null) ? null : _confirm),
+          const SizedBox(height: 6),
+          GhostButton(label: 'Cancel', onPressed: _busy ? null : () => Navigator.pop(context)),
+        ]),
+      ),
+    );
+  }
+
+  /// Developer mode's sheet: every detail of the transaction.
+  Widget _devSheet(BuildContext context) {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),

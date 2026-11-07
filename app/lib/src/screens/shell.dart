@@ -16,6 +16,7 @@ import '../data/default_words.dart';
 import '../data/descriptor.dart';
 import '../data/dev_mode.dart';
 import '../data/fee_asset_rule.dart';
+import '../data/address_payments.dart';
 import '../data/format.dart';
 import '../data/home_coins.dart';
 import '../data/hidden_assets.dart';
@@ -432,7 +433,7 @@ class _BalanceTabState extends State<BalanceTab> {
     // keeps the Lightning controls.
     final dev = DevMode.instance.on;
     final leafAtoms = LeafService.instance.joined ? LeafService.instance.leafAtoms() : const <String, BigInt>{};
-    // What is on its way (user mode shows "<amount> <TICKER> arriving" under the figure): an
+    // What is on its way (developer mode shows "<amount> <TICKER> arriving" under the figure): an
     // asset with nothing yet but something arriving still gets its row.
     final arriving = LeafService.instance.joined ? LeafService.instance.arrivingAtoms() : const <String, BigInt>{};
     final redoing = LeafService.instance.joined ? LeafService.instance.redoingAtoms() : const <String, BigInt>{};
@@ -547,6 +548,9 @@ class _BalanceTabState extends State<BalanceTab> {
           // The service holding coins for instant payments does not answer: one card above the
           // list, in either mode, to take them home (home_coins.dart), whatever else has loaded.
           const _HomeCard(),
+          // A payment to an address that was not made, or did not arrive, said once (ambra's
+          // address_payments.dart; the web wallet's docs/DEFAULT_MODE.md, Send).
+          const PaymentEndsCard(),
           if (_error != null && balances == null)
             AmbraCard(child: Text(_error!, style: const TextStyle(color: AmbraColors.red)))
           else if (balances == null)
@@ -571,7 +575,7 @@ class _BalanceTabState extends State<BalanceTab> {
                       sats: btcTotal.toString(),
                       onchainSats: btcOnchain,
                       lightningSats: btcLn,
-                      arrivingSats: dev ? null : ArkBtcService.instance.arriving,
+                      arrivingSats: ArkBtcService.instance.arriving,
                       stale: _btcStale,
                       channels: _lnChannels,
                       onChanged: _refresh,
@@ -641,21 +645,21 @@ class _AssetRow extends StatefulWidget {
   // the figure, in both modes, never hidden.
   final BigInt? frozen;
 
-  /// User mode: what of the asset is arriving (counted in the figure, not final yet).
+  /// What of the asset is arriving (counted in the figure, not final yet; said in developer mode).
   final BigInt? arriving;
 
-  /// User mode: of what is arriving, what a Bitcoin reorganisation took back out of the chain and
+  /// Of what is arriving, what a Bitcoin reorganisation took back out of the chain and
   /// is being redone: said apart, never as gone.
   final BigInt? redoing;
 
-  /// User mode: what was moved out to keep it safe while the wallet was away, until it is put back.
+  /// What was moved out to keep it safe while the wallet was away, until it is put back.
   final BigInt? keptSafe;
 
   /// What of the asset vests later, one entry for each date (counted in the figure, never in what
   /// can be spent): user mode says `<amount> <TICKER> vests on <date>` under the figure.
   final List<VestingLot> vesting;
 
-  /// User mode: what of the asset is on its way from its channel to the tree.
+  /// What of the asset is on its way from its channel to the tree.
   final BigInt? moving;
   final List<Map<dynamic, dynamic>> channels;
   final VoidCallback? onChanged;
@@ -752,7 +756,11 @@ class _AssetRowState extends State<_AssetRow> {
                 key: Key('frozen-${label.ticker}'), style: const TextStyle(color: AmbraColors.amber2, fontSize: 12)),
           ),
         ),
-      if (!widget.dev && (widget.moving ?? BigInt.zero) > BigInt.zero)
+      // What is on its way somewhere (moving, arriving, redone, kept safe) is in the figure in both
+      // modes and said under it only in developer mode: in default mode the figure is the balance,
+      // and "still arriving" is said only when a person tries to send it (the web wallet's
+      // docs/DEFAULT_MODE.md, Balance; ambra#239).
+      if (widget.dev && (widget.moving ?? BigInt.zero) > BigInt.zero)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Align(
@@ -761,7 +769,7 @@ class _AssetRowState extends State<_AssetRow> {
                 key: Key('moving-${label.ticker}'), style: AmbraText.sub),
           ),
         ),
-      if (!widget.dev && _arrivingOnly > BigInt.zero)
+      if (widget.dev && _arrivingOnly > BigInt.zero)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Align(
@@ -770,7 +778,7 @@ class _AssetRowState extends State<_AssetRow> {
                 key: Key('arriving-${label.ticker}'), style: AmbraText.sub),
           ),
         ),
-      if (!widget.dev && _redoing > BigInt.zero)
+      if (widget.dev && _redoing > BigInt.zero)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Align(
@@ -789,7 +797,7 @@ class _AssetRowState extends State<_AssetRow> {
                   key: Key('vests-${label.ticker}-${l.vest}'), style: AmbraText.sub),
             ),
           ),
-      if (!widget.dev && (widget.keptSafe ?? BigInt.zero) > BigInt.zero)
+      if (widget.dev && (widget.keptSafe ?? BigInt.zero) > BigInt.zero)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Align(
@@ -922,6 +930,70 @@ class _HiddenAssetsSection extends StatelessWidget {
               ),
             ),
           ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// A payment to an address out of the tree that ended unmade, or was taken back before it arrived:
+/// one line for each on a card above Balance's list, in either mode, with OK, which the wallet
+/// shows once ([WalletCache.untoldEnds]). It follows the leaf service, which writes each payment's
+/// end down as it reads it.
+class PaymentEndsCard extends StatefulWidget {
+  const PaymentEndsCard({super.key});
+  @override
+  State<PaymentEndsCard> createState() => _PaymentEndsCardState();
+}
+
+class _PaymentEndsCardState extends State<PaymentEndsCard> {
+  List<Map<String, dynamic>> _ends = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    LeafService.instance.addListener(_changed);
+    unawaited(_read());
+  }
+
+  @override
+  void dispose() {
+    LeafService.instance.removeListener(_changed);
+    super.dispose();
+  }
+
+  void _changed() => unawaited(_read());
+
+  Future<void> _read() async {
+    final e = await WalletCache.untoldEnds();
+    if (mounted) setState(() => _ends = e);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_ends.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: AmbraCard(
+        key: const Key('payment-ends-card'),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          for (final e in _ends)
+            Row(children: [
+              Expanded(
+                child: Text(
+                    offboardNewsText('${e['stage']}', '${e['address'] ?? ''}',
+                        formatAtoms('${e['atoms']}', e['precision'] is num ? (e['precision'] as num).toInt() : 8), '${e['ticker']}'),
+                    key: Key('payment-end-${e['offboard']}'),
+                    style: AmbraText.muted),
+              ),
+              TextButton(
+                  key: Key('payment-end-ok-${e['offboard']}'),
+                  onPressed: () async {
+                    await WalletCache.markTold('${e['offboard']}');
+                    await _read();
+                  },
+                  child: const Text(DefaultWords.newsOk)),
+            ]),
         ]),
       ),
     );
@@ -1164,7 +1236,7 @@ class _BtcRowState extends State<_BtcRow> {
           ]),
         ),
       ),
-      if (!widget.dev)
+      if (widget.dev)
         ListenableBuilder(
           listenable: LightningToArk.instance,
           builder: (context, _) {

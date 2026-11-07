@@ -84,8 +84,9 @@ module that implements it.
   each unbonding output not yet returned, and the delegation record; a stake returned to
   the wallet is on-chain again and counted there once), and what the wallet holds that
   cannot move before a date (see "What vests later" below). User mode shows one figure per
-  row; a tap on the row shows what is staked, if any, and what is arriving shows under
-  it. Developer mode shows the parts beside each row, with the Lightning controls (`app/lib/src/data/portfolio.dart`, `app/lib/src/data/stakes.dart`).
+  row; a tap on the row shows what is staked, if any. What is still arriving is in the figure
+  and is said only when a person tries to send it. Developer mode shows the parts beside each row,
+  what is arriving, moving, redone or kept safe under it, with the Lightning controls (`app/lib/src/data/portfolio.dart`, `app/lib/src/data/stakes.dart`).
   What a payment can use is the spendable part, not the figure.
 - Both chains sync against Esplora-style REST APIs; last-known balances are cached on
   disk and shown instantly on launch, with an explicit offline/stale indicator when a
@@ -286,8 +287,8 @@ module that implements it.
     minutes.
   - Its words are the default-mode contract's (sequentia-web-wallet `docs/DEFAULT_MODE.md`), held in
     `app/lib/src/data/default_words.dart` and tested against the contract's forbidden words.
-    Default mode shows no rail: a row's details show only Staked, what is arriving, what vests
-    later, and a freeze; the split by rail and the fee-rate fields are developer mode's.
+    Default mode shows no rail: a row's details show only Staked, what vests later, and a
+    freeze, and nothing under the figure says part of it is on its way; the split by rail and the fee-rate fields are developer mode's.
   - **What vests later.** A vesting distribution (a token sale whose tokens vest, for one) pays
     a key of this wallet a coin nobody can move before its date. The wallet reads the leaf
     library's `claims` (under the OpenAMP key and the on-chain receive keys care scans) at most
@@ -410,10 +411,25 @@ module that implements it.
     code or a name (an address, an invoice, an account id) takes the path it always took.
     An address send the chain cannot cover is paid out of the leaves (the library's
     `offboard_quote`, then `offboard` on the quote shown): "Send <amt> <TICKER>?", "It
-    arrives within <N> minutes. Keep this screen open meanwhile." (the wallet signs its part
-    of the operator's settlement as it is made, and one closed before then makes nothing; the most the whole way to the other wallet takes: the
-    operator's round interval, four blocks and four minutes, rounded up to five minutes,
-    `addressArrivalMinutes`; ten on the testnet), and the fee when there is one. The same
+    arrives within <N> minutes. Keep this screen open meanwhile." (the most the whole way to
+    the other wallet takes: the operator's round interval, four blocks and four minutes,
+    rounded up to five minutes, `addressArrivalMinutes`; ten on the testnet), and the fee when
+    there is one. The wallet signs its part of the operator's settlement as it is made, and
+    one closed before then makes nothing, so after Send it says "Sending <amt> <TICKER>. Keep
+    this screen open until it is sent." until the library's `offboards` reads it made
+    (`unlocking` or `paid`), and only then "Sent <amt> <TICKER>. It arrives within <N>
+    minutes." Each such payment is written down with the library's id for it and followed to
+    its end while the app runs (`app/lib/src/data/address_payments.dart`): one that ended
+    without being made says "Your payment of <amt> <TICKER> to <address> was not made:
+    nothing left your wallet. Send it again." once, as it ends or on a card above Balance's
+    list with OK, and History reads it "Not sent", "Nothing left your wallet.", its amount
+    struck through; one taken back before it arrived reads "did not arrive". A payment the
+    leaves cannot pay yet because coins of it are still arriving (the change of a payment just
+    made) says "Part of this <TICKER> is still arriving: it can be sent within <N> minutes."
+    A payment the chain's own coins cover gets default mode's review ("Send <amt>
+    <TICKER>?", to whom, the fee, "It arrives after the next block, in about a minute.",
+    Cancel and Send); developer mode's sheet names the network, the fee asset and the
+    estimate. The same
     amount to the same address asked again while the first is on its way is that first
     payment: the wallet says it is already on its way and sends nothing more. A quote the library refuses reads "This amount can't be sent to an address right
     now. Send it to a receive code, or pay an invoice."
@@ -435,7 +451,8 @@ module that implements it.
     same asset, on the fee quoted), never while something a person asked for runs or in
     the minute after it, since the leaf wallet spends the same addresses' coins, nor while
     coins moved out for a person's payment, stake or mix wait to be used (up to an hour). What is
-    not final yet shows as "<amount> <ticker> arriving" under the asset's figure. The
+    not final yet is in the figure; developer mode shows it as "<amount> <ticker> arriving"
+    under the figure. The
     coins a board spends come off the chain's part of the figure only until a scan begun
     after the board reads the chain (`onchainLessBoards`), so a coin that reached the
     address meanwhile stays in the figure. Before
@@ -547,8 +564,8 @@ module that implements it.
     wallet), and claims the coin to that address. BTC's row says what happened and what
     it cost; nothing is moved into the ark meanwhile. Developer mode adds **Exit…**,
     which prices each coin and refuses one not worth its exit.
-  - BTC's one figure counts the ark; what is on its way in shows as "<amount> BTC
-    arriving". Developer mode opens the ark wallet too and counts it (its split reads
+  - BTC's one figure counts the ark; developer mode says what is on its way in as "<amount>
+    BTC arriving". Developer mode opens the ark wallet too and counts it (its split reads
     "… on the Bitcoin ark"), but moves nothing into it or out of it by itself.
 - Leaves are coins held as leaves of an operator's covenant tree on Sequentia: paid and
   received off the chain with the operator's co-signature, and always takeable on-chain

@@ -24,6 +24,11 @@ class DefaultWords {
   static const reviewLine = 'It arrives in seconds.';
   static String sent(String amount, String ticker, double secs) => 'Sent $amount $ticker (${secs.toStringAsFixed(1)} s).';
   static String stillArriving(String ticker) => 'Part of this $ticker is still arriving: try again in a moment.';
+  /// A payment to an address whose coins are held but not spendable yet (the change of a payment
+  /// just made, a coin just received): when it can go, as long as a payment to an address takes.
+  static String stillArrivingWithin(String ticker, int? minutes) => minutes == null
+      ? stillArriving(ticker)
+      : 'Part of this $ticker is still arriving: it can be sent within $minutes minute${minutes == 1 ? '' : 's'}.';
   static const codeTakesAssets = 'A receive code takes Sequentia assets. For BTC, use an address or an invoice.';
   static const addressNotNow = "This amount can't be sent to an address right now. "
       'Send it to a receive code, or pay an invoice.';
@@ -66,9 +71,24 @@ class DefaultWords {
       : 'It arrives within $minutes minute${minutes == 1 ? '' : 's'}.';
   /// A payment to an address out of the tree is made in the operator's next settlement, which the
   /// paying wallet signs its part of as it is made: a wallet closed before then makes nothing (its
-  /// coins stay its own), so the review and "Sent" both ask for the screen to stay open.
+  /// coins stay its own), so the review asks for the screen to stay open, the wallet says
+  /// [sendingLater] until the payment is made ([offboardStage]), and only then [sentMade].
   static const keepOpen = 'Keep this screen open meanwhile.';
   static String sentThen(String amount, String ticker, String arrives) => 'Sent $amount $ticker. $arrives';
+  static String sendingLater(String amount, String ticker) => 'Sending $amount $ticker. Keep this screen open until it is sent.';
+  static String sentMade(String amount, String ticker, int? minutes) => 'Sent $amount $ticker. ${arrivesIn(minutes)}';
+  /// A payment to an address that ended without being made: its coins are the wallet's again.
+  /// Said once, as the payment ends while the screen is open, else on a card above Balance's list.
+  static String notMade(String amount, String ticker, String to) =>
+      'Your payment of $amount $ticker to $to was not made: nothing left your wallet. Send it again.';
+  /// Made, and taken back by the service before it reached the address.
+  static String notArrived(String amount, String ticker, String to) =>
+      'Your payment of $amount $ticker to $to did not arrive. Report a problem, so it can be put right.';
+  static const newsOk = 'OK';
+  /// History's row for each of them.
+  static const rowNotMade = 'Not sent';
+  static const rowNotMadeSub = 'Nothing left your wallet.';
+  static const rowNotArrived = 'Did not arrive';
   /// The same amount of the same asset to the same address, asked while the first is still on
   /// its way: the library goes on with the first (`already`) and sends nothing more.
   static String sentAlready(String amount, String ticker, String arrives) =>
@@ -180,6 +200,8 @@ class DefaultWords {
         receiveCode, receiveCodeLine, copyCode, codeCopied, newCode, amountInBtc, amountOptional,
         confidential, confidentialLine, confidentialOn, addressCopied,
         recipient, recipientHint, review('5', 'USDX'), reviewLine, sent('5', 'USDX', 1.2), stillArriving('USDX'),
+        stillArrivingWithin('USDX', 10), sendingLater('5', 'USDX'), sentMade('5', 'USDX', 10), notMade('5', 'USDX', 'tb1q68apqvgwps\u2026zedu'),
+        notArrived('5', 'USDX', 'tb1q68apqvgwps\u2026zedu'), newsOk, rowNotMade, rowNotMadeSub, rowNotArrived,
         codeTakesAssets, addressNotNow, confidentialPurpose, confidentialAmountHidden('USDX'), confidentialSeen, readyIn(null), readyIn(1), readyIn(12),
         movingOut('1.00004 USDX', confidentialPurpose, 1), movingWaits('1.00004 USDX', confidentialPurpose),
         cannotMoveNow('1.00004 USDX'), notEnough('1', 'USDX'), notMoved, notReady, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)), sentAlready('5', 'USDX', arrivesIn(5)), keepOpen,

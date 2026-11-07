@@ -192,6 +192,60 @@ class WalletCache {
     if (changed) await saveLnHistory(list);
   }
 
+  /// The payments to an address out of the tree this wallet asked for (address_payments.dart):
+  /// entries with the library's `offboard` id, the `address`, the `asset` and a `stage`.
+  static Future<List<Map<String, dynamic>>> addressPayments() async =>
+      [for (final e in await loadLnHistory()) if (e['kind'] == 'payment' && e['offboard'] != null) e];
+
+  /// Writes down where each payment to an address stands now ([stages]: id -> stage). One no
+  /// longer 'pending' stops showing as pending. Answers whether anything changed.
+  static Future<bool> setOffboardStages(Map<String, String> stages) async {
+    final list = List<Map<String, dynamic>>.from(await loadLnHistory());
+    var changed = false;
+    for (final e in list) {
+      final id = e['offboard'];
+      if (id == null || !stages.containsKey('$id')) continue;
+      final st = stages['$id']!;
+      if (e['stage'] != st) {
+        e['stage'] = st;
+        e['pending'] = st == 'pending';
+        changed = true;
+      }
+    }
+    if (changed) await saveLnHistory(list);
+    return changed;
+  }
+
+  /// The payments to an address that ended unmade or taken back, not yet acknowledged with OK.
+  static Future<List<Map<String, dynamic>>> untoldEnds() async => [
+        for (final e in await addressPayments())
+          if ((e['stage'] == 'not_made' || e['stage'] == 'reclaimed') && e['told'] != true) e
+      ];
+
+  /// The person pressed OK on (or was told while it ended) payment [offboard].
+  static Future<void> markTold(String offboard) async {
+    final list = List<Map<String, dynamic>>.from(await loadLnHistory());
+    var changed = false;
+    for (final e in list) {
+      if (e['offboard'] == offboard && e['told'] != true) {
+        e['told'] = true;
+        changed = true;
+      }
+    }
+    if (changed) await saveLnHistory(list);
+  }
+
+  /// Of [asset], what this wallet's payments to an address still on their way give up (amount
+  /// and fee): it counts as arriving in the library's balance but comes back only as change.
+  static Future<BigInt> pendingOutAtoms(String asset) async {
+    var n = BigInt.zero;
+    for (final e in await addressPayments()) {
+      if (e['stage'] != 'pending' || e['asset'] != asset) continue;
+      n += (BigInt.tryParse('${e['atoms']}') ?? BigInt.zero) + (BigInt.tryParse('${e['fee_atoms'] ?? 0}') ?? BigInt.zero);
+    }
+    return n;
+  }
+
   static Future<void> clear() async {
     final p = await SharedPreferences.getInstance();
     await p.remove(_kBalances);

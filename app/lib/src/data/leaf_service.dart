@@ -14,6 +14,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../rust/api/leaves.dart' as leaves;
+import 'address_payments.dart';
 import 'btc_state.dart';
 import 'config.dart';
 import 'dev_mode.dart';
@@ -23,6 +24,7 @@ import 'ln_max_payment.dart';
 import 'pay_code.dart' show expandRequest;
 import 'price_service.dart';
 import 'vesting.dart';
+import 'wallet_cache.dart';
 import 'wallet_repository.dart';
 
 /// A refusal by the leaf wallet, in the library's own words.
@@ -190,7 +192,19 @@ class LeafService extends ChangeNotifier {
     });
   }
 
-  Future<void> start() async {
+  /// One start at a time: Balance's mode listener and the shell can both ask as the app opens,
+  /// and two at once each opened the wallet and ran the opening sync, the second planning a pass
+  /// the first's sync then made return without planning the next (RX1: no board in 25 min).
+  Future<void>? _starting;
+  Future<void> start() {
+    final s = _starting;
+    if (s != null) return s;
+    final f = _start().whenComplete(() => _starting = null);
+    _starting = f;
+    return f;
+  }
+
+  Future<void> _start() async {
     final m = await WalletRepository.instance.readMnemonic();
     if (m == null) return;
     final dir = await dataDir();
@@ -260,6 +274,50 @@ class LeafService extends ChangeNotifier {
     }
     _ticking = false;
     notifyListeners();
+    // A pass that came due during this sync waited for it ([_tick]); none is ever left unplanned.
+    if (open && !(_timer?.isActive ?? false)) _plan(const Duration(seconds: 5));
+    unawaited(followAddressPayments());
+  }
+
+  // -------------------------------------------------------------------------
+  // Payments to an address out of the tree, followed to their end (address_payments.dart)
+  // -------------------------------------------------------------------------
+
+  bool _following = false;
+
+  /// Reads the library's `offboards` for the payments to an address this wallet asked for that are
+  /// not at an end yet, and writes down where each stands: History follows it, and Balance says an
+  /// unmade or taken-back one once ([WalletCache.untoldEnds]). [sync]: let the library move them
+  /// on first (the paying wallet signs its part of the settlement as it is made). Answers the
+  /// stage of payment [id] when one is named.
+  Future<String?> followAddressPayments({bool sync = false, String? id}) async {
+    Future<String?> stageOf() async {
+      if (id == null) return null;
+      for (final e in await WalletCache.addressPayments()) {
+        if (e['offboard'] == id) return '${e['stage'] ?? 'pending'}';
+      }
+      return null;
+    }
+    final asked = await WalletCache.addressPayments();
+    if (!open || _following || !asked.any((e) => e['stage'] == null || e['stage'] == 'pending')) return stageOf();
+    _following = true;
+    try {
+      if (sync) {
+        try {
+          await syncNow(by: 'a payment to an address');
+        } catch (_) {}
+      }
+      final r = offboardEnds(asked, await run('offboards'));
+      for (final n in r.news) {
+        debugPrint('[leaves] payment to an address ${n['offboard']}: ${n['state']}');
+      }
+      if (await WalletCache.setOffboardStages(r.stages)) notifyListeners();
+    } catch (e) {
+      debugPrint('[leaves] payments to an address not read: $e');
+    } finally {
+      _following = false;
+    }
+    return stageOf();
   }
 
   /// Stops the schedule and closes the wallet; the scheduled job takes over.
@@ -1336,6 +1394,22 @@ class LeafService extends ChangeNotifier {
   // The schedule while the app runs
   // -------------------------------------------------------------------------
 
+  /// Whether the next pass is planned.
+  @visibleForTesting
+  bool get passPlanned => _timer?.isActive ?? false;
+  /// A pass as the schedule runs it, while another is said to run ([ticking]).
+  @visibleForTesting
+  Future<void> tickForTest({required bool ticking}) async {
+    _ticking = ticking;
+    try {
+      await _tick();
+    } finally {
+      _ticking = false;
+    }
+  }
+  @visibleForTesting
+  void stopPassesForTest() => _timer?.cancel();
+
   void _plan(Duration d) {
     _timer?.cancel();
     if (!open) return;
@@ -1343,7 +1417,13 @@ class LeafService extends ChangeNotifier {
   }
 
   Future<void> _tick() async {
-    if (!open || _ticking) return;
+    if (!open) return;
+    // Another pass runs (the opening sync, on start or on coming back): this one waits for it
+    // rather than end the schedule, which nothing else plans again (RX1: no board in 25 min).
+    if (_ticking) {
+      debugPrint('[leaves] tick: a sync runs, again in 5 s');
+      return _plan(const Duration(seconds: 5));
+    }
     _ticking = true;
     var wait = tick;
     try {
@@ -1376,6 +1456,7 @@ class LeafService extends ChangeNotifier {
     notifyListeners();
     _plan(wait);
     unawaited(autoBoard().then((_) => autoRefreshReceived()));
+    unawaited(followAddressPayments());
     // What waits on the chain is sped up by itself in default mode (speed_up_service.dart).
     unawaited(SpeedUpService.instance.tick());
     // A wallet from before its assets lived in the tree moves its Lightning balances here.
