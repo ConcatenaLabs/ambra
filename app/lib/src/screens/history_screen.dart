@@ -451,11 +451,15 @@ class _LnRow extends StatelessWidget {
             ? (incoming ? 'Lightning invoice' : 'Lightning payment')
             : (incoming ? 'Received' : 'Sent'));
     final t = entry['time'] is num ? (entry['time'] as num).toInt() : 0;
-    String sub = desc;
+    // A payment to an address that was not made, or did not arrive, is never called "Sent": its
+    // title says what became of it, and its line carries only its time.
+    final ended = entry['stage'] == 'not_made' || entry['stage'] == 'reclaimed';
+    String sub = ended ? '' : desc;
     if (t > 0) {
       final w = DateTime.fromMillisecondsSinceEpoch(t).toLocal();
       String two(int n) => n.toString().padLeft(2, '0');
-      sub = '$desc · ${w.year}-${two(w.month)}-${two(w.day)} ${two(w.hour)}:${two(w.minute)}';
+      final at = '${w.year}-${two(w.month)}-${two(w.day)} ${two(w.hour)}:${two(w.minute)}';
+      sub = sub.isEmpty ? at : '$sub · $at';
     }
     final returned = entry['returned'] == true;
     if (pending) {
@@ -465,7 +469,7 @@ class _LnRow extends StatelessWidget {
     // A payment to an address that was not made took nothing from the wallet; one taken back
     // before it arrived did not reach the address (address_payments.dart).
     final notMade = entry['stage'] == 'not_made', notArrived = entry['stage'] == 'reclaimed';
-    if (notMade) sub = '$sub · ${DefaultWords.rowNotMadeSub}';
+    if (notMade) sub = sub.isEmpty ? DefaultWords.rowNotMadeSub : '$sub · ${DefaultWords.rowNotMadeSub}';
     final title = notMade ? DefaultWords.rowNotMade : notArrived ? DefaultWords.rowNotArrived : returned ? DefaultWords.notPaid : DevMode.instance.on
         ? (rail == 'lightning'
             ? (incoming ? 'Received over Lightning' : 'Lightning payment')
