@@ -1106,7 +1106,18 @@ class LeafService extends ChangeNotifier {
   /// [person]: false for the wallet's own following of what was asked before (a trade's
   /// syncs and reads), which keeps no upkeep waiting.
   Future<dynamic> pay(String command, [Map<String, dynamic> args = const {}, bool plain = false, bool person = true]) async {
-    if (person) _asking++;
+    // Whether this command holds the wallet's own reads and upkeep off (`_asking`). It does while
+    // the library works for the person, and not while the command waits for a round to free the
+    // planned coins it needs (up to hours): the wallet then goes on reading its mailbox and its
+    // channels and taking in what is paid to it, or a payment to it would show only once that
+    // round came (ambra#244).
+    var holding = false;
+    void hold(bool on) {
+      if (!person || holding == on) return;
+      holding = on;
+      _asking += on ? 1 : -1;
+    }
+    hold(true);
     try {
       return await payThroughRelease(
         command,
@@ -1114,15 +1125,25 @@ class LeafService extends ChangeNotifier {
         run: run,
         synced: (v) async {
           lastSync = DateTime.now();
+          _mailReadAt = lastSync;
           noteUnreachable(unreachableOf(v, 'sync'));
-          for (final a in arrivals(v is Map ? v['mailbox'] : null)) {
+          final got = arrivals(v is Map ? v['mailbox'] : null);
+          for (final a in got) {
             arrivedCount++;
             _noteArrived(a);
-          await notifyArrived(a, channel: _channel);
+            await notifyArrived(a, channel: _channel);
+          }
+          // What the sync took in shows in the figures at once.
+          if (got.isNotEmpty) {
+            try {
+              balance = await run('balance') as Map<String, dynamic>?;
+            } catch (_) {}
+            notifyListeners();
           }
         },
         onWait: (w) {
           releasing = w;
+          hold(w == null);
           notifyListeners();
         },
       );
@@ -1130,7 +1151,7 @@ class LeafService extends ChangeNotifier {
       throw plain ? plainRefusal(e) : e;
     } finally {
       if (person) {
-        _asking--;
+        hold(false);
         personActed();
       }
       if (releasing != null) {
