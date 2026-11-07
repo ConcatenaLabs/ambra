@@ -805,7 +805,7 @@ class _SendTabState extends State<SendTab> {
     if (!mounted) return;
     final amountStr = formatAtoms(atoms.toString(), label.precision);
     final feeAtoms = BigInt.tryParse('${(quote['fee'] is Map) ? (quote['fee'] as Map)['amount'] : 0}') ?? BigInt.zero;
-    final arrives = DefaultWords.arrivesIn(LeafService.instance.addressMinutes());
+    final arrives = '${DefaultWords.arrivesIn(LeafService.instance.addressMinutes())} ${DefaultWords.keepOpen}';
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(

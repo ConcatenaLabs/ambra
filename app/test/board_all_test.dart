@@ -91,7 +91,9 @@ void main() {
     expect(offboardAlready({'offboard': 'ab', 'state': 'pending', 'already': true}), isTrue);
     expect(offboardAlready({'offboard': 'ab', 'state': 'pending'}), isFalse);
     expect(offboardAlready(null), isFalse);
-    expect(DefaultWords.sentAlready('1', 'OILX', DefaultWords.arrivesIn(10)),
-        '1 OILX to this address is already on its way, so nothing more was sent. It arrives within 10 minutes. To pay the same again, send once it has arrived.');
+    expect(DefaultWords.sentAlready('1', 'OILX', '${DefaultWords.arrivesIn(10)} ${DefaultWords.keepOpen}'),
+        '1 OILX to this address is already on its way, so nothing more was sent. It arrives within 10 minutes. Keep this screen open meanwhile. To pay the same again, send once it has arrived.');
+    expect(DefaultWords.sentThen('1', 'OILX', '${DefaultWords.arrivesIn(10)} ${DefaultWords.keepOpen}'),
+        'Sent 1 OILX. It arrives within 10 minutes. Keep this screen open meanwhile.');
   });
 }

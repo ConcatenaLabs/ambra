@@ -64,6 +64,10 @@ class DefaultWords {
   static String arrivesIn(int? minutes) => minutes == null
       ? 'It arrives shortly.'
       : 'It arrives within $minutes minute${minutes == 1 ? '' : 's'}.';
+  /// A payment to an address out of the tree is made in the operator's next settlement, which the
+  /// paying wallet signs its part of as it is made: a wallet closed before then makes nothing (its
+  /// coins stay its own), so the review and "Sent" both ask for the screen to stay open.
+  static const keepOpen = 'Keep this screen open meanwhile.';
   static String sentThen(String amount, String ticker, String arrives) => 'Sent $amount $ticker. $arrives';
   /// The same amount of the same asset to the same address, asked while the first is still on
   /// its way: the library goes on with the first (`already`) and sends nothing more.
@@ -178,7 +182,7 @@ class DefaultWords {
         recipient, recipientHint, review('5', 'USDX'), reviewLine, sent('5', 'USDX', 1.2), stillArriving('USDX'),
         codeTakesAssets, addressNotNow, confidentialPurpose, confidentialAmountHidden('USDX'), confidentialSeen, readyIn(null), readyIn(1), readyIn(12),
         movingOut('1.00004 USDX', confidentialPurpose, 1), movingWaits('1.00004 USDX', confidentialPurpose),
-        cannotMoveNow('1.00004 USDX'), notEnough('1', 'USDX'), notMoved, notReady, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)), sentAlready('5', 'USDX', arrivesIn(5)),
+        cannotMoveNow('1.00004 USDX'), notEnough('1', 'USDX'), notMoved, notReady, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)), sentAlready('5', 'USDX', arrivesIn(5)), keepOpen,
         fee('5', 'USDX'), arriving('5', 'USDX'), redoing('5', 'USDX'), keptSafe('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
         arrivesAfterBlock, noFees, btcSentAfterBlock('0.001'),
         btcUpTo('0.001'), couldNotSend, byAddress(arrivesAfterBlock), arrivesNextBlock, moving('0.001', 'BTC'),

@@ -410,7 +410,8 @@ module that implements it.
     code or a name (an address, an invoice, an account id) takes the path it always took.
     An address send the chain cannot cover is paid out of the leaves (the library's
     `offboard_quote`, then `offboard` on the quote shown): "Send <amt> <TICKER>?", "It
-    arrives within <N> minutes." (the most the whole way to the other wallet takes: the
+    arrives within <N> minutes. Keep this screen open meanwhile." (the wallet signs its part
+    of the operator's settlement as it is made, and one closed before then makes nothing; the most the whole way to the other wallet takes: the
     operator's round interval, four blocks and four minutes, rounded up to five minutes,
     `addressArrivalMinutes`; ten on the testnet), and the fee when there is one. The same
     amount to the same address asked again while the first is on its way is that first
