@@ -44,6 +44,7 @@ import '../data/market_view.dart';
 import '../data/price_service.dart';
 import '../data/seqln_keys.dart' as lnkeys;
 import '../data/user_trade.dart';
+import '../data/user_trade_btc.dart' show kSettleLateMs;
 import '../data/wallet_cache.dart';
 import '../data/wallet_repository.dart';
 import '../rust/api.dart' as core;
@@ -929,8 +930,22 @@ class _UserComposerState extends State<UserComposer> {
       const SizedBox(height: 16),
       if (t != null) ...[
         _line(UserWords.pay, _amt(t.payAsset, t.amountIn), 'ucIn'),
-        _line(UserWords.get, _amt(t.receiveAsset, t.amountOut), 'ucOut'),
-        Text(costLine(t.fees, _amt, t.payAsset), key: const ValueKey('ucCost'), style: Theme.of(context).textTheme.bodySmall),
+        // A ticket that settles what it pays first: the price now, "about", the least it goes for,
+        // its fees when the settling charges any, and how long it waits, only as the wallet said it.
+        _line(UserWords.get, t.indicative ? '${UserWords.about} ${_amt(t.receiveAsset, t.about!)}' : _amt(t.receiveAsset, t.amountOut), 'ucOut'),
+        Text(t.indicative ? UserWords.atLeast(_amt(t.receiveAsset, t.amountOut)) : costLine(t.fees, _amt, t.payAsset),
+            key: const ValueKey('ucCost'), style: Theme.of(context).textTheme.bodySmall),
+        if (t.indicative && t.fees.isNotEmpty)
+          Text(costLine(t.fees, _amt, t.payAsset), key: const ValueKey('ucFees'), style: Theme.of(context).textTheme.bodySmall),
+        if (t.indicative)
+          Text(
+              t.finalBy == null
+                  ? UserWords.settling
+                  : DateTime.now().millisecondsSinceEpoch > t.finalBy! + kSettleLateMs
+                      ? UserWords.goesThroughLate
+                      : UserWords.goesThrough(((t.finalBy! - DateTime.now().millisecondsSinceEpoch) / 60000).ceil().clamp(1, 1 << 30)),
+              key: const ValueKey('ucWait'),
+              style: Theme.of(context).textTheme.bodySmall),
         if (t.upTo != null) Text(UserWords.upTo(_amt(t.payAsset, t.upTo!)), key: const ValueKey('ucUpTo')),
         if (_moving) Text(UserWords.btcMore(widget.engine.btcMoveBlocks), key: const ValueKey('ucMoving')),
         const SizedBox(height: 12),

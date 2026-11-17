@@ -158,6 +158,11 @@ void main() {
     final code = '${(made as Map)['request']}';
     await show(const SendTab(isActive: true));
     check('Send screen loads', await until(() => find.byType(TextField).evaluate().length >= 2, 120));
+    await tester.tap(find.byKey(const Key('send-asset-picker')));
+    await until(() => false, 2);
+    check('USDX offered on Send', find.text('USDX').evaluate().isNotEmpty);
+    if (find.text('USDX').evaluate().isNotEmpty) await tester.tap(find.text('USDX').last);
+    await until(() => false, 2);
     final fields = find.byType(TextField);
     await tester.enterText(fields.at(0), code);
     await tester.enterText(fields.at(1), '1');
@@ -189,7 +194,12 @@ void main() {
         await until(() => false, 15);
       }
       if (q == null || !q.ok) return check('$name: quoted (${q?.why})', false);
-      var r = await eng.confirm(q.choice!, q.ticket!);
+      Map<String, dynamic> r;
+      try {
+        r = await eng.confirm(q.choice!, q.ticket!);
+      } catch (e) {
+        return check('$name: confirm threw $e', false);
+      }
       final words = <String>{};
       var end = DateTime.now().add(Duration(seconds: secs));
       while (DateTime.now().isBefore(end)) {

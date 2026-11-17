@@ -106,6 +106,37 @@ Map<String, dynamic>? nextFinalBy(Map? prev, Map? answer, int nowMs) {
   return back ? {'finalBy': at, 'step': step} : {'finalBy': prev['finalBy'], 'step': step ?? ps};
 }
 
+/// The kind of the library's refusal [e] (`refused`, `settle_first`, …), or null for an error that
+/// carries none.
+String? refusalKind(Object e) {
+  try {
+    final k = (e as dynamic).kind;
+    return k is String ? k : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// The figures the library's refusal [e] carries beside its words (`settle_first`'s `coins`,
+/// `final_in_seconds`, `usual_in_seconds`, `waiting_for`), or none.
+Map<String, dynamic> refusalFields(Object e) {
+  try {
+    final f = (e as dynamic).fields;
+    if (f is Map) return Map<String, dynamic>.from(f);
+  } catch (_) {}
+  return const {};
+}
+
+/// The code of the library's refusal [e] (`depth_limit`, `settle_gave_up`, …), or null.
+String? refusalCode(Object e) {
+  try {
+    final c = (e as dynamic).code;
+    return c is String ? c : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Whether [e] is the library's refusal (a step it will not take), rather than a step that did not
 /// answer: its kind `refused`, or words that start so.
 bool isRefusal(Object e) {

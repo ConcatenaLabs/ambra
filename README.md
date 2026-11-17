@@ -204,7 +204,17 @@ module that implements it.
   your wallet even if the app closes." (the operator is handed the proof at once); a received
   trade settling in a round, "Received, settling (within about N min)" (the wallet's figure for a
   round of its operator). Past a stated wait by two minutes the row says it is taking longer than
-  usual. Such trades are followed every few seconds. When the other side says its offer is gone
+  usual. Such trades are followed every few seconds. When what is paid waits only for the
+  operator's next round (coins just received and not yet settled, too many payments from a round,
+  or of a format the other side does not read), Review shows a ticket to accept now: You receive
+  "about" the price now, "You receive at least … after fees, or the trade comes back and nothing
+  is traded.", and "Goes through within about N minutes" as the leaf library states it ("Goes
+  through by itself once what you pay is ready" until it does). Only **Trade** gives those coins
+  to the round (`settle_first`); once through, the trade is priced again and goes by itself at
+  that least or better, or reads "Returned: nothing traded. The price moved while it waited.", or,
+  past twice the library's wait (ten minutes at least), "Returned: nothing traded. It took too
+  long to get ready." A confirmation the library refuses for the same reason waits the same way,
+  never failing. When the other side says its offer is gone
   (the network refused its completion), or a coin the trade paid from was spent elsewhere, the
   wallet takes its coins back at once and prices the trade again in the same row, going ahead
   only at the price accepted or better, the other side's own new offer first; otherwise
