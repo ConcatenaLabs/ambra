@@ -116,8 +116,18 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     _busy = true;
     final plane = image.planes.first; // Y (luminance) for yuv420
     final job = _Frame(Uint8List.fromList(plane.bytes), image.width, image.height, plane.bytesPerRow, (_frames++).isEven);
-    Isolate.run(() => _decode(job)).then(_found, onError: (_) => _found(null));
+    _decodeOff(job).then(_found, onError: (Object e) {
+      debugPrint('[ambra-scan] decode failed: $e'); // an error here is a bug, never a frame without a code
+      _found(null);
+    });
   }
+
+  /// Runs [_decode] on another isolate. Static on purpose: a closure made inside an instance
+  /// method shares its context with the method's other closures, and the `onError` above uses
+  /// `this`, so a closure built there would carry this State (the camera controller and its
+  /// ports) to the isolate. Dart refuses to send that, every frame failed with "object is
+  /// unsendable", and the scanner never read a code.
+  static Future<String?> _decodeOff(_Frame job) => Isolate.run(() => _decode(job));
 
   void _found(String? code) {
     if (code != null && code.trim().isNotEmpty && !_handled && mounted) {
