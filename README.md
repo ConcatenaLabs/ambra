@@ -1028,15 +1028,18 @@ Rust core through flutter_rust_bridge on the host. They resolve the cdylib from
 `$AMBRA_CORE_LIB`, defaulting to `../ambra_core/target/debug/libambra_core.so`
 (relative to `app/`), so run `cargo build` in `ambra_core/` first or set the variable.
 
-On a device or emulator, `integration_test/receive_drive_test.dart` drives Receive in default
-mode against the live testnet (New code, a payment name as the QR code with its stock filled and
-Show full code, amounts in BTC and in an asset, the Confidential switch) and saves a screenshot of each through
-`test_driver/integration_test.dart`, since an emulator's own screen capture reads the app back as
-black:
+On a device or emulator, `integration_test/default_ops_drive_test.dart` drives default mode's
+everyday operations against the live testnet: Receive's one card and the wallet's payment name,
+money in from the faucet (assets as instant payments, BTC on the chain), Send to a receive code
+through the Send screen, a trade each way between USDX and EURX and each way with BTC through the
+Swap tab's engine, and BTC out to an address. It logs each operation's stated wait and the time it
+took, and saves a screenshot of each screen through `test_driver/integration_test.dart`, since an
+emulator's own screen capture reads the app back as black. It prints the new wallet's recovery
+phrase once, so the run's coins can be recovered; keep that line out of anything shared.
 
 ```sh
 AMBRA_SHOTS=/tmp/shots flutter drive --driver=test_driver/integration_test.dart \
-  --target=integration_test/receive_drive_test.dart -d <device> --dart-define=AMBRA_RECEIVE_DRIVE=true
+  --target=integration_test/default_ops_drive_test.dart -d <device> --dart-define=AMBRA_OPS_DRIVE=true
 ```
 
 ## Sequentia ecosystem

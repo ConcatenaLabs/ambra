@@ -475,11 +475,10 @@ void main() {
       ..claimed = '${100000 - 616}';
     final eng = engine(s, 'BTC', x);
     final q = await eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
-    final t0 = DateTime.now().millisecondsSinceEpoch;
     var r = await eng.confirm(q.choice!, q.ticket!);
     // Before the library's first answer: its figure for the operator's next round.
     expect((r['waitFirstBy'] as int) - (r['waitingSince'] as int), settleMinutesOf(null) * 60000);
-    expect(tradeStateWord(r, t0), UserWords.waitingOther(settleMinutesOf(null)));
+    expect(tradeStateWord(r, r['waitingSince'] as int), UserWords.waitingOther(settleMinutesOf(null)));
     s.receives[h]!['state'] = 'issuing';
     s.readyWait = {'waiting_for': 'block', 'usual_in_seconds': 90};
     r = await eng.advance((await eng.records()).first);
