@@ -221,7 +221,9 @@ class _LeafRailPanelState extends State<LeafRailPanel> {
     return [
       _rows(takeRows(q, widget.amount, windowSeconds: _window), 'leafTakeRows'),
       const Text(
-          'The fill is final once the round\'s block is certified and its Bitcoin anchor buried. The take goes ahead only on what is shown.',
+          'The fill is final once the round\'s block is certified and its Bitcoin anchor buried as deep as the operator asks, which may be no Bitcoin block at all. '
+          'Final is not beyond Bitcoin: if Bitcoin reorganises below it, so does Sequentia, and the fill is undone until the round is mined again. '
+          'The take goes ahead only on what is shown.',
           style: AmbraText.sub),
       const SizedBox(height: 10),
       PrimaryButton(
