@@ -154,6 +154,11 @@ class GoneStandIn {
 }
 
 void main() {
+  test('an order filled by someone else first is a gone offer, any other refusal is not', () {
+    expect(orderTaken(Exception("refused: order 1a2f:1 is spent, in a block or in the node's mempool: it was filled or refunded")), isTrue);
+    expect(orderTaken(Exception('refused: the wallet holds 0 of asset 2a55 in live coins')), isFalse);
+  });
+
   test('a gone offer: the coins come back at once and the maker\'s offer made in its place completes the trade in the same record', () async {
     final s = GoneStandIn();
     const t = 1000000;

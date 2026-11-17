@@ -167,6 +167,11 @@ class MakerError implements Exception {
 
 /// Whether refusal [e] says a coin the wallet held ([held], the leaf ids it held before the step) is
 /// spent already: the operator's `double_spend`, naming the coin. The web wallet's spentElsewhere().
+/// Whether [e] is the library's refusal of a take because the order was filled or refunded by
+/// someone else first (`order <outpoint> is spent, in a block or in the node's mempool`): the offer
+/// is gone, and the trade is priced again as for a gone offer.
+bool orderTaken(Object e) => RegExp(r"\border \S+ is spent, in a block or in the node's mempool").hasMatch('$e');
+
 bool spentElsewhere(Object e, List? held) {
   final m = '$e';
   if (!m.contains('double_spend')) return false;
@@ -2233,7 +2238,7 @@ class UserTradeEngine {
       // under what was accepted, as a gone offer is ([_advanceGone]).
       if (rec['state'] == 'confirming' &&
           isRefusal(e) &&
-          spentElsewhere(e, rec['before'] as List?) &&
+          (spentElsewhere(e, rec['before'] as List?) || orderTaken(e)) &&
           const ['leaf-resting', 'covenant-round', 'leaf-maker'].contains(c.source)) {
         drop(c);
         rec['gave'] = [

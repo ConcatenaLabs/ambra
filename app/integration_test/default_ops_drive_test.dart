@@ -187,7 +187,9 @@ void main() {
     Future<void> trade(String name, String pay, String receive, BigInt amount, int secs) async {
       final t0 = DateTime.now();
       QuoteResult? q;
-      for (var i = 0; i < 20; i++) {
+      // BTC just received on the chain is moved where trades pay from once it confirms on Bitcoin
+      // (about ten minutes on testnet4): asked for up to fifteen minutes.
+      for (var i = 0; i < (pay == kUserBtc ? 60 : 20); i++) {
         q = await eng.quote(pay: pay, receive: receive, amount: amount);
         if (q.ok) break;
         note('$name: no quote yet (${q.why})');
