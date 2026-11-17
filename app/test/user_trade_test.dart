@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:ambra/src/data/user_trade.dart';
+import 'package:ambra/src/data/user_trade_btc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 final x = 'aa' * 32, y = 'bb' * 32;
@@ -309,6 +310,9 @@ void main() {
     expect(rec['state'], 'sent');
     var r = await eng.advance((await eng.records()).first);
     expect((r['settle'] as Map)['coins'], hasLength(2));
+    // The wait its row states once the settle is under way: the wallet's figure for a round.
+    expect(r['settleMin'], settleMinutesOf(null));
+    expect(tradeStateWord({...r, 'settleState': ['pending']}, r['settleSince'] as int), UserWords.receivedWithin(settleMinutesOf(null)));
     for (final p in s.parts) {
       p['state'] = 'released';
       p['new_leaves'] = [{'state': 'live'}];

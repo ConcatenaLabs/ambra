@@ -229,23 +229,42 @@ class _ReleasingSlot extends StatelessWidget {
       : Padding(padding: const EdgeInsets.only(bottom: 14), child: _ReleasingCard(wait: wait!));
 }
 
-/// A payment the unplanned leaves could not cover, made through the next round: the
-/// planned leaves it needs are given up in that round for leaves no plan names, and the
-/// payment is asked again once that round is final.
+/// A payment that waits for the next round and is asked again once it is through: planned
+/// leaves given up for leaves no plan names, leaves the library names to settle first (with
+/// when it said they are through), channels closed, leaves too deep refreshed, or the wallet's
+/// own refresh of the asset already in a round.
 class _ReleasingCard extends StatelessWidget {
   const _ReleasingCard({required this.wait});
   final ReleaseWait wait;
+
+  String get _why {
+    final n = wait.coins.length;
+    final ids = wait.coins.map((c) => _short(c, 6)).join(', ');
+    switch (wait.why) {
+      case 'settle':
+        final by = wait.finalBy;
+        return '${wait.command}: ${n == 0 ? 'the asset\'s leaves' : '$n leaf(s) ($ids)'} settle first in the next round '
+            '(settle_first${by == null ? '' : ', waiting for ${by.step ?? 'the round'}'}). '
+            '${settleWords(by?.at, LeafService.instance.settleMinutesNow(), DateTime.now())}.';
+      case 'channel':
+        return '${wait.command}: $n channel(s) ($ids) are closed into the next round; the payment is asked again once it is final.';
+      case 'depth':
+        return '${wait.command}: $n leaf(s) ($ids) are too many payments from a round and are refreshed in the next one first.';
+      case 'round':
+        return '${wait.command}: the wallet\'s own refresh of $n leaf(s) ($ids) is in a round; the payment goes once it ends.';
+      default:
+        return '${wait.command}: the unplanned leaves fall short, so $n planned leaf(s) ($ids) are given up in the next round '
+            'for leaves no plan names; the payment is asked again once that round is final.';
+    }
+  }
+
   @override
   Widget build(BuildContext context) => AmbraCard(
         key: const Key('leaf-releasing'),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const SectionLabel('Paying through the next round'),
           const SizedBox(height: 8),
-          Text(
-              '${wait.command}: the unplanned leaves fall short, so ${wait.coins.length} planned leaf(s) '
-              '(${wait.coins.map((c) => _short(c, 6)).join(', ')}) are given up in the next round for leaves no plan '
-              'names; the payment is asked again once that round is final.',
-              style: AmbraText.sub),
+          Text(_why, style: AmbraText.sub),
         ]),
       );
 }

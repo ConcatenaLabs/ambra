@@ -75,17 +75,25 @@ void main() {
   });
 
   test('a payment to an address states the most the whole way to the other wallet takes, not the settlement alone', () {
-    expect(addressArrivalMinutes(60, 60), 10);
-    expect(addressArrivalMinutes(60, null), 10);
-    expect(addressArrivalMinutes(600, 60), 20);
-    expect(addressArrivalMinutes(60, 600), 45);
+    // The settlement, two blocks (its own and its certificate's), the operator's unlock (ten
+    // minutes when it publishes none) and two minutes of reads, rounded up to five.
+    expect(addressArrivalMinutes(60, 60), 15);
+    expect(addressArrivalMinutes(60, null), 15);
+    expect(addressArrivalMinutes(600, 60), 25);
+    expect(addressArrivalMinutes(60, 600), 35);
+    expect(addressArrivalMinutes(60, 60, 120), 10, reason: 'an unlock time the operator publishes counts as it says');
+    expect(addressArrivalMinutes(60, 60, 0), 15, reason: 'none published: ten minutes');
     expect(addressArrivalMinutes(null, 60), isNull);
     expect(addressArrivalMinutes(0, 60), isNull);
     // Every payment measured on the testnet (189 to 356 s from Send) is within what is stated.
     for (final s in [189, 223, 231, 313, 317, 340, 356]) {
       expect(s <= addressArrivalMinutes(60, 60)! * 60, isTrue);
     }
-    expect(DefaultWords.arrivesIn(addressArrivalMinutes(60, 60)), 'It arrives within 10 minutes.');
+    expect(DefaultWords.arrivesIn(addressArrivalMinutes(60, 60)), 'It arrives within 15 minutes.');
+    // A move to the wallet's own address waits on no other wallet: fourteen on the testnet.
+    expect(moveOutMinutes(60, 60), 14);
+    expect(moveOutMinutes(60, 60, 120), 6);
+    expect(moveOutMinutes(null, 60), isNull);
     expect(DefaultWords.arrivesIn(null), 'It arrives shortly.');
     expect(StakeWords.movingOut('1 tSEQ', 'staked', 10), 'Moving 1 tSEQ out of the Ark so it can be staked. They are ready within 10 minutes. Keep this screen open.');
   });

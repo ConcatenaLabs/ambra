@@ -42,10 +42,12 @@ final nameRe = RegExp(r'^[a-z0-9_-]{3,32}$');
 /// `dev*` lines do.
 class NameWords {
   static const label = 'Your payment name';
-  static const tip = 'Other wallets can pay you at this name, in any amount they choose. A Sequentia wallet can pay it '
-      'while this wallet is closed; other wallets, while it is open.';
+  // Said beside the name, since every wallet holds one: who can pay it, and what they see.
+  static const tip = 'Anyone can look this name up and pay you at it, in any amount they choose, and see the address '
+      'each payment goes to. A Sequentia wallet can pay it while this wallet is closed; other wallets, while it is open.';
   static const none = 'Get a name other wallets can pay you at, in any amount they choose.';
   static const choose = 'Choose your own';
+  static const change = 'Change name';
   static const getName = 'Get a name';
   static const getting = 'Getting a name…';
   static const useWords = 'Use a word name instead';
@@ -62,14 +64,10 @@ class NameWords {
   static const taken = 'That name is taken. Choose another.';
   static const noWallet = 'No wallet goes by that name.';
   static const offline = "The recipient's wallet is offline. Try again when it is open.";
-  // Receive, when the wallet has a name: the picture is the name.
-  static const qrTip = 'Any asset, any amount, a new receive code of yours for each payer. A Sequentia wallet can pay '
-      'this name while this wallet is closed; other wallets, while it is open.';
-  static const public = 'Anyone who has your name can look it up and get a receive code of yours.';
-  static const copyName = 'Copy name';
-  static const copiedName = 'Name copied';
   static const showFull = 'Show full code';
   static const showName = 'Show name';
+  // Receive's More options, with a name: where it is changed.
+  static String settingsLine(String name) => 'Your payment name is $name. You can change or remove it in Settings.';
   static const fullTip = "For a wallet that can't look names up, or to pay without a connection. Each code is paid once; "
       'a new one shows when it is.';
   // What Send says when a name's code does not check out. Nothing is sent.
@@ -78,14 +76,15 @@ class NameWords {
   static const changed = 'This name now belongs to another wallet than the one you paid before, so nothing was sent. '
       'Ask the recipient for their full code.';
   static const busy = 'Too many lookups from your network. Try again in a minute.';
+  static const newBusy = 'Too many names were made from your network just now. Try again in a few minutes.';
   static const devLabel = 'Lightning address';
   static const devTip = 'LNURL-pay (LUD-06, LUD-16) at this service: a payer picks the amount and this wallet makes the '
       'invoice on the Bitcoin ark while it is open. A Sequentia wallet paying it is given one of the signed receive codes '
       'this wallet leaves with the service.';
 
-  static List<String> all() => [label, tip, none, choose, hint, save, cancel, saving, copy, copied, remove, removing,
-        badName, taken, noWallet, offline, qrTip, public, copyName, copiedName, showFull, showName, fullTip, unsigned,
-        changed, busy, getName, getting, useWords, noWordName];
+  static List<String> all() => [label, tip, none, choose, change, hint, save, cancel, saving, copy, copied, remove,
+        removing, badName, taken, noWallet, offline, showFull, showName, settingsLine('AmberFalcon@sequentiatestnet.com'),
+        fullTip, unsigned, changed, busy, newBusy, getName, getting, useWords, noWordName];
 }
 
 /// Why [name] can't be a name, or null.
@@ -193,9 +192,12 @@ Future<Map<String, dynamic>> _getJson(http.Client c, Uri url, Duration timeout) 
 
 /// A sentence the wallet shows as it is.
 class LnAddressError implements Exception {
-  const LnAddressError(this.message, {this.status});
+  const LnAddressError(this.message, {this.status, this.code});
   final String message;
   final int? status;
+
+  /// The service's own word for the refusal (`busy`, `full`, `taken`), when it gave one.
+  final String? code;
   @override
   String toString() => message;
 }
@@ -302,6 +304,8 @@ Future<LnAddressTarget> resolveLnAddress({
 ///   [code]     a receive code of the wallet's own, new for the payer
 ///   [limits]   the sats the wallet takes now, or null while it can't take any
 ///   [load]/[save] the name, per wallet
+///   [loadRemoved]/[saveRemoved] whether the person removed the wallet's name, per wallet: it is
+///                then never made again by itself ([ensure])
 /// The stock (name_stock.dart), left out by a wallet that keeps none:
 ///   [stockCode]  a receive code of the wallet's own at address `index`, with a new Sequentia part
 ///                and ark address and no amount, or null when none can be made now
@@ -331,6 +335,10 @@ class LnAddress {
     this.saveStock,
     this.stockSize = defaultStockSize,
     this.topUpEvery = const Duration(seconds: 15),
+    this.loadRemoved,
+    this.saveRemoved,
+    this.lookUpTimeout = const Duration(seconds: 8),
+    this.recheck = const Duration(seconds: 30),
   })  : _client = client ?? http.Client.new,
         _now = now ?? DateTime.now;
 
@@ -341,6 +349,16 @@ class LnAddress {
   final Future<void> Function(String? json)? saveStock;
   final int stockSize;
   final Duration topUpEvery;
+  final Future<bool> Function()? loadRemoved;
+  final Future<void> Function(bool removed)? saveRemoved;
+
+  /// How long a look-up of the name the key holds may take: a name is never shown on the strength
+  /// of a request that hangs.
+  final Duration lookUpTimeout;
+
+  /// While the link is not waiting for payers (the wallet takes no payment over Lightning now), how
+  /// often the name is checked with the service, so a release or a change on another device shows.
+  final Duration recheck;
 
   final String base;
   final String domain;
@@ -357,6 +375,22 @@ class LnAddress {
   final DateTime Function() _now;
 
   String? _name;
+  bool _loaded = false, _closed = false;
+  // Whether the service said, since this wallet opened, that this key holds [_name]. A name kept from
+  // before is not shown to payers until it has ([verified]): it may have been released or changed
+  // on another device meanwhile.
+  bool _verified = false;
+  DateTime? _lookedOkAt;
+  // Whether the service failed to answer the last time it was asked (cleared by its next answer),
+  // and the one run of [ensure] under way.
+  bool _unreachable = false;
+  Future<String?>? _ensuring;
+  // Whether the person removed this wallet's name (kept on this device), and whether the service
+  // holds this key as one whose person did ([lookUp]).
+  bool _removed = false, _declinedThere = false;
+  // Why [ensure] has no name yet while it asks again: 'busy' while the service limits new names
+  // from this network ([refused]), else null.
+  String? _refusal;
   bool _running = false, _stopped = true;
   http.Client? _waiting;
   Future<int?>? _topping;
@@ -365,6 +399,55 @@ class LnAddress {
 
   String? get name => _name;
   String? get address => _name == null ? null : '$_name@$domain';
+
+  /// Whether the service has confirmed, since this wallet opened, that its key holds [name].
+  bool get verified => _name != null && _verified;
+
+  /// Whether the service failed to answer the last time it was asked.
+  bool get unreachable => _unreachable;
+
+  /// 'busy' while the service limits new names from this network and [ensure] asks again, else null.
+  String? get refused => _refusal;
+
+  /// Whether the person removed this wallet's name: it is then not given one again by itself.
+  bool get removed => _removed;
+
+  void _changed() {
+    try {
+      onChange?.call();
+    } catch (_) {}
+  }
+
+  void _reach(bool ok) {
+    if (_unreachable == !ok) return;
+    _unreachable = !ok;
+    _changed();
+  }
+
+  void _refuse(String? why) {
+    if (_refusal == why) return;
+    _refusal = why;
+    _changed();
+  }
+
+  Future<void> _setRemoved(bool v) async {
+    _removed = v;
+    try {
+      await saveRemoved?.call(v);
+    } catch (_) {}
+  }
+
+  /// The name and the removal kept for this wallet, read once.
+  Future<void> _loadKept() async {
+    if (_loaded) return;
+    _loaded = true;
+    try {
+      _name ??= await load();
+    } catch (_) {}
+    try {
+      _removed = await loadRemoved?.call() ?? false;
+    } catch (_) {}
+  }
 
   /// The name as shown: a word name with each word's capital (AmberFalcon@domain), any other as it
   /// is. The name itself, the QR code and Copy stay in lower case.
@@ -418,41 +501,126 @@ class LnAddress {
     } catch (_) {}
     if (r.statusCode < 200 || r.statusCode >= 300 || j is! Map || j['ok'] == false) {
       throw LnAddressError(j is Map && j['error'] is String ? j['error'] as String : 'The name could not be saved. Check your connection and try again.',
-          status: r.statusCode);
+          status: r.statusCode, code: j is Map && j['code'] is String ? j['code'] as String : null);
     }
     return Map<String, dynamic>.from(j);
   }
 
-  Future<void> _keep(String? n) async {
+  Future<void> _keep(String? n, [bool? ok]) async {
     _name = n;
+    _verified = ok ?? n != null;
     try {
       await save(n);
     } catch (_) {}
-    onChange?.call();
+    _changed();
   }
 
-  /// The name kept for this wallet, then the one its key holds at the service (a wallet restored
-  /// elsewhere finds it).
-  Future<String?> recover() async {
-    try {
-      _name ??= await load();
-    } catch (_) {}
+  /// The name this wallet's key holds at the service, if any (a wallet restored elsewhere finds
+  /// it), and whether its person removed it on any device (`declined`), which this device then
+  /// keeps too. Signed by the name key, so the service counts it against that key and not against
+  /// the look-ups of payers on the same network. Bounded by [lookUpTimeout]. A refusal for too many
+  /// requests (429) is not the service being unreachable: what is shown stays as it is, and the
+  /// next check asks again. -> whether the service answered.
+  Future<bool> lookUp() async {
     final k = key();
-    if (k == null) return _name;
+    if (k == null) return false;
     final c = _client();
     try {
-      final r = await c.get(Uri.parse('$base/lnaddr/-/mine?pubkey=${k.pub}'));
+      final t = _ts(), sig = signWith(k.priv, signedDigest('mine', domain, '-', [k.pub, t]));
+      final r = await c.get(Uri.parse('$base/lnaddr/-/mine?pubkey=${k.pub}&ts=$t&sig=$sig')).timeout(lookUpTimeout);
+      if (r.statusCode == 429) return false;
       final j = jsonDecode(r.body);
       if (r.statusCode == 200 && j is Map && j['ok'] == true) {
+        _reach(true);
         final n = j['name'] is String ? j['name'] as String : null;
-        if (n != _name) await _keep(n);
+        final declined = j['declined'] == true;
+        if (n == null && declined) await _setRemoved(true);
+        _declinedThere = declined;
+        _lookedOkAt = _now();
+        if (n != _name) {
+          await _keep(n);
+        } else if (_name != null && !_verified) {
+          _verified = true;
+          _changed();
+        }
+        return true;
       }
     } catch (_) {
     } finally {
       c.close();
     }
-    onChange?.call();
+    _reach(false);
+    return false;
+  }
+
+  /// The name kept for this wallet, then the one its key holds at the service.
+  Future<String?> recover() async {
+    await _loadKept();
+    await lookUp();
+    _changed();
     return _name;
+  }
+
+  /// Every wallet holds a name by default: the name its key holds at the service (a wallet
+  /// restored from its phrase gets its name back), else its word name, registered with nothing
+  /// asked. Not while [want] says no (developer mode), not for a key whose person removed its name
+  /// on any device (the service keeps that per key; a removal only this device knows of is told to
+  /// the service first), and never when the service is full or holds no word name free for this
+  /// key. While the service does not answer it asks again, at [retry] growing to a minute, until it
+  /// does: the name then shows without a reload (`onChange`). -> the name, or null.
+  Future<String?> ensure({bool Function()? want}) {
+    final running = _ensuring;
+    if (running != null) return running;
+    final run = _ensure(want ?? () => true);
+    _ensuring = run;
+    run.whenComplete(() => _ensuring = null).ignore();
+    return run;
+  }
+
+  Future<String?> _ensure(bool Function() want) async {
+    await _loadKept();
+    for (var wait = retry;; wait = wait * 2 > const Duration(minutes: 1) ? const Duration(minutes: 1) : wait * 2) {
+      if (_closed || key() == null) return _name;
+      // A fresh answer (the wallet's start asks once, [recover]) is not asked for again.
+      final at = _lookedOkAt;
+      final fresh = (_verified || _name == null) && at != null && _now().difference(at) < const Duration(seconds: 5);
+      if (fresh || await lookUp()) {
+        if (_name != null) return _name;
+        if (_removed) {
+          if (!_declinedThere) {
+            try {
+              await decline();
+            } catch (e) {
+              log?.call('[lnaddr] decline: $e');
+            }
+          }
+          return _name;
+        }
+        if (!want() || _closed) return _name;
+        try {
+          final n = await claimWordName();
+          _refuse(null);
+          return n;
+        } on LnAddressError catch (e) {
+          if (e.code == 'full' || e.code == 'taken' || e.message == NameWords.noWordName || e.status == 400 || e.status == 403) {
+            log?.call('[lnaddr] no default name: $e');
+            return _name;
+          }
+          // Too many new names from this network just now: asked again, and said meanwhile.
+          e.code == 'busy' ? _refuse('busy') : _reach(false);
+        } catch (_) {
+          _reach(false);
+        }
+      }
+      await Future<void>.delayed(wait);
+    }
+  }
+
+  /// Tells the service this key wants no name made by itself, for a removal it never saw.
+  Future<void> decline() async {
+    final k = _keyOrThrow(), t = _ts();
+    await _post('decline', {'pubkey': k.pub, 'ts': t, 'sig': signWith(k.priv, signedDigest('decline', domain, '-', [k.pub, t]))});
+    _declinedThere = true;
   }
 
   /// The stock this wallet made for its name: its codes (id -> index, lapse) and the indices
@@ -579,6 +747,10 @@ class LnAddress {
     if (p != null) throw LnAddressError(p);
     final k = _keyOrThrow(), t = _ts();
     await _post('register', {'name': n, 'pubkey': k.pub, 'ts': t, 'sig': signWith(k.priv, signedDigest('register', domain, n, [k.pub, t]))});
+    await _setRemoved(false);
+    _declinedThere = false;
+    _reach(true);
+    _lookedOkAt = _now();
     await _keep(n);
     start();
     unawaited(topUp());
@@ -590,6 +762,8 @@ class LnAddress {
     if (n == null) return;
     final k = _keyOrThrow(), t = _ts();
     await _post('release', {'name': n, 'ts': t, 'sig': signWith(k.priv, signedDigest('release', domain, n, [t]))});
+    await _setRemoved(true);
+    _declinedThere = true;
     await _keep(null);
     stop();
   }
@@ -631,10 +805,17 @@ class LnAddress {
   Future<void> _loop() async {
     _running = true;
     final seen = <String>{};
+    var checkedAt = _now();
     try {
       while (!_stopped && _name != null) {
         final k = key(), lim = limits();
+        // Not waiting for payers: the name is checked with the service every [recheck] instead,
+        // so a release or a change on another device still shows here.
         if (k == null || lim == null) {
+          if (_now().difference(checkedAt) >= recheck) {
+            checkedAt = _now();
+            await lookUp();
+          }
           await Future<void>.delayed(retry);
           continue;
         }
@@ -648,11 +829,16 @@ class LnAddress {
           }, via: c);
         } catch (e) {
           if (_stopped) break;
-          // The service no longer knows the name under this key: it was released elsewhere.
+          // The service no longer knows the name under this key: it was released or changed
+          // elsewhere. Not shown from now on; the name the key holds now, if any, is asked for.
           if (e is LnAddressError && (e.status == 404 || e.status == 403)) {
             await _keep(null);
+            unawaited(lookUp().then((_) {
+              if (_name != null) start();
+            }));
             break;
           }
+          if (e is! LnAddressError || e.status == null || e.status! >= 500) _reach(false);
           log?.call('[lnaddr] wait: $e');
           await Future<void>.delayed(retry);
           continue;
@@ -660,6 +846,7 @@ class LnAddress {
           c.close();
           _waiting = null;
         }
+        _reach(true);
         for (final req in (j['requests'] as List? ?? const []).whereType<Map>()) {
           final id = '${req['id']}';
           if (!seen.add(id)) continue;
@@ -696,6 +883,13 @@ class LnAddress {
     try {
       _waiting?.close();
     } catch (_) {}
+  }
+
+  /// Done with this wallet (another opened, or it was removed): its link stops and [ensure] makes
+  /// nothing more for it.
+  void close() {
+    _closed = true;
+    stop();
   }
 }
 

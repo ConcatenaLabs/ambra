@@ -601,7 +601,8 @@ class _SendTabState extends State<SendTab> {
       confidentialSaid = own > BigInt.zero ? DefaultWords.confidentialAmountHidden(label.ticker) : DefaultWords.confidentialSeen;
     }
     // User mode: what the chain cannot cover the instant part pays, out to the address.
-    if (atoms > bal && !DevMode.instance.on && LeafService.instance.open && confidentialSaid == null) {
+    // Also when no coin on the chain can pay the fee: the instant part pays its own (ambra #257).
+    if ((atoms > bal || _feeAsset == null) && !DevMode.instance.on && LeafService.instance.open && confidentialSaid == null) {
       if (atoms <= LeafService.instance.spendableAtoms(_assetId)) return _reviewOffboard(addr, atoms);
       // Coins still arriving would cover it (the change of a payment just made, a coin just
       // received): said, with when, never as not enough (web wallet #607). What a payment still on
@@ -821,7 +822,10 @@ class _SendTabState extends State<SendTab> {
     if (!mounted) return;
     final amountStr = formatAtoms(atoms.toString(), label.precision);
     final feeAtoms = BigInt.tryParse('${(quote['fee'] is Map) ? (quote['fee'] as Map)['amount'] : 0}') ?? BigInt.zero;
-    final arrives = '${DefaultWords.arrivesIn(LeafService.instance.addressMinutes())} ${DefaultWords.keepOpen}';
+    final arrives = '${DefaultWords.arrivesIn(LeafService.instance.offboardMinutes(quote))} ${DefaultWords.keepOpen}';
+    // The same payment already on its way: sending this pays it twice (web pending-sends.js).
+    final same = await LeafService.instance.samePendingNow(_assetId, atoms, address);
+    if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -829,6 +833,10 @@ class _SendTabState extends State<SendTab> {
         title: Text(DefaultWords.review(amountStr, label.ticker), style: AmbraText.title),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(arrives, style: AmbraText.muted),
+          if (same) ...[
+            const SizedBox(height: 8),
+            const Text(DefaultWords.sameOnItsWay, key: Key('send-same-on-its-way'), style: AmbraText.muted),
+          ],
           if (feeAtoms > BigInt.zero) ...[
             const SizedBox(height: 8),
             Text(DefaultWords.fee(formatAtoms(feeAtoms.toString(), label.precision), label.ticker), style: AmbraText.muted),
@@ -844,7 +852,9 @@ class _SendTabState extends State<SendTab> {
     setState(() => _sendingInTree = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final v = await LeafService.instance.pay('offboard', {...args, 'shown': quote}, true);
+      // Written down while it waits for a round: an app closed meanwhile makes it once on reopening.
+      final v = await LeafService.instance.payPending('offboard', {...args, 'shown': quote},
+          kind: 'address', asset: _assetId, atoms: atoms, to: address, ticker: label.ticker, precision: label.precision);
       // The same payment asked again while the first is on its way is that first one: nothing
       // more is sent or written down, and the person is told so, never "Sent" a second time.
       final already = offboardAlready(v);
@@ -1052,8 +1062,14 @@ class _SendTabState extends State<SendTab> {
     setState(() => _sendingInTree = true);
     final started = DateTime.now();
     try {
-      await LeafService.instance.pay(
-          'send', {'request': _to, 'amount': atoms.toString(), 'asset': _assetId}, !DevMode.instance.on);
+      final args = {'request': _to, 'amount': atoms.toString(), 'asset': _assetId};
+      if (DevMode.instance.on) {
+        await LeafService.instance.pay('send', args, false);
+      } else {
+        // Written down while it waits for a round: an app closed meanwhile makes it once on reopening.
+        await LeafService.instance.payPending('send', args,
+            kind: 'code', asset: _assetId, atoms: atoms, to: _to, ticker: label.ticker, precision: label.precision);
+      }
       final secs = DateTime.now().difference(started).inMilliseconds / 1000;
       unawaited(_logSent(label.ticker, atoms, label.precision, 'tree'));
       if (!mounted) return;
@@ -1205,7 +1221,9 @@ class _SendTabState extends State<SendTab> {
                   AmbraField(label: 'Fee rate (sat/vB, optional)', controller: _feeRateCtl, hint: 'default 2'),
                 ] else
                   const Text(DefaultWords.btcFee, style: AmbraText.sub),
-              ] else ...[
+              ] else if (DevMode.instance.on) ...[
+                // Default mode's form names no fee asset, as the web wallet's: the fee is the asset
+                // sent, said in the review, and the instant part pays its own (ambra #257).
                 const SectionLabel('Pay fee in'),
                 const SizedBox(height: 8),
                 _PickerField(

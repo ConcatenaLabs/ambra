@@ -71,6 +71,117 @@ const int kEntriesFreshMs = 8000;
 /// The most the operator's fee may be of a price, in millionths, in user mode.
 const int kMaxFeePpm = 10000;
 
+/// The longest a trade that settles first waits for its coins when the library has not said how long
+/// they take, before it comes back with nothing traded; when it says (`final_in_seconds`), twice that
+/// and [kSettleMarginMs], if longer. The web wallet's SETTLE_MOST_MS and SETTLE_MARGIN_MS.
+const int kSettleMostMs = 10 * 60000;
+const int kSettleMarginMs = 120000;
+
+/// A trade whose coins must settle first is shown at the book's price now: it goes once they are
+/// through only for at least that price less the fees last seen for the asset paid, less this slack
+/// in parts per ten thousand. The web wallet's SETTLE_SLACK_BP.
+final BigInt kSettleSlackBp = BigInt.from(100);
+
+/// A settling trade priced again and refused once more for coins that wait for a round asks the other
+/// side again only after the wait that refusal gave, and at least this long after. The web wallet's
+/// REPRICE_AGAIN_MS.
+const int kRepriceAgainMs = 30000;
+
+/// How long a settling trade may wait, by the library's `final_in_seconds`. The web wallet's
+/// settleBound().
+int settleBound(Object? finalInSeconds) {
+  final s = finalInSeconds is num ? finalInSeconds : num.tryParse('${finalInSeconds ?? ''}');
+  if (s == null || s <= 0) return kSettleMostMs;
+  return math.max(kSettleMostMs, (2 * s * 1000).round() + kSettleMarginMs);
+}
+
+/// How many offers of one trade may be gone (each priced again at once) before it is returned. The
+/// web wallet's GONE_MOST.
+const int kGoneMost = 3;
+
+/// How long a trade whose other side's offer is gone keeps asking for a price within what was
+/// accepted (the wallet busy, no firm offer yet) before it is returned. The web wallet's
+/// REPRICE_MOST_MS.
+const int kRepriceMostMs = 60000;
+
+/// A pair offered within this long that nobody offers now: a maker reading its coins again after a
+/// trade quotes nothing for up to about 90 s, so the wallet asks again, every
+/// [kOfferedAgainEveryMs], rather than saying the pair is not offered. The web wallet's
+/// OFFERED_AGAIN_MS and OFFERED_AGAIN_EVERY_MS.
+const int kOfferedAgainMs = 3 * 60000;
+const int kOfferedAgainEveryMs = 5000;
+
+/// The trade records kept: every unfinished trade's, always, since it is what lets a restart resume
+/// or return the trade; and the newest ended ones, up to [kKeepEnded] of them and [kKeepBytes] in
+/// all, the oldest out first. History draws its trade rows from these records, so a trade that ended
+/// before the newest [kKeepEnded] is no longer a row there: the coins it brought are in the balance.
+/// The web wallet's KEEP_ENDED and KEEP_BYTES.
+const int kKeepEnded = 200;
+const int kKeepBytes = 1000000;
+const List<String> kEndedStates = ['settled', 'returned', 'failed', 'undone'];
+
+/// [list] (oldest first) with its oldest ended records dropped until at most [keep] ended ones are
+/// left and the whole is at most [bytes] long as JSON. An unfinished record is never dropped. An ended
+/// record keeps no list of what the wallet held before it (`before`, `beforeParts`): only an
+/// unfinished trade looks for what it brought among them, and each list is the wallet's whole coin
+/// history. The web wallet's boundedRecords().
+List<Map<String, dynamic>> boundedRecords(List<Map<String, dynamic>> list0, int keep, int bytes) {
+  bool ended(Map r) => kEndedStates.contains(r['state']);
+  final list = [
+    for (final r in list0)
+      if (ended(r) && (r.containsKey('before') || r.containsKey('beforeParts')))
+        (Map<String, dynamic>.from(r)
+          ..remove('before')
+          ..remove('beforeParts'))
+      else
+        r,
+  ];
+  final size = [for (final r in list) utf8.encode(jsonEncode(r)).length + 1];
+  var endedLeft = list.where(ended).length;
+  var total = size.fold<int>(1, (a, b) => a + b);
+  final drop = <int>{};
+  for (var i = 0; i < list.length && (endedLeft > keep || total > bytes); i++) {
+    if (!ended(list[i])) continue;
+    drop.add(i);
+    endedLeft--;
+    total -= size[i];
+  }
+  return drop.isEmpty ? list : [for (var i = 0; i < list.length; i++) if (!drop.contains(i)) list[i]];
+}
+
+/// A trade whose record could not be kept: nothing is signed for it ([UserWords.storageFull]).
+class StorageFullError implements Exception {
+  @override
+  String toString() => UserWords.storageFull;
+}
+
+/// A maker's refusal over HTTP, with the body it answered (a completion the operator refused says
+/// `gone`, and may carry the offer the maker made in its place).
+class MakerError implements Exception {
+  MakerError(this.message, [this.body = const {}]);
+  final String message;
+  final Map body;
+  @override
+  String toString() => message;
+}
+
+/// Whether refusal [e] says a coin the wallet held ([held], the leaf ids it held before the step) is
+/// spent already: the operator's `double_spend`, naming the coin. The web wallet's spentElsewhere().
+/// Whether [e] is the library's refusal of a take because the order was filled or refunded by
+/// someone else first (`order <outpoint> is spent, in a block or in the node's mempool`): the offer
+/// is gone, and the trade is priced again as for a gone offer.
+bool orderTaken(Object e) => RegExp(r"\border \S+ is spent, in a block or in the node's mempool").hasMatch('$e');
+
+bool spentElsewhere(Object e, List? held) {
+  final m = '$e';
+  if (!m.contains('double_spend')) return false;
+  final named = RegExp(r'\b[0-9a-fA-F]{64}\b').firstMatch(m)?.group(0)?.toLowerCase();
+  return named != null && (held ?? const []).map((x) => '$x'.toLowerCase()).contains(named);
+}
+
+/// What a trade priced again has paid already, in the asset paid: a cancel's respend margins.
+BigInt paidAlready(Map r) => _big(r['cancelFees']);
+
 /// Words a default screen must never show. Lower case; matched as whole words.
 const List<String> kUserModeForbiddenWords = [
   'rail',
@@ -187,19 +298,59 @@ class UserWords {
       'Your BTC is being moved so it can be traded. It is ready after ${_blocks(blocks)}. Nothing has moved yet.';
   static String btcMore(int blocks) => 'More of your BTC is being moved so it can be traded, ready after ${_blocks(blocks)}.';
   static const priceMoved = 'The price moved. Here is the new one.';
+  // What is paid waits for the network to settle it first, and the wallet has not said how long: the
+  // trade goes ahead by itself after, and no time is promised until the wallet says one.
+  static const settling = 'Goes through by itself once what you pay is ready';
+  // A ticket accepted before what it pays is settled: the book's price now, and the least it goes for
+  // once settled, its fees taken; less than that and it comes back.
+  static String atLeast(String x) => 'You receive at least $x after fees, or the trade comes back and nothing is traded.';
+  static String goesThrough(int minutes) => minutes <= 1 ? 'Goes through in about a minute' : 'Goes through within about $minutes minutes';
+  static const goesThroughLate = 'Taking longer than usual: this goes ahead by itself, or is returned with nothing traded';
+  // A trade that waited for its coins past the most it was to wait.
+  static const returnedLate = 'Returned: nothing traded. It took too long to get ready.';
   static const sent = 'Sent';
   static const settled = 'Settled';
-  static const waitingOther = 'Waiting for the other side. Nothing has left your wallet yet.';
+  // Buying with BTC, until what is bought is held for the wallet (its round, then that round's block
+  // certified): the wallet pays its BTC only then, and only while the app runs. Closed before that,
+  // nothing is traded and nothing is paid. [m]: the minutes left of the wait the library states.
+  static String waitingOther(int m) =>
+      'Keep the app open: your BTC is paid once what you buy is held for you, within about $m minute${m == 1 ? '' : 's'}. Nothing has left your wallet yet. If the app closes first, nothing is traded.';
+  // The same, past the wait the library stated by [kSettleLateMs].
+  static const waitingOtherLate =
+      'Keep the app open: this is taking longer than usual. Your BTC is paid once what you buy is held for you, and nothing has left your wallet yet. If the app closes first, nothing is traded.';
+  // Buying with BTC, the BTC being paid: seconds.
+  static const btcPaying = 'Paying your BTC. Keep the app open a moment more.';
+  // Buying with BTC, the BTC paid and its proof handed on, what was bought being collected: it comes
+  // to the wallet on any device, open or not (the operator holds what claims it).
+  static const btcCollecting = 'Paid. What you bought is arriving, and it comes to your wallet even if the app closes.';
+  // A trade whose taking back waits for an answer that has not come: the wallet asks again by itself.
+  static const sentAwaiting = 'Sent, waiting for an answer: nothing more is needed from you';
   // A sale for BTC whose asset is paid: the BTC comes once the other side pays it out.
   static const btcOnItsWay = 'Paid. Your BTC is on its way.';
   // What the trade brings is the wallet's; only its settling with the network is left. One word on
   // every surface, with no time: how long settling takes is the network's, not the trade's.
   static const received = 'Received, settling';
+  // A trade whose coins settle in the operator's next round: the wait the wallet gives a round of
+  // this operator ([settleMinutesOf]), stated when the settle starts.
+  static String receivedWithin(int n) => 'Received, settling (within about $n min)';
   static const receivedSlow = 'Received, and yours to use. Settling with the network is taking longer than usual.';
   static String minutes(String word, int n) => '$word ($n min)';
   static const returned = 'Returned: nothing traded.';
   static String returnedFees(String fees) => 'Returned: nothing traded. Fees of $fees were paid.';
   static const returnedLapsed = 'Returned: nothing traded. The other side\'s offer ran out while the trade waited.';
+  // A trade priced again after its other side's offer was gone, whose price then moved past what was
+  // accepted: nothing traded.
+  static const returnedMoved = 'Returned: nothing traded. The price moved while it waited.';
+  // A trade priced again, whose coins were no longer the wallet's to pay with (spent by another
+  // payment, or another device of the wallet).
+  static const returnedGone = 'Returned: nothing traded. Your wallet no longer holds what it was to pay.';
+  // A pair offered a moment ago that nobody offers now: asked again by itself.
+  // Nobody offers the pair now, and a purchase of the wallet's own paid with BTC is still to pay: the
+  // other side holds what it sells for that purchase until it is paid, so this one waits for it.
+  static const btcAhead = 'You have a purchase paid with BTC under way: this one can be priced once that one is paid. Nothing has moved.';
+  static String offeredAgain(String get, String pay) => 'Getting a price for $get for $pay: it takes a moment. Nothing has moved.';
+  // The trade's record could not be kept on the phone: the trade is not made, nothing signed.
+  static const storageFull = 'The trade was not made: this phone has no room left to keep its record. Nothing was signed.';
   // A trade confirmed and being sent: the screen is free at once, the trade goes on in Open.
   static const sending = 'Sending…';
   // ⇅ between the two sides: the sides change places, each amount with its asset.
@@ -250,16 +401,33 @@ class UserWords {
     btcMoving(1),
     btcMore(2),
     priceMoved,
+    settling,
+    atLeast('1 YT'),
+    goesThrough(1),
+    goesThrough(6),
+    goesThroughLate,
+    returnedLate,
     sent,
     settled,
-    waitingOther,
+    waitingOther(1),
+    waitingOther(6),
+    waitingOtherLate,
+    btcPaying,
+    btcCollecting,
+    sentAwaiting,
     btcOnItsWay,
     received,
+    receivedWithin(6),
     receivedSlow,
     minutes(sent, 3),
     returned,
     returnedFees('1 XT'),
     returnedLapsed,
+    returnedMoved,
+    returnedGone,
+    offeredAgain('YT', 'XT'),
+    btcAhead,
+    storageFull,
     sending,
     flip,
     failed,
@@ -275,34 +443,86 @@ bool heldAlready(Map r) {
   return false;
 }
 
-/// What the list of trades says of one: Sent, then Settled; a trade waiting on the other side or
-/// on its settling says so, with the minutes it has waited once it has waited one. Null for a
-/// trade returned with fees paid (the row names the fees). The web wallet's tradeStateWord().
-/// The same words in the Swap tab's Open trades, in History and on every other surface: none of them
-/// promises a time, the minutes waited being the only time shown.
+/// What the list of trades says of one: Sent, then Settled. A purchase paid with BTC waiting for
+/// what it buys states the wait the leaf library states (`lightning_receive_ready`, kept in `waitBy`;
+/// before its first answer, its figure for the operator's next round, `waitFirstBy`), and past it by
+/// [kSettleLateMs] that it takes longer. A received trade settling in a round states the wait the
+/// wallet gives a round of its operator (`settleMin`, set when the settle starts), and past it by
+/// [kSettleLateMs] that settling takes longer. Otherwise the minutes waited, once it has waited one:
+/// a minutes count is never a promise. Null for a trade returned with fees paid (the row names the
+/// fees). The web wallet's tradeStateWord(); the same words in the Swap tab's Open trades, in History
+/// and on every other surface.
 String? tradeStateWord(Map r, int nowMs) {
   final st = r['state'];
   if (st == 'settled') return UserWords.settled;
   if (st == 'returned' && ((r['feesPaid'] as List?) ?? const []).isNotEmpty) return null;
   if (st == 'returned' && r['whyKind'] == 'lapsed') return UserWords.returnedLapsed;
+  if (st == 'returned' && r['whyKind'] == 'moved') return UserWords.returnedMoved;
+  if (st == 'returned' && r['whyKind'] == 'gone') return UserWords.returnedGone;
+  if (st == 'returned' && r['whyKind'] == 'late') return UserWords.returnedLate;
+  // Confirmed, and what it pays being settled first: it goes ahead by itself once through, within
+  // the wait the library last said (`finalBy`), and past that by [kSettleLateMs], that it takes
+  // longer; before the library has said, no time.
+  if (st == 'settling') {
+    final by = (r['finalBy'] as num?)?.toInt();
+    if (by == null) return UserWords.settling;
+    return nowMs > by + kSettleLateMs ? UserWords.goesThroughLate : UserWords.goesThrough(math.max(1, ((by - nowMs) / 60000).ceil()));
+  }
   if (st == 'returned' || st == 'failed') return UserWords.returned;
   if (st == 'confirming') return UserWords.sending;
-  int since(Object? t) => ((nowMs - ((t as num?)?.toInt() ?? (r['at'] as num?)?.toInt() ?? nowMs)) / 60000).floor();
+  int? ms(Object? v) => (v as num?)?.toInt();
+  int since(Object? t) => ((nowMs - (ms(t) ?? ms(r['at']) ?? nowMs)) / 60000).floor();
   // Buying with BTC: nothing has left the wallet until its asset is held for it.
   if (st == 'waiting') {
-    final m = since(r['waitingSince']);
-    return m >= 1 ? UserWords.minutes(UserWords.waitingOther, m) : UserWords.waitingOther;
+    final wb = r['waitBy'];
+    final by = (wb is Map ? ms(wb['finalBy']) : null) ??
+        ms(r['waitFirstBy']) ??
+        ((ms(r['waitingSince']) ?? ms(r['at']) ?? nowMs) + settleMinutesOf(null) * 60000);
+    if (nowMs > by + kSettleLateMs) return UserWords.waitingOtherLate;
+    return UserWords.waitingOther(math.max(1, ((by - nowMs) / 60000).ceil()));
   }
+  // Priced again after its other side's offer was gone: still Sent, until it goes or comes back.
+  if (st == 'repricing') return UserWords.sent;
   final m = since(r['sentAt']);
+  final held = heldAlready(r);
+  final settling = held && ((r['settleState'] as List?) ?? const []).any((x) => x != null && x != 'released');
+  // Settling in a round: the wait stated, and past it by [kSettleLateMs] that it takes longer. A
+  // minutes count since the trade was sent would read as a promise it is not.
+  final settleMin = ms(r['settleMin']);
+  if (settling && settleMin != null && settleMin > 0) {
+    final lateAt = (ms(r['settleSince']) ?? ms(r['sentAt']) ?? ms(r['at']) ?? nowMs) + settleMin * 60000 + kSettleLateMs;
+    return nowMs > lateAt ? UserWords.receivedSlow : UserWords.receivedWithin(settleMin);
+  }
+  if (held && r['settle'] != null && settleMin == null) return UserWords.received;
   // Received, its settling still waiting with the network after [kSlowSettleMin] minutes: said so,
   // the coins being the wallet's all along.
-  final held = heldAlready(r);
-  final slow = held && m >= kSlowSettleMin && ((r['settleState'] as List?) ?? const []).any((x) => x != null && x != 'released');
-  final word = held
-      ? (slow ? UserWords.receivedSlow : UserWords.received)
-      : (r['source'] == 'btc-gateway' && r['dir'] == 'sell' ? UserWords.btcOnItsWay : UserWords.sent);
+  final String word;
+  if (held) {
+    word = m >= kSlowSettleMin && settling ? UserWords.receivedSlow : UserWords.received;
+  } else if (r['source'] == 'btc-gateway' && r['dir'] == 'sell') {
+    word = UserWords.btcOnItsWay;
+  } else if (r['source'] == 'btc-gateway' && r['dir'] != 'sell') {
+    word = r['preimage'] != null && r['posted'] == true ? UserWords.btcCollecting : UserWords.btcPaying;
+  } else {
+    word = r['awaiting'] == true ? UserWords.sentAwaiting : UserWords.sent;
+  }
   return m >= 1 ? UserWords.minutes(word, m) : word;
 }
+
+/// Whether the open trades [recs] are followed every few seconds at [nowMs], rather than every
+/// [kFollowSlowMs]: a trade sent within [kFollowFastMs]; one that waits (a purchase paid with BTC
+/// waiting for its asset: its BTC is paid the moment the asset is); and one received whose settling
+/// is still under way, until it is called late ([kSlowSettleMin]). The web wallet's followFast.
+bool followFast(List<Map> recs, int nowMs) => recs.any((r) {
+      final age = nowMs - (((r['sentAt'] ?? r['at']) as num?)?.toInt() ?? 0);
+      if (r['state'] == 'waiting' || r['state'] == 'repricing' || age < kFollowFastMs) return true;
+      final settling = heldAlready(r) && ((r['settleState'] as List?) ?? const []).any((x) => x != null && x != 'released');
+      return settling && age < kSlowSettleMin * 60000;
+    });
+
+/// How long a trade is followed every few seconds after it is sent, and how often after that.
+const int kFollowFastMs = 120000;
+const int kFollowSlowMs = 30000;
 
 BigInt _big(Object? v) => BigInt.tryParse('${v ?? 0}') ?? BigInt.zero;
 BigInt _ceilDiv(BigInt a, BigInt b) => (a + b - BigInt.one) ~/ b;
@@ -568,11 +788,20 @@ class Ticket {
     required this.fees,
     required this.source,
     this.upTo,
+    this.about,
+    this.finalBy,
   });
   final String payAsset, receiveAsset, source;
   final BigInt amountIn, amountOut;
   final List<Map<String, dynamic>> fees;
   final BigInt? upTo;
+
+  /// A ticket accepted before what it pays is settled (source 'settling'): what it receives at the
+  /// book's price now ([about]; [amountOut] is the least it goes for), and when the library said
+  /// those coins would be through ([finalBy], ms; null while it has not said).
+  final BigInt? about;
+  final int? finalBy;
+  bool get indicative => about != null;
   Map<String, dynamic> toJson() => {
     'payAsset': payAsset,
     'receiveAsset': receiveAsset,
@@ -581,6 +810,9 @@ class Ticket {
     'fees': fees.map((f) => {'asset': f['asset'], 'atoms': '${f['atoms']}'}).toList(),
     'source': source,
     if (upTo != null) 'upTo': '$upTo',
+    if (about != null) 'about': '$about',
+    if (about != null) 'indicative': true,
+    if (finalBy != null) 'finalBy': finalBy,
   };
   static Ticket fromJson(Map j) => Ticket(
     payAsset: '${j['payAsset']}',
@@ -590,16 +822,21 @@ class Ticket {
     fees: [for (final f in (j['fees'] as List?) ?? const []) Map<String, dynamic>.from(f as Map)],
     source: '${j['source']}',
     upTo: j['upTo'] == null ? null : _big(j['upTo']),
+    about: j['about'] == null ? null : _big(j['about']),
+    finalBy: (j['finalBy'] as num?)?.toInt(),
   );
 }
 
 class QuoteResult {
-  QuoteResult.ok(this.ticket, this.choice, {this.moving = false}) : why = null, soon = false, ready = null;
-  QuoteResult.no(this.why, {this.soon = false, this.ready, this.moving = false}) : ticket = null, choice = null;
+  QuoteResult.ok(this.ticket, this.choice, {this.moving = false}) : why = null, soon = false, ready = null, again = false, coins = const [], wait = null;
+  QuoteResult.no(this.why, {this.soon = false, this.ready, this.moving = false, this.again = false, this.coins = const [], this.wait})
+      : ticket = null,
+        choice = null;
   final Ticket? ticket;
   final Candidate? choice;
   // not-listed | not-offered | no-funds | not-ready | redoing | freeing | readying | part-ready |
-  // btc-moving | too-small | no-firm-offer
+  // btc-moving | too-small | no-firm-offer | wallet-busy | opening | btc-ahead | settle-first (only
+  // inside the engine: [UserTradeEngine.quote] answers it with a ticket that settles first)
   final String? why;
   /// part-ready: what can be paid now.
   final BigInt? ready;
@@ -607,6 +844,13 @@ class QuoteResult {
   final bool moving;
   /// What is not ready yet is ready in a minute or two (the operator's anchor depth is 0).
   final bool soon;
+  /// not-offered: the pair was offered a moment ago ([kOfferedAgainMs]), so it is asked again.
+  final bool again;
+  /// settle-first: the coins the library named to put through the next round (none: every coin of
+  /// the asset that waits for one), and the wait its refusal gave (`final_in_seconds`,
+  /// `usual_in_seconds`, `waiting_for`), or null.
+  final List<String> coins;
+  final Map<String, dynamic>? wait;
   bool get ok => ticket != null;
 }
 
@@ -614,11 +858,13 @@ class QuoteResult {
 /// the book fills less than was typed (the most one source fills now). Or [why] it has none:
 /// not-listed | not-offered | too-small.
 class Estimate {
-  const Estimate({required BigInt this.pay, required BigInt this.receive, this.short}) : why = null;
-  const Estimate.no(String this.why) : pay = null, receive = null, short = null;
+  const Estimate({required BigInt this.pay, required BigInt this.receive, this.short}) : why = null, again = false;
+  const Estimate.no(String this.why, {this.again = false}) : pay = null, receive = null, short = null;
   final BigInt? pay, receive;
   final ({BigInt receive, BigInt pay})? short;
   final String? why;
+  /// not-offered: the pair was offered a moment ago ([kOfferedAgainMs]), so it is asked again.
+  final bool again;
   bool get ok => why == null;
 }
 
@@ -651,6 +897,8 @@ class UserTradeDeps {
     this.btcMoveBlocks,
     this.btcOnlyFirmMs,
     this.quoteReadMs,
+    this.keepEnded,
+    this.keepBytes,
     int? quoteFirmMs,
     int Function()? now,
     void Function(String)? log,
@@ -715,6 +963,9 @@ class UserTradeDeps {
   /// How long past [quoteFirmMs] the wallet's own check of firm terms that came in time may run
   /// while none is in hand ([kQuoteReadMs]).
   final int? quoteReadMs;
+
+  /// The bounds of the trade records kept ([kKeepEnded], [kKeepBytes]); tests set them smaller.
+  final int? keepEnded, keepBytes;
   final Future<String?> Function() read;
   final Future<void> Function(String value) write;
   final int Function() now;
@@ -829,7 +1080,21 @@ class UserTradeEngine {
     }
   }
 
-  Future<Map<String, dynamic>> _put(Map<String, dynamic> rec) async {
+  /// Writes one record, one write at a time (each reads the list the last one left), bounded
+  /// ([boundedRecords]). A store that refuses the write is tried again with fewer ended trades kept,
+  /// then with none; one that refuses even that refuses the trade ([StorageFullError]): [confirm]
+  /// writes the record before anything is signed, so a trade whose record cannot be kept is never
+  /// signed. A record's first write in an ended state stamps when it ended (`endedAt`).
+  Future<Map<String, dynamic>> _put(Map<String, dynamic> rec) {
+    final f = _writes.then((_) => _putNow(rec));
+    _writes = f.then((_) {}, onError: (_) {});
+    return f;
+  }
+
+  Future<void> _writes = Future.value();
+
+  Future<Map<String, dynamic>> _putNow(Map<String, dynamic> rec) async {
+    if (kEndedStates.contains(rec['state']) && rec['endedAt'] == null) rec['endedAt'] = d.now();
     final l = await records();
     final i = l.indexWhere((r) => r['id'] == rec['id']);
     if (i >= 0) {
@@ -837,7 +1102,21 @@ class UserTradeEngine {
     } else {
       l.add(rec);
     }
-    await d.write(jsonEncode(l));
+    final keep = d.keepEnded ?? kKeepEnded, bytes = d.keepBytes ?? kKeepBytes;
+    Object? refused;
+    for (final (k, b) in [(keep, bytes), (keep ~/ 4, bytes ~/ 4), (0, 0)]) {
+      try {
+        await d.write(jsonEncode(boundedRecords(l, k, b)));
+        refused = null;
+        break;
+      } catch (e) {
+        refused = e;
+      }
+    }
+    if (refused != null) {
+      d.log('[user trade] the trade records could not be written: $refused');
+      throw StorageFullError();
+    }
     _changes.add(null);
     return rec;
   }
@@ -892,6 +1171,13 @@ class UserTradeEngine {
       final got = await Future.wait(d.makers().map((m) async {
         try {
           final q = await d.fetchJson('$m/v1/quotes');
+          // Every pair the maker offers now, not only the one asked: a pair asked next that it offered
+          // a moment ago and offers not now is asked again ([kOfferedAgainMs]), not refused.
+          for (final x in (q['quotes'] as List?) ?? const []) {
+            if (x is Map && x['want_asset'] != null && x['give_asset'] != null && _big(x['max_give']) > BigInt.zero) {
+              _offeredAt['${x['want_asset']}>${x['give_asset']}'] = d.now();
+            }
+          }
           return makerEntries(m, (q['quotes'] as List?) ?? const [], pay: pay, receive: receive).where((e) => sources.contains(e.source)).toList();
         } catch (e) {
           d.log('[user trade] maker $m did not answer: $e');
@@ -917,7 +1203,17 @@ class UserTradeEngine {
         d.log('[user trade] the book did not answer: $e');
       }
     }
+    if (out.isNotEmpty) _offeredAt['$pay>$receive'] = d.now();
     return out;
+  }
+
+  /// When each directed pair (pay>receive) last had an entry: see [kOfferedAgainMs].
+  final _offeredAt = <String, int>{};
+
+  /// Whether the pair was offered a moment ago, though nobody offers it now.
+  bool offeredAgain(String pay, String receive) {
+    final at = _offeredAt['$pay>$receive'];
+    return at != null && d.now() - at < kOfferedAgainMs;
   }
 
   Map? _info;
@@ -926,16 +1222,9 @@ class UserTradeEngine {
   /// What the operator's round can pay of `asset` now (its `info`'s `fundable`, read at most every
   /// [kInfoMs]), or null when the operator does not say.
   Future<BigInt?> operatorRoom(String asset) async {
-    if (_info == null || d.now() - _infoAt > kInfoMs) {
-      try {
-        _info = (await _run('info')) as Map;
-        _infoAt = d.now();
-      } catch (e) {
-        d.log('[user trade] info: $e');
-        return null;
-      }
-    }
-    final si = _info?['server_info'];
+    final info = await _operatorInfo();
+    if (info == null) return null;
+    final si = info['server_info'];
     final assets = si is Map ? si['assets'] : null;
     if (assets is! List) return null;
     for (final a in assets) {
@@ -1137,27 +1426,40 @@ class UserTradeEngine {
       final guess = _marginsSeen[pay] ?? BigInt.zero;
       final fitted = guess > BigInt.zero && limit > guess ? sizeEntry(e, limit - guess) : null;
       var give = fitted?.receive ?? size.receive;
+      // The offer a maker made in place of one whose completion the operator refused: taken as the
+      // maker's firm offer here, at its own size, rather than asking again.
+      var made = _madeAgain[e.maker];
+      if (made != null && made['give_asset'] == receive && made['want_asset'] == pay) {
+        _madeAgain.remove(e.maker);
+        give = _big(made['give']);
+      } else {
+        made = null;
+      }
       for (var i = 0; i < 4; i++) {
         Map<String, dynamic> o;
-        try {
-          // A maker that has not answered by the quote's deadline is left out of it; should its offer
-          // come later, it is let go of at once. An offer asked again for less, after the wallet's
-          // check, is given the makers' time again, never past [hard].
-          final f = d.fetchJson('${e.maker}/v1/firm', post: {'give_asset': receive, 'want_asset': pay, 'give': '$give'});
-          if (until == null) {
-            o = await f;
-          } else {
-            final nowMs = DateTime.now().millisecondsSinceEpoch;
-            final askBy = i == 0 ? until : math.min(nowMs + d.quoteFirmMs, hard ?? until);
-            final left = askBy - nowMs;
-            o = await f.timeout(Duration(milliseconds: left < 1000 ? 1000 : left), onTimeout: () {
-              f.then((late) => release(e.maker, '${late['swap']}'), onError: (_) {});
-              throw TimeoutException('the maker did not answer in time');
-            });
+        if (i == 0 && made != null) {
+          o = made;
+        } else {
+          try {
+            // A maker that has not answered by the quote's deadline is left out of it; should its offer
+            // come later, it is let go of at once. An offer asked again for less, after the wallet's
+            // check, is given the makers' time again, never past [hard].
+            final f = d.fetchJson('${e.maker}/v1/firm', post: {'give_asset': receive, 'want_asset': pay, 'give': '$give'});
+            if (until == null) {
+              o = await f;
+            } else {
+              final nowMs = DateTime.now().millisecondsSinceEpoch;
+              final askBy = i == 0 ? until : math.min(nowMs + d.quoteFirmMs, hard ?? until);
+              final left = askBy - nowMs;
+              o = await f.timeout(Duration(milliseconds: left < 1000 ? 1000 : left), onTimeout: () {
+                f.then((late) => release(e.maker, '${late['swap']}'), onError: (_) {});
+                throw TimeoutException('the maker did not answer in time');
+              });
+            }
+          } catch (err) {
+            d.log('[user trade] maker firm: $err');
+            return null;
           }
-        } catch (err) {
-          d.log('[user trade] maker firm: $err');
-          return null;
         }
         Map t;
         try {
@@ -1268,7 +1570,7 @@ class UserTradeEngine {
       _estimates[key] = c;
     }
     final es = c.es.where((e) => (e.source != 'btc-gateway' || _btc != null) && e.maxReceive > BigInt.zero).toList();
-    if (es.isEmpty) return const Estimate.no('not-offered');
+    if (es.isEmpty) return Estimate.no('not-offered', again: offeredAgain(pay, receive));
     ({BigInt receive, BigInt pay})? most;
     for (final e in es) {
       if (most == null || e.maxReceive > most.receive) most = (receive: e.maxReceive, pay: _ceilDiv(e.maxReceive * e.rateNum, e.rateDen));
@@ -1310,8 +1612,25 @@ class UserTradeEngine {
   /// Whether a source's check in this quote found the wallet's coins of the asset paid not live now
   /// (given up in a refresh, received and not yet settled): the trade waits on them, and says so.
   bool _liveShort = false;
+
+  /// What a source's check in this quote found waiting only for a round (the library's
+  /// `settle_first`: coins arriving, at the operator's depth limit, or of a format the other side
+  /// does not read), with the coins it named and the longest wait it gave: the trade settles them
+  /// first, and goes.
+  ({List<String> coins, Map<String, dynamic>? wait})? _settleSeen;
   void _noteLiveShort(Object err) {
     if ('$err'.contains(' in live coins')) _liveShort = true;
+    if (refusalKind(err) == 'settle_first') {
+      final f = refusalFields(err);
+      final coins = {...?_settleSeen?.coins, for (final c in (f['coins'] as List?) ?? const []) '$c'}.toList();
+      final prev = _settleSeen?.wait;
+      final fin = f['final_in_seconds'];
+      final longer = fin is num && (prev == null || fin > ((prev['final_in_seconds'] as num?) ?? -1));
+      _settleSeen = (
+        coins: coins,
+        wait: longer ? {'final_in_seconds': fin, 'usual_in_seconds': f['usual_in_seconds'], 'waiting_for': f['waiting_for']} : prev,
+      );
+    }
   }
 
   /// When the wallet last asked a refresh of an asset's coins for a resting order, so a quote asked
@@ -1422,8 +1741,144 @@ class UserTradeEngine {
   /// the asking (the BTC desk alone, [kBtcOnlyFirmMs]); a late answer is let go of. The web wallet's
   /// `quote`.
   Future<QuoteResult> quote({required String pay, required String receive, required BigInt amount}) async {
+    var q = await _quote(pay: pay, receive: receive, amount: amount);
+    if (!q.ok && q.why == 'settle-first') q = await _waitAndGo(q, pay: pay, receive: receive, amount: amount);
+    // A price paid with BTC that nobody offers now, while such a purchase is under way: said as that,
+    // never "it takes a moment" for as long as it lasts.
+    if (!q.ok && pay == kUserBtc && const ['not-offered', 'no-firm-offer'].contains(q.why) && await _btcBuyOpen()) {
+      return QuoteResult.no('btc-ahead');
+    }
+    return q;
+  }
+
+  /// A quote whose coins wait only for a round (`settle-first`) is answered with a ticket the person
+  /// can accept now: the book's price for the amount ([Ticket.about]), the least it goes for
+  /// ([kSettleSlackBp] under it, after the fees last seen and the refresh's fee), and the wait the
+  /// library's refusal gave. Asking moves and commits nothing: no coin is given to a round until the
+  /// person accepts ([confirm] writes a trade that waits for the coins, has them settled, is priced
+  /// again once they are through, and goes by itself at that price or better, or comes back). The
+  /// refresh's fee, where the operator charges one, is the library's read-only `quote` of those
+  /// coins. The web wallet's waitAndGo.
+  Future<QuoteResult> _waitAndGo(QuoteResult q, {required String pay, required String receive, required BigInt amount}) async {
+    var refresh = BigInt.zero;
+    try {
+      final coins = ((await _run('coins')) as List? ?? const []).whereType<Map>().toList();
+      final live = {for (final c in coins) if (c['state'] == 'live') '${c['leaf_id']}'};
+      final named = q.coins.isNotEmpty ? q.coins : [for (final c in coins) if (c['asset'] == pay) '${c['leaf_id']}'];
+      final leaves = named.where(live.contains).toList();
+      if (leaves.isNotEmpty) {
+        final r = (await _run('quote', {'leaves': leaves, 'max_fee_ppm': kMaxFeePpm})) as Map?;
+        for (final c in ((r?['coins'] as List?) ?? const []).whereType<Map>()) {
+          refresh += _big(c['fee']);
+        }
+      }
+    } catch (e) {
+      d.log('[user trade] the refresh\'s fee: $e');
+    }
+    final fees = (_marginsSeen[pay] ?? BigInt.zero) + refresh;
+    final e = await estimate(pay: pay, receive: receive, payAtoms: fees > BigInt.zero && fees < amount ? amount - fees : amount);
+    // Nobody offers the pair now: said so, as for any trade.
+    if (!e.ok && const ['not-listed', 'too-small', 'not-offered'].contains(e.why)) return QuoteResult.no(e.why, again: e.again);
+    // No price to show before the round: said in the words of coins being made ready, and asked
+    // again by the composer; nothing moved.
+    if (!e.ok) return QuoteResult.no('readying', soon: soon);
+    final about = e.receive!;
+    final least = about - _ceilDiv(about * kSettleSlackBp, BigInt.from(10000));
+    if (least <= BigInt.zero) return QuoteResult.no('too-small');
+    final fb = nextFinalBy(null, q.wait, d.now());
+    final feeList = [if (refresh > BigInt.zero) <String, dynamic>{'asset': pay, 'atoms': refresh}];
+    final ticket = Ticket(
+      payAsset: pay,
+      receiveAsset: receive,
+      amountIn: amount,
+      amountOut: least,
+      fees: feeList,
+      source: 'settling',
+      about: about,
+      finalBy: fb?['finalBy'] as int?,
+    );
+    final entry = BookEntry(
+        source: 'settling', id: 'settling', rateNum: BigInt.one, rateDen: BigInt.one, maxReceive: least, minReceive: BigInt.one, lot: BigInt.zero, raw: const {});
+    return QuoteResult.ok(
+      ticket,
+      Candidate(source: 'settling', id: 'settling', entry: entry, receive: least, give: amount, fees: feeList, settle: {
+        'coins': q.coins,
+        'finalBy': fb?['finalBy'],
+        'finalStep': fb?['step'],
+        'settleMost': q.wait != null ? settleBound(q.wait!['final_in_seconds']) : null,
+      }),
+    );
+  }
+
+  /// Puts a settling trade's coins through the next round: the ones the library named, else every
+  /// coin of the asset paid that waits for a round (the library gives up nothing twice). The one
+  /// place the engine words the library's `settle_first`.
+  Future<dynamic> _settleAsk(Map<String, dynamic> rec) {
+    final coins = [for (final c in (rec['settleCoins'] as List?) ?? const []) '$c'];
+    return _run('settle_first', coins.isNotEmpty ? {'coins': coins} : {'asset': (rec['ticket'] as Map)['payAsset']});
+  }
+
+  /// A confirmed trade whose coins are settled first: once through, priced again for the amount
+  /// accepted and confirmed into the same record only at the price accepted or better; returned with
+  /// words when it moved, or when it waited past its bound (`settleMost`, else [kSettleMostMs]). The
+  /// web wallet's advanceSettling.
+  Future<Map<String, dynamic>> _advanceSettling(Map<String, dynamic> rec) async {
+    final since = ((rec['settleSince'] ?? rec['at']) as num?)?.toInt() ?? d.now();
+    Future<Map<String, dynamic>> late() {
+      rec['state'] = 'returned';
+      rec['whyKind'] = 'late';
+      rec['returnedAt'] = d.now();
+      rec['error'] = 'settling first took too long';
+      return _put(rec);
+    }
+
+    Map? v;
+    try {
+      v = (await _settleAsk(rec)) as Map?;
+    } catch (e) {
+      d.log('[user trade] settle_first: $e');
+      if (RegExp('no command|unknown command', caseSensitive: false).hasMatch('$e')) {
+        rec['state'] = 'failed';
+        rec['error'] = '$e';
+        return _put(rec);
+      }
+    }
+    // The record as stored now: never written back over a state another follow moved it to.
+    final stored = (await records()).where((r) => r['id'] == rec['id']).firstOrNull;
+    if (stored == null || stored['state'] != 'settling') return stored ?? rec;
+    // How long it may wait: what the library first said it takes, twice, with a margin, kept on the
+    // record so a restart holds it to the same bound; and when it said it would be through.
+    if (v != null && v['ready'] != true && v['final_in_seconds'] != null) {
+      rec['settleMost'] ??= settleBound(v['final_in_seconds']);
+      final prev = rec['finalBy'] != null ? {'finalBy': rec['finalBy'], 'step': rec['finalStep']} : null;
+      final n = nextFinalBy(prev, v, d.now());
+      rec['finalBy'] = n?['finalBy'];
+      rec['finalStep'] = n?['step'];
+      await _put(rec);
+    }
+    final upTo = (rec['settleMost'] as num?)?.toInt() ?? kSettleMostMs;
+    final after = (rec['repriceAfter'] as num?)?.toInt();
+    if (v == null || v['ready'] != true || (after != null && d.now() < after)) {
+      if (d.now() - since > upTo) return late();
+      unawaited(_syncShared());
+      return rec;
+    }
+    await _syncShared();
+    return _repriceWithin(rec, upTo, since);
+  }
+
+  /// Whether a purchase paid with BTC is under way and still to pay.
+  Future<bool> _btcBuyOpen() async => (await records()).any((r) =>
+      r['source'] == 'btc-gateway' &&
+      r['ticket'] is Map &&
+      (r['ticket'] as Map)['payAsset'] == kUserBtc &&
+      !kEndedStates.contains(r['state']) &&
+      r['preimage'] == null);
+
+  Future<QuoteResult> _quote({required String pay, required String receive, required BigInt amount}) async {
     _tooOldFrom = null;
     _liveShort = false;
+    _settleSeen = null;
     if (amount <= BigInt.zero) return QuoteResult.no('too-small');
     final ad = await d.admitted();
     final sources = admittedSources(ad.pairs, ad.genesis, pay, receive);
@@ -1544,8 +1999,16 @@ class UserTradeEngine {
     // Offered, but nobody gave firm terms: that is not the amount's fault.
     // Nobody gave firm terms because what the wallet holds of the asset is not live now: it is being
     // made ready, never "nobody could confirm".
-    if (best == null && _liveShort && pay != kUserBtc) return QuoteResult.no('freeing', soon: soonNow);
-    if (best == null) return QuoteResult.no(es.isEmpty ? 'not-offered' : (ind.isNotEmpty ? 'no-firm-offer' : 'too-small'));
+    // A source's check found what the trade needs waiting only for a round, or the wallet's coins of
+    // the asset not live now (just received, being settled): settled first, then priced again and
+    // traded, never "nobody could confirm".
+    final settleSeen = _settleSeen;
+    if (best == null && (settleSeen != null || _liveShort) && pay != kUserBtc) {
+      return QuoteResult.no('settle-first', coins: settleSeen?.coins ?? const [], wait: settleSeen?.wait);
+    }
+    if (best == null) {
+      return QuoteResult.no(es.isEmpty ? 'not-offered' : (ind.isNotEmpty ? 'no-firm-offer' : 'too-small'), again: es.isEmpty && offeredAgain(pay, receive));
+    }
     return QuoteResult.ok(
       Ticket(
         payAsset: pay,
@@ -1580,12 +2043,62 @@ class UserTradeEngine {
   /// Confirms a ticket's choice. The record is written at once, so the trade shows in Open as
   /// "Sending…" whatever the screen does next; [started] is told its id before the step is taken.
   /// Answers the record once the one step is taken; [advance] follows it from there.
-  Future<Map<String, dynamic>> confirm(Candidate c, Ticket t, {void Function(String id)? started}) async {
+  ///
+  /// [prior]: a trade priced again ('repricing') goes on in its own record, so it is never made twice;
+  /// what it paid already ([paidAlready]) is counted in what it pays and in its fees.
+  Future<Map<String, dynamic>> confirm(Candidate c, Ticket t, {void Function(String id)? started, Map<String, dynamic>? prior}) async {
     // What the wallet can pay changes with this trade: the next quote reads it afresh.
     _holdings = null;
-    final id = '${d.now()}-${d.now().hashCode.toRadixString(16)}${(await records()).length}';
+    final id = prior != null ? '${prior['id']}' : '${d.now()}-${d.now().hashCode.toRadixString(16)}${(await records()).length}';
+    final tj = t.toJson();
+    // A ticket accepted while what it pays waits for a round: the trade is written waiting for those
+    // coins, bound to the least the ticket names, and goes by itself once they are through
+    // ([_advanceSettling]). Nothing is signed to anyone until then.
+    if (c.source == 'settling') {
+      final st = c.settle ?? const {};
+      final rec = await _put({
+        'id': id,
+        'at': d.now(),
+        'source': 'settling',
+        'state': 'settling',
+        'ticket': tj,
+        'accepted': tj,
+        'settledFirst': true,
+        'settleCoins': st['coins'] ?? const [],
+        'settleSince': d.now(),
+        'finalBy': st['finalBy'],
+        'finalStep': st['finalStep'],
+        if (st['settleMost'] != null) 'settleMost': st['settleMost'],
+      });
+      started?.call(id);
+      unawaited(_settleAsk(rec).then((_) {}, onError: (Object e) => d.log('[user trade] settle_first: $e')));
+      return rec;
+    }
+    final cf = prior != null ? paidAlready(prior) : BigInt.zero;
+    if (cf > BigInt.zero) {
+      tj['amountIn'] = '${t.amountIn + cf}';
+      tj['fees'] = [...tj['fees'] as List, {'asset': t.payAsset, 'atoms': '$cf'}];
+    }
     _confirmingNow.add(id);
-    final rec = await _put({'id': id, 'at': d.now(), 'source': c.source, 'state': 'confirming', 'ticket': t.toJson()});
+    final Map<String, dynamic> rec;
+    try {
+      rec = await _put({
+        'id': id,
+        'at': prior?['at'] ?? d.now(),
+        'source': c.source,
+        'state': 'confirming',
+        'ticket': tj,
+        if (prior != null) 'accepted': prior['accepted'] ?? prior['ticket'],
+        if (prior != null && (prior['state'] == 'settling' || prior['settledFirst'] == true)) 'settledFirst': true,
+        if (prior?['settleSince'] != null) 'settleSince': prior!['settleSince'],
+        if (prior?['settleMost'] != null) 'settleMost': prior!['settleMost'],
+        if (prior?['gave'] != null) 'gave': prior!['gave'],
+        if (prior?['cancelFees'] != null) 'cancelFees': prior!['cancelFees'],
+      });
+    } catch (_) {
+      _confirmingNow.remove(id);
+      rethrow;
+    }
     started?.call(id);
     try {
       return await _confirm(c, rec);
@@ -1643,11 +2156,7 @@ class UserTradeEngine {
         rec['state'] = 'sent';
         rec['sentAt'] = d.now();
         await _put(rec);
-        try {
-          await d.fetchJson('${rec['maker']}/v1/accept', post: {'swap': rec['swap'], 'accept': rec['accept']});
-        } catch (e) {
-          d.log('[user trade] the maker did not take the acceptance yet: $e');
-        }
+        await _handAccept(rec);
         return _put(rec);
       }
       if (c.source == 'leaf-resting') {
@@ -1691,6 +2200,68 @@ class UserTradeEngine {
       throw StateError('no such source');
     } catch (e) {
       if (e is BtcLapsed) throw LapsedError();
+      // What it pays waits only for a round (the library's `settle_first`, or its coins of the asset
+      // not live yet: just received, still arriving): nothing moved. The trade is kept, with the
+      // price the person accepted as its bound, while those coins go through the next round; then it
+      // is priced again and goes ahead by itself ([_advanceSettling]), or comes back with words. The
+      // same when the operator refused the step for coins too many payments from a round
+      // (`depth_limit`): a round cures it. The offer is let go of now. Never a failure.
+      final kind = refusalKind(e), code = refusalCode(e);
+      final payAsset = '${(rec['ticket'] as Map)['payAsset']}';
+      final deep = code == 'depth_limit' || RegExp(r'\(\d{3} depth_limit\)').hasMatch('$e');
+      // A round the payment waited for inside the wallet's library that did not end in time (its own
+      // round, or the one freeing planned coins) is the same wait: the trade keeps waiting for it.
+      final notLive = payAsset != kUserBtc &&
+          RegExp(r" in live coins|own round did not end in time|next round did not free the coins").hasMatch('$e');
+      if (rec['state'] == 'confirming' && (kind == 'settle_first' || code == 'settle_gave_up' || deep || notLive)) {
+        drop(c);
+        final f = kind == 'settle_first' ? refusalFields(e) : const <String, dynamic>{};
+        rec['state'] = 'settling';
+        rec['settleCoins'] = [for (final x in (f['coins'] as List?) ?? const []) '$x'];
+        rec['settleSince'] ??= d.now();
+        rec['accepted'] ??= rec['ticket'];
+        rec['error'] = null;
+        final fb = nextFinalBy(null, f, d.now());
+        if (fb != null) {
+          rec['finalBy'] = fb['finalBy'];
+          rec['finalStep'] = fb['step'];
+        }
+        if (f['final_in_seconds'] != null) rec['settleMost'] ??= settleBound(f['final_in_seconds']);
+        d.log('[user trade] what it pays settles first; the trade goes once it is through: ${rec['id']}');
+        final put = await _put(rec);
+        unawaited(_settleAsk(rec).then((_) {}, onError: (Object x) => d.log('[user trade] settle_first: $x')));
+        return put;
+      }
+      // A step refused, before anything was signed to the other side, because a coin of the wallet's
+      // it paid from is spent elsewhere (another device of the wallet gave it to a round): the library
+      // has caught up and holds what replaced it, so the trade is priced again into the same record
+      // under what was accepted, as a gone offer is ([_advanceGone]).
+      if (rec['state'] == 'confirming' &&
+          isRefusal(e) &&
+          (spentElsewhere(e, rec['before'] as List?) || orderTaken(e)) &&
+          const ['leaf-resting', 'covenant-round', 'leaf-maker'].contains(c.source)) {
+        drop(c);
+        rec['gave'] = [
+          ...((rec['gave'] as List?) ?? const []),
+          {if (rec['order'] != null) 'order': rec['order'] else 'swap': rec['swap'], 'why': _short('$e'), 'whose': 'taker'},
+        ];
+        d.log('[user trade] a coin it paid from was spent elsewhere; pricing again: ${rec['id']}');
+        if ((rec['gave'] as List).length >= kGoneMost) {
+          rec['state'] = 'returned';
+          rec['error'] = 'the offers were gone ${(rec['gave'] as List).length} times';
+          if (paidAlready(rec) > BigInt.zero) {
+            rec['feesPaid'] = [
+              {'asset': (rec['ticket'] as Map)['payAsset'], 'atoms': '${paidAlready(rec)}'},
+            ];
+          }
+          return _put(rec);
+        }
+        rec['state'] = 'repricing';
+        rec['repriceSince'] = d.now();
+        rec['accepted'] ??= rec['ticket'];
+        rec['error'] = null;
+        return _put(rec);
+      }
       // A BTC trade's step that did not answer may still have been made (the library completes it
       // at its next sync): it is looked for, and called failed only if it never shows.
       if (rec['state'] == 'confirming' && c.source == 'btc-gateway' && e is! BtcLapsed && !RegExp(r'^(Exception: )?refused\b', caseSensitive: false).hasMatch('$e')) {
@@ -1723,18 +2294,29 @@ class UserTradeEngine {
 
   /// Moves one trade on. A trade already being moved on (the Swap tab and a connected site both
   /// follow trades) is not moved twice at once: the second call waits for the first.
+  /// It moves on from its record as stored when it starts, never from a copy read before another
+  /// follow moved it on, so a copy that is behind is never written back over it.
   Future<Map<String, dynamic>> advance(Map<String, dynamic> rec) {
     final id = '${rec['id']}';
     // The callback returns nothing: returning the removed future would wait on itself.
-    return _advancing[id] ??= _advance(rec).whenComplete(() {
+    return _advancing[id] ??= () async {
+      final cur = (await records()).where((r) => '${r['id']}' == id).firstOrNull ?? rec;
+      return _advance(cur);
+    }().whenComplete(() {
       _advancing.remove(id);
     });
   }
 
   Future<Map<String, dynamic>> _advance(Map<String, dynamic> rec) async {
-    if (['settled', 'returned', 'failed'].contains(rec['state'])) return rec;
+    if (kEndedStates.contains(rec['state'])) return rec;
     // Its step is being taken here now: nothing to look for yet.
     if (_confirmingNow.contains('${rec['id']}')) return rec;
+    // Priced again after its other side's offer was gone: it goes ahead in the same record only at
+    // the price accepted or better.
+    if (rec['state'] == 'settling') return _advanceSettling(rec);
+    if (rec['state'] == 'repricing') {
+      return _repriceWithin(rec, kRepriceMostMs, ((rec['repriceSince'] ?? rec['at']) as num?)?.toInt() ?? d.now());
+    }
     if (rec['state'] == 'confirming' && rec['source'] == 'btc-gateway') {
       if (rec['hash'] == null) {
         rec['state'] = 'failed';
@@ -1852,13 +2434,39 @@ class UserTradeEngine {
       return _put(rec);
     }
     if (s?['state'] == 'accepted') {
-      try {
-        await d.fetchJson('${rec['maker']}/v1/accept', post: {'swap': rec['swap'], 'accept': rec['accept']});
-      } catch (_) {}
+      // The maker has not completed it: the acceptance is handed over again (it may have missed it),
+      // and after the wait the coins are taken back. An answer that the offer is gone (the operator
+      // refused the maker's completion) cannot change: the trade is priced again at once.
+      if (rec['gone'] != null) return _advanceGone(rec);
+      if (rec['makerDone'] != true) {
+        await _handAccept(rec);
+        if (rec['gone'] != null) return _advanceGone(rec);
+      }
+      // A maker that says the swap is done completed it: what it pays the wallet is read from the
+      // mailbox now, and the coins signed into it are not taken back while it is waited on
+      // ([kMakerCompleteMs] more); a maker that says done and never completes holds no price of the
+      // person's for good.
+      final doneAt = (rec['makerDoneAt'] as num?)?.toInt();
+      if (rec['makerDone'] == true && doneAt != null && d.now() - doneAt <= kMakerCompleteMs) {
+        try {
+          await _run('mailbox');
+        } catch (e) {
+          d.log('[user trade] mailbox: $e');
+        }
+        final s2 = ((await _run('swaps')) as List? ?? const []).cast<Map>().where((x) => x['swap'] == rec['swap']).firstOrNull;
+        rec['swapState'] = s2?['state'];
+        if (s2?['state'] != 'done') return _put(rec);
+        if (await _settleStep(rec)) {
+          rec['state'] = 'settled';
+          rec['settledAt'] = d.now();
+        }
+        return _put(rec);
+      }
       if (d.now() - ((rec['sentAt'] as num?)?.toInt() ?? 0) > kMakerCompleteMs) {
         try {
           final held = ((await _run('coins')) as List? ?? const []).cast<Map>().where((c) => c['state'] == 'offered').toList();
           final c = (await _run('swap_cancel', {'swap': rec['swap']})) as Map;
+          rec['awaiting'] = c['cancelled'] != true && c['done'] != true && c['unknown'] == true;
           if (c['cancelled'] == true) {
             rec['state'] = 'returned';
             rec['returnedAt'] = d.now();
@@ -1892,6 +2500,209 @@ class UserTradeEngine {
       rec['settledAt'] = d.now();
     }
     return _put(rec);
+  }
+
+  static String _short(String m) => m.length > 300 ? m.substring(0, 300) : m;
+
+  /// Hands a maker the wallet's acceptance of its offer. A maker that answers done completed it
+  /// (`makerDone`); one whose completion the operator refused answers that the offer is gone
+  /// (`gone`, with the offer it made in its place, if any), and the trade is priced again.
+  Future<void> _handAccept(Map<String, dynamic> rec) async {
+    try {
+      final a = await d.fetchJson('${rec['maker']}/v1/accept', post: {'swap': rec['swap'], 'accept': rec['accept']});
+      if (a['state'] == 'done') {
+        rec['makerDone'] = true;
+        rec['makerDoneAt'] ??= d.now();
+      }
+    } catch (e) {
+      d.log('[user trade] the maker did not take the acceptance yet: $e');
+      if (e is MakerError && e.body['gone'] != null) rec['gone'] = Map<String, dynamic>.from(e.body);
+    }
+  }
+
+  /// The offer a maker made in place of one whose completion the operator refused: taken as that
+  /// maker's firm offer at the next price of the pair, rather than asking again.
+  final _madeAgain = <String, Map<String, dynamic>>{};
+
+  /// A trade whose maker answered that its offer is gone: the operator refused the completion, so the
+  /// acceptance cannot complete there. Its coins are taken back at once (the library's cancel: a coin
+  /// of the wallet's given up elsewhere, by a second device, is found then, and the acceptance
+  /// cancelled with nothing respent), then the trade is priced again for what was accepted and goes
+  /// ahead in the same record only at that price or better ([_repriceWithin]); the offer the maker
+  /// made in its place is taken first when it is there. Offers gone [kGoneMost] times over: the trade
+  /// is returned. A cancel that cannot be made yet is asked again at the next advance; one that finds
+  /// the swap done goes on as done. The web wallet's advanceGone.
+  Future<Map<String, dynamic>> _advanceGone(Map<String, dynamic> rec) async {
+    final gone = Map<String, dynamic>.from(rec['gone'] as Map);
+    final pay = '${(rec['ticket'] as Map)['payAsset']}';
+    final held = ((await _run('coins')) as List? ?? const []).cast<Map>().where((c) => c['state'] == 'offered' || c['state'] == 'sending').toList();
+    Map c;
+    try {
+      c = (await _run('swap_cancel', {'swap': rec['swap']})) as Map;
+    } catch (e) {
+      d.log('[user trade] swap_cancel: $e');
+      return _put(rec);
+    }
+    if (c['done'] == true) {
+      rec['gone'] = null;
+      rec['awaiting'] = false;
+      return _put(rec);
+    }
+    if (c['cancelled'] != true) {
+      // Not known yet whether the coins came back: asked again at the next advance.
+      rec['awaiting'] = c['unknown'] == true;
+      d.log('[user trade] the acceptance stands for now: ${c['note'] ?? c['error']}');
+      return _put(rec);
+    }
+    rec['awaiting'] = false;
+    final respent = {...((c['respent'] as List?) ?? const []).map((e) => '$e')};
+    if (respent.isNotEmpty) {
+      final was = held.where((x) => respent.contains('${x['leaf_id']}')).fold<BigInt>(BigInt.zero, (n, x) => n + _big(x['value']));
+      final before = {...((rec['before'] as List?) ?? const []).map((e) => '$e')};
+      final got = ((await _run('coins')) as List? ?? const [])
+          .cast<Map>()
+          .where((x) => x['state'] == 'live' && !before.contains('${x['leaf_id']}') && x['asset'] == pay)
+          .fold<BigInt>(BigInt.zero, (n, x) => n + _big(x['value']));
+      if (was > got) rec['cancelFees'] = '${_big(rec['cancelFees']) + was - got}';
+    }
+    d.log('[user trade] the maker\'s offer is gone; pricing again: ${rec['id']}');
+    rec['gave'] = [
+      ...((rec['gave'] as List?) ?? const []),
+      {'swap': rec['swap'], 'why': _short('${gone['error'] ?? ''}'), 'whose': gone['whose']},
+    ];
+    final offer = gone['offer'] is Map ? Map<String, dynamic>.from(gone['offer'] as Map) : null;
+    if ((rec['gave'] as List).length >= kGoneMost) {
+      if (offer?['swap'] != null) release('${rec['maker']}', '${offer!['swap']}');
+      rec['gone'] = null;
+      rec['state'] = 'returned';
+      rec['returnedAt'] = d.now();
+      rec['error'] = 'the makers\' offers were gone ${(rec['gave'] as List).length} times';
+      if (paidAlready(rec) > BigInt.zero) {
+        rec['feesPaid'] = [
+          {'asset': pay, 'atoms': '${paidAlready(rec)}'},
+        ];
+      }
+      return _put(rec);
+    }
+    if (offer?['swap'] != null && rec['maker'] != null) {
+      _madeAgain['${rec['maker']}'] = {...offer!, 'give_asset': (rec['ticket'] as Map)['receiveAsset'], 'want_asset': pay};
+    }
+    rec['gone'] = null;
+    rec['state'] = 'repricing';
+    rec['repriceSince'] = d.now();
+    rec['accepted'] ??= rec['ticket'];
+    await _put(rec);
+    return _repriceWithin(rec, kRepriceMostMs, rec['repriceSince'] as int);
+  }
+
+  /// Prices a trade again for the amount accepted (`accepted`), and confirms it into the same record
+  /// only at the price accepted or better (no less received, no more paid, and no less received for
+  /// what is paid); returns it with words when the price moved, or once [mostMs] have passed since
+  /// [since] with no price. The record as stored is read again before it is written: another follow
+  /// may have moved it on meanwhile. The web wallet's repriceWithin.
+  Future<Map<String, dynamic>> _repriceWithin(Map<String, dynamic> rec, int mostMs, int since) async {
+    final t = rec['ticket'] as Map;
+    final accepted = (rec['accepted'] ?? t) as Map;
+    final pay = '${t['payAsset']}', receive = '${t['receiveAsset']}';
+    final state = rec['state'];
+    // Priced for at most one received atom's price above what the ticket pays, so the maker's
+    // rounding gives the same ticket at the same price.
+    final aIn = _big(accepted['amountIn']), aOut = _big(accepted['amountOut']);
+    final step = aOut > BigInt.zero ? _ceilDiv(aIn, aOut) : BigInt.zero;
+    final upTo = aIn + step;
+    bool within(QuoteResult q) =>
+        q.ok && q.ticket!.amountOut >= aOut && q.ticket!.amountIn <= upTo && q.ticket!.amountOut * aIn >= aOut * q.ticket!.amountIn;
+    var q = await _quote(pay: pay, receive: receive, amount: upTo);
+    // The maker's offer made in place of a gone one, if this price did not take it: let go of.
+    final left = rec['maker'] != null ? _madeAgain.remove('${rec['maker']}') : null;
+    if (left != null) release('${rec['maker']}', '${left['swap']}');
+    Future<Map<String, dynamic>> back() {
+      if (paidAlready(rec) > BigInt.zero) {
+        rec['feesPaid'] = [
+          {'asset': pay, 'atoms': '${paidAlready(rec)}'},
+        ];
+      }
+      rec['returnedAt'] = d.now();
+      return _put(rec);
+    }
+
+    // A ticket the maker's depth capped, whose next atom costs more than the ticket's price: priced
+    // once more at exactly what the ticket paid.
+    if (q.ok && !within(q) && upTo > aIn) {
+      drop(q.choice);
+      q = await _quote(pay: pay, receive: receive, amount: aIn);
+    }
+    final stored = (await records()).where((r) => r['id'] == rec['id']).firstOrNull;
+    if (stored == null || stored['state'] != state) {
+      if (q.ok) drop(q.choice);
+      return stored ?? rec;
+    }
+    if (!q.ok && q.why == 'settle-first') {
+      // What it pays waits for a round (again): settled first, its own wait the trade's time, and the
+      // other side asked again only once that wait is through; past the bound, returned.
+      if (state == 'settling' && d.now() - since > mostMs) {
+        rec['state'] = 'returned';
+        rec['whyKind'] = 'late';
+        rec['error'] = 'settling first took too long';
+        return back();
+      }
+      rec['settleCoins'] = q.coins;
+      if (state != 'settling') {
+        rec['state'] = 'settling';
+        rec['settleSince'] = d.now();
+        unawaited(_settleAsk(rec).then((_) {}, onError: (Object e) => d.log('[user trade] settle_first: $e')));
+      }
+      final w = q.wait;
+      if (w != null) {
+        final prev = rec['finalBy'] != null ? {'finalBy': rec['finalBy'], 'step': rec['finalStep']} : null;
+        final n = nextFinalBy(prev, w, d.now());
+        if (n != null) {
+          rec['finalBy'] = n['finalBy'];
+          rec['finalStep'] = n['step'];
+        }
+      }
+      final secs = w == null ? null : (w['usual_in_seconds'] ?? w['final_in_seconds']) as num?;
+      rec['repriceAfter'] = d.now() + math.max(kRepriceAgainMs, ((secs ?? 0) * 1000).round());
+      return _put(rec);
+    }
+    if (!q.ok) {
+      // Nobody offers it this moment: a maker quotes nothing while it reads its coins again after a
+      // trade, so within the time given it is asked again at the next advance.
+      if (d.now() - since <= mostMs && const ['wallet-busy', 'no-firm-offer', 'not-offered', 'opening'].contains(q.why)) return _put(rec);
+      // What it was to pay is no longer the wallet's: said so, not as a price that moved.
+      rec['state'] = 'returned';
+      rec['whyKind'] = q.why == 'no-funds' ? 'gone' : 'moved';
+      rec['error'] = 'no price within the bound: ${q.why}';
+      return back();
+    }
+    if (!within(q)) {
+      drop(q.choice);
+      rec['state'] = 'returned';
+      rec['whyKind'] = 'moved';
+      rec['error'] = 'the price moved past the bound accepted';
+      return back();
+    }
+    d.log('[user trade] priced again; going ahead at the price accepted: ${rec['id']}');
+    try {
+      return await confirm(q.choice!, q.ticket!, prior: stored);
+    } catch (e) {
+      d.log('[user trade] going ahead again: $e');
+      return (await records()).where((r) => r['id'] == rec['id']).firstOrNull ?? rec;
+    }
+  }
+
+  /// The operator's `info`, read at most every [kInfoMs], or null.
+  Future<Map?> _operatorInfo() async {
+    if (_info == null || d.now() - _infoAt > kInfoMs) {
+      try {
+        _info = (await _run('info')) as Map;
+        _infoAt = d.now();
+      } catch (e) {
+        d.log('[user trade] info: $e');
+        return _info;
+      }
+    }
+    return _info;
   }
 
   /// The coins a trade brings, or leaves as change on a reassignment, settled in the operator's
@@ -1979,6 +2790,11 @@ class UserTradeEngine {
         'coins': [...ids, ...taken.keys],
         'participations': {...parts, ...taken.values}.toList(),
       };
+      // The wait the row states ([tradeStateWord]): the wallet's figure for a round of this operator.
+      if (rec['settleMin'] == null) {
+        rec['settleMin'] = settleMinutesOf(await _operatorInfo());
+        rec['settleSince'] = d.now();
+      }
       await _put(rec);
       return false;
     }
@@ -2009,7 +2825,7 @@ class UserTradeEngine {
   Future<List<Map<String, dynamic>>> resume() async {
     final out = <Map<String, dynamic>>[];
     for (final r in await records()) {
-      if (['settled', 'returned', 'failed'].contains(r['state'])) continue;
+      if (kEndedStates.contains(r['state'])) continue;
       try {
         out.add(await advance(r));
       } catch (e) {
