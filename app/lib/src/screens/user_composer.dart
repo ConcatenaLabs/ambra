@@ -130,7 +130,8 @@ UserTradeEngine _newTradeEngine(String walletTag) {
     } catch (_) {
       j = {};
     }
-    if (r.statusCode != 200) throw Exception('${j['error'] ?? 'HTTP ${r.statusCode}'}');
+    // The body comes with the refusal: a maker's `gone` names an offer the operator refused.
+    if (r.statusCode != 200) throw MakerError('${j['error'] ?? 'HTTP ${r.statusCode}'}', j);
     return j;
   }
 
@@ -210,7 +211,10 @@ UserTradeEngine _newTradeEngine(String walletTag) {
       return (pairs: servedPairs(pairsCache, LeafService.instance.supervisedAssets()), genesis: genesis);
     },
     read: () async => (await SharedPreferences.getInstance()).getString(key),
-    write: (v) async => (await SharedPreferences.getInstance()).setString(key, v),
+    // A write the phone refuses throws, so the engine keeps fewer ended trades, or signs nothing.
+    write: (v) async {
+      if (!await (await SharedPreferences.getInstance()).setString(key, v)) throw StateError('the trade records were not written');
+    },
     btc: () => appBtcOn(appBtcRail(), walletTag),
     btcRail: appBtcRail,
     btcOf: (rail) => appBtcOn(rail, walletTag),
@@ -279,10 +283,6 @@ class UserComposer extends StatefulWidget {
   @override
   State<UserComposer> createState() => _UserComposerState();
 }
-
-/// How long a trade is followed every few seconds, and how often after that.
-const int kFollowFastMs = 120000;
-const int kFollowSlowMs = 30000;
 
 /// While the wallet gets coins ready for a trade (BTC moved where trades pay from, coins refreshed
 /// for a resting order), the trade is priced again this often, this many times at most.
@@ -513,14 +513,14 @@ class _UserComposerState extends State<UserComposer> {
 
   /// Prices the trade again by itself, while the wallet gets what it pays ready, as long as nothing
   /// the person entered changed.
-  void _readyAgain() {
+  void _readyAgain([int ms = kReadyRetryMs]) {
     final asked = '$_pay|$_get|${_amount.text}';
     _readyTimer?.cancel();
     if (++_readyTries > kReadyTries) {
       _readyTries = 0;
       return;
     }
-    _readyTimer = Timer(const Duration(milliseconds: kReadyRetryMs), () {
+    _readyTimer = Timer(Duration(milliseconds: ms), () {
       if (!mounted || '$_pay|$_get|${_amount.text}' != asked || _busy || _ticket != null) {
         _readyTries = 0;
         return;
@@ -554,8 +554,14 @@ class _UserComposerState extends State<UserComposer> {
     setState(() {
       if (!e.ok) {
         final p = widget.ticker(pay), g = widget.ticker(get);
-        _note = switch (e.why) { 'not-listed' => UserWords.notListed(g, p), 'too-small' => UserWords.tooSmall, _ => UserWords.notOffered(g, p) };
+        _note = switch (e.why) {
+          'not-listed' => UserWords.notListed(g, p),
+          'too-small' => UserWords.tooSmall,
+          _ => e.again ? UserWords.offeredAgain(g, p) : UserWords.notOffered(g, p),
+        };
         if (!otherFocus.hasFocus) other.text = '';
+        // Offered a moment ago: estimated again shortly, by itself.
+        if (e.again) _schedule(kOfferedAgainEveryMs);
         return;
       }
       final fill = typedPay ? formatAtoms('${e.receive}', widget.precision(get)) : formatAtoms('${e.pay}', widget.precision(pay));
@@ -588,7 +594,7 @@ class _UserComposerState extends State<UserComposer> {
       if (mounted && _busy && _ticket == null) setState(() => _pricingLong = true);
     });
     final t0 = DateTime.now();
-    var again = false;
+    var again = false, againSoon = false;
     try {
       // The engine answers within its own deadline; this guards a wait on anything else.
       var late = false;
@@ -629,9 +635,15 @@ class _UserComposerState extends State<UserComposer> {
             'wallet-busy' => UserWords.walletBusy,
             'opening' => UserWords.opening,
             'not-listed' => UserWords.notListed(g, p),
-            _ => UserWords.notOffered(g, p),
+            'btc-ahead' => UserWords.btcAhead,
+            _ => q.again ? UserWords.offeredAgain(g, p) : UserWords.notOffered(g, p),
           };
-          again = q.why == 'readying' || q.why == 'btc-moving' || q.why == 'opening';
+          // Behind a purchase paid with BTC still to pay: priced again by itself, so the ticket comes
+          // once that one is paid.
+          again = q.why == 'readying' || q.why == 'btc-moving' || q.why == 'opening' || q.why == 'btc-ahead';
+          // A pair offered a moment ago that nobody offers now (a maker reading its coins again after
+          // a trade): priced again every few seconds while it was offered within the engine's window.
+          againSoon = !again && q.again;
         }
       });
     } catch (e) {
@@ -648,6 +660,7 @@ class _UserComposerState extends State<UserComposer> {
       }
     }
     if (again && mounted) _readyAgain();
+    if (againSoon && mounted) _readyAgain(kOfferedAgainEveryMs);
   }
 
   /// Trade: the step is taken in the background. If it is not done within [kConfirmShownFor], the
@@ -678,7 +691,11 @@ class _UserComposerState extends State<UserComposer> {
       setState(() {
         _reset();
         _busy = false;
-        _error = first is LeafRefusal && first.plain ? first.message : UserWords.failed;
+        _error = first is StorageFullError
+            ? UserWords.storageFull
+            : first is LeafRefusal && first.plain
+                ? first.message
+                : UserWords.failed;
       });
       await _loadTrades();
       return;
@@ -703,8 +720,8 @@ class _UserComposerState extends State<UserComposer> {
     }
   }
 
-  /// Open trades move on every few seconds while any is open, and every half minute once older
-  /// than two minutes; never while a person is pricing or confirming one.
+  /// Open trades move on every few seconds while any is young, waits, or settles ([followFast]), and
+  /// every half minute otherwise; never while a person is pricing or confirming one.
   Future<void> _follow() async {
     _timer?.cancel();
     final openRecs = _trades.where((r) => !['settled', 'returned', 'failed'].contains(r['state'])).toList();
@@ -724,9 +741,9 @@ class _UserComposerState extends State<UserComposer> {
       _following = false;
     }
     await _loadTrades();
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final young = openRecs.any((r) => now - (((r['sentAt'] ?? r['at']) as num?)?.toInt() ?? 0) < kFollowFastMs);
-    if (mounted) _timer = Timer(Duration(milliseconds: young ? 4000 : kFollowSlowMs), _follow);
+    // Followed every few seconds while a person watches something move ([followFast]).
+    final fast = followFast(_trades.where((r) => !['settled', 'returned', 'failed'].contains(r['state'])).toList(), DateTime.now().millisecondsSinceEpoch);
+    if (mounted) _timer = Timer(Duration(milliseconds: fast ? 4000 : kFollowSlowMs), _follow);
   }
 
   String _stateWord(Map r) {

@@ -17,11 +17,13 @@ import '../rust/api/leaves.dart' as leaves;
 import 'address_payments.dart';
 import 'btc_state.dart';
 import 'config.dart';
+import 'default_words.dart';
 import 'dev_mode.dart';
 import 'format.dart';
 import 'home_coins.dart';
 import 'ln_max_payment.dart';
 import 'pay_code.dart' show expandRequest;
+import 'pending_sends.dart';
 import 'price_service.dart';
 import 'vesting.dart';
 import 'wallet_cache.dart';
@@ -29,7 +31,8 @@ import 'wallet_repository.dart';
 
 /// A refusal by the leaf wallet, in the library's own words.
 class LeafRefusal implements Exception {
-  LeafRefusal(this.kind, this.message, {this.code, this.status, this.asset, this.release = const [], this.plain = false});
+  LeafRefusal(this.kind, this.message,
+      {this.code, this.status, this.asset, this.release = const [], this.plain = false, this.fields = const {}});
   final String kind;
   final String message;
   final String? code;
@@ -44,6 +47,17 @@ class LeafRefusal implements Exception {
   /// shows [message] as it is.
   final bool plain;
 
+  /// The library's whole `error` object: the figures some refusals carry beside their words
+  /// (`settle_first`'s `coins`, `final_in_seconds`, `usual_in_seconds` and `waiting_for`;
+  /// `in_channel`'s `close`; `short`'s `most`).
+  final Map<String, dynamic> fields;
+
+  /// The coins a `settle_first` refusal names, to put through the next round first.
+  List<String> get coins => [for (final c in (fields['coins'] as List?) ?? const []) '$c'];
+
+  /// The channel leaves an `in_channel` refusal names, to close into the next round.
+  List<String> get close => [for (final c in (fields['close'] as List?) ?? const []) '$c'];
+
   /// Reads the library's `{"error": {"kind", "message", "code"?, "status"?}}`
   /// out of whatever the core threw.
   static LeafRefusal of(Object e) {
@@ -57,7 +71,8 @@ class LeafRefusal implements Exception {
             code: err['code']?.toString(),
             status: (err['status'] as num?)?.toInt(),
             asset: err['asset']?.toString(),
-            release: [for (final r in (err['release'] as List?) ?? const []) '$r']);
+            release: [for (final r in (err['release'] as List?) ?? const []) '$r'],
+            fields: Map<String, dynamic>.from(err));
       }
     } catch (_) {}
     return LeafRefusal('error', text ?? '$e');
@@ -236,6 +251,14 @@ class LeafService extends ChangeNotifier {
     debugPrint('[leaves] opening');
     try {
       await leaves.leavesOpen(dir: dir, mnemonic: m, nodePassword: await nodePassword() ?? '');
+      // A wallet user mode joined by itself whose restore was cut short (the app closed, or the
+      // operator did not answer) restores now, before it opens: never opened as if it held nothing.
+      if (!DevMode.instance.on) {
+        final gen = _gen;
+        await restoreOnce();
+        // Closed while it restored: the next start opens it.
+        if (gen != _gen) return;
+      }
       open = true;
       lastError = null;
       _startTries = 0;
@@ -277,6 +300,190 @@ class LeafService extends ChangeNotifier {
     // A pass that came due during this sync waited for it ([_tick]); none is ever left unplanned.
     if (open && !(_timer?.isActive ?? false)) _plan(const Duration(seconds: 5));
     unawaited(followAddressPayments());
+    if (!DevMode.instance.on) unawaited(resumePending());
+  }
+
+  // -------------------------------------------------------------------------
+  // Finding what the wallet holds: its restore, then its history a slice at a time
+  // -------------------------------------------------------------------------
+
+  /// While the wallet restores what its phrase holds with the operator (a join, or a restore cut
+  /// short before): since when, how long it has run ([RestoreState.slow]), and, while the operator
+  /// does not answer, why. Default mode then says it is finding what it holds ([findingWords])
+  /// rather than any figure; a payment asked meanwhile waits for it ([pay]). Null otherwise.
+  RestoreState? restoring;
+
+  /// A restore the operator does not answer is asked again this often, until it answers.
+  static const restoreRetry = Duration(seconds: 30);
+  /// A restore running this long is a long history being checked; this long, far longer than
+  /// any history should take.
+  static const restoreSlow = Duration(minutes: 2);
+  static const restoreLong = Duration(minutes: 30);
+
+  /// A restore's history, after the wallet opens: each slice the library runs takes about
+  /// [historySlice]; the next comes [historyGap] after, so a person's ask between two goes
+  /// first; while the wallet is busy it looks again after [historyBusy], and after a slice that
+  /// could check nothing (its coins wait for the chain) after [historyIdle].
+  static const historySlice = Duration(milliseconds: 500);
+  static const historyGap = Duration(milliseconds: 250);
+  static const historyBusy = Duration(seconds: 2);
+  static const historyIdle = Duration(minutes: 1);
+
+  static const _kRestored = 'ambra.leaves.restored';
+  String get _restoredKey => '$_kRestored.${DevMode.instance.tag ?? 'default'}';
+
+  /// The sentence default mode shows under the total while the wallet finds what it holds, or
+  /// null once it has.
+  String? findingWords() => restoreWords(restoring);
+
+  /// Whether the wallet is still finding what it holds: restoring, or checking its history.
+  bool get stillFinding {
+    final h = balance?['history'];
+    return restoring != null || (h is Map && h['loading'] == true);
+  }
+
+  final List<Timer> _restoreTimers = [];
+  // Bumped by each [stop]: a restore that outlives a stop does not open the wallet.
+  int _gen = 0;
+
+  DateTime _restoreStarts() {
+    final t0 = DateTime.now();
+    restoring = RestoreState(since: t0);
+    for (final t in _restoreTimers) {
+      t.cancel();
+    }
+    _restoreTimers
+      ..clear()
+      ..add(Timer(restoreSlow, () => _restoreSlowed(t0, 'slow')))
+      ..add(Timer(restoreLong, () => _restoreSlowed(t0, 'long')));
+    notifyListeners();
+    return t0;
+  }
+
+  void _restoreSlowed(DateTime t0, String level) {
+    final r = restoring;
+    if (r == null || r.since != t0) return;
+    restoring = r.copy(slow: level);
+    debugPrint('[leaves] restore still running after ${DateTime.now().difference(t0).inSeconds} s ($level)');
+    notifyListeners();
+  }
+
+  void _restoreEnds(DateTime t0) {
+    if (restoring?.since != t0) return;
+    for (final t in _restoreTimers) {
+      t.cancel();
+    }
+    _restoreTimers.clear();
+    restoring = null;
+    notifyListeners();
+  }
+
+  Future<void> _setRestored() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setInt(_restoredKey, DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {}
+  }
+
+  /// The join's restore, run to its end once: a wallet whose restore was cut short restores when
+  /// it next opens, so a phrase's coins are never left behind. Every request inside it is bounded,
+  /// so it returns; when it returns because the operator does not answer, the wallet has found
+  /// nothing and is not opened empty: it stays finding, says why, and restores again every
+  /// [restoreRetry] until the operator answers. A restore refused for any other reason lets the
+  /// wallet open as before. The library leaves the coins the history gave up to slices
+  /// ([_historySoon]).
+  Future<void> restoreOnce() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      if (p.getInt(_restoredKey) != null) return;
+    } catch (_) {}
+    final t0 = _restoreStarts();
+    try {
+      for (;;) {
+        try {
+          final v = jsonDecode(await leaves.leavesRun(command: 'restore', argsJson: '{}'));
+          await _setRestored();
+          debugPrint('[leaves] restore: ${DateTime.now().difference(t0).inMilliseconds} ms');
+          final r = v is Map ? v['result'] : null;
+          // The watchtowers' deposits of what it found owed: made at once, not awaited.
+          if (r is Map && r['deposits'] is Map && (r['deposits'] as Map)['owed'] != null) {
+            unawaited(leaves.leavesRun(command: 'deposits', argsJson: '{}').then((_) {}, onError: (_) {}));
+          }
+          return;
+        } catch (e) {
+          final r = LeafRefusal.of(e);
+          debugPrint('[leaves] restore: ${r.message}');
+          if (r.kind != 'unreachable') return;
+          final was = restoring;
+          if (was != null && was.since == t0) {
+            restoring = was.copy(stalled: r.message, stalledSince: was.stalledSince ?? DateTime.now());
+            notifyListeners();
+          }
+          await Future<void>.delayed(restoreRetry);
+          if (restoring?.since != t0) return;
+        }
+      }
+    } finally {
+      _restoreEnds(t0);
+    }
+  }
+
+  /// A person's ask that comes while the wallet restores waits for it, then goes on; while the
+  /// operator does not answer, or once the restore has run far too long, it ends at once in words
+  /// that say nothing moved.
+  Future<void> _waitRestored() async {
+    while (restoring != null) {
+      final r = restoring!;
+      if (r.stalled != null) throw LeafRefusal('refused', DefaultWords.findingStalledPay, plain: true);
+      if (r.slow == 'long') throw LeafRefusal('refused', DefaultWords.findingLongPay, plain: true);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+  }
+
+  Timer? _historyTimer;
+  bool _noSlices = false;
+
+  /// Runs a slice of the restore's history after [d], while the balance says it is loading.
+  void _historySoon([Duration d = Duration.zero]) {
+    if (!open || _noSlices || (_historyTimer?.isActive ?? false)) return;
+    final h = balance?['history'];
+    if (!(h is Map && h['loading'] == true)) return;
+    _historyTimer = Timer(d, () => unawaited(_historySlice()));
+  }
+
+  /// One slice of the history (`restore_history {budget_ms}`), only while nobody asks the wallet
+  /// for anything and no other command of it runs, so a receive code, a price or a payment waits
+  /// for one slice at most, never the whole history.
+  Future<void> _historySlice() async {
+    _historyTimer = null;
+    if (!open) return;
+    final hold = _holdUntil;
+    if (_asking > 0 || _running > 0 || _ticking || (hold != null && DateTime.now().isBefore(hold))) {
+      return _historySoon(_asking > 0 ? historyGap : historyBusy);
+    }
+    Object? v;
+    try {
+      v = await run('restore_history', {'budget_ms': historySlice.inMilliseconds});
+    } catch (e) {
+      debugPrint('[leaves] history slice: $e');
+    }
+    if (v is! Map) return _historySoon(historyIdle);
+    final left = (v['left'] as num?)?.toInt() ?? 0;
+    // A library without slices answers a whole step and no `ms`: its syncs carry the history.
+    if (v['ms'] == null && left != 0) {
+      _noSlices = true;
+      debugPrint('[leaves] this library takes no slices of its history');
+    }
+    final b = balance;
+    if (b != null) {
+      balance = {...b, 'history': left > 0 ? {...?(b['history'] as Map?), 'loading': true, 'left': left} : null};
+    }
+    if (left > 0) {
+      notifyListeners();
+      return _historySoon(((v['checked'] as num?) ?? 0) > 0 ? historyGap : historyIdle);
+    }
+    debugPrint('[leaves] the history is whole');
+    await refresh();
   }
 
   // -------------------------------------------------------------------------
@@ -328,6 +535,11 @@ class LeafService extends ChangeNotifier {
     _chanTimer = null;
     _joinTimer?.cancel();
     _joinTimer = null;
+    _historyTimer?.cancel();
+    _historyTimer = null;
+    _gen++;
+    final r = restoring;
+    if (r != null) _restoreEnds(r.since);
     if (open) leaves.leavesClose();
     open = false;
     info = null;
@@ -368,6 +580,7 @@ class LeafService extends ChangeNotifier {
     _boardRefused.clear();
     unreachable = null;
     unreachableSince = null;
+    _noSlices = false;
     await _keepHome({});
     notifyListeners();
   }
@@ -739,12 +952,47 @@ class LeafService extends ChangeNotifier {
   }
 
   /// How long a payment to an address out of the tree takes to reach the other wallet's figure,
-  /// in whole minutes, from the operator's `info.fills` ([addressArrivalMinutes]), or null when
-  /// it publishes no round interval.
+  /// in whole minutes, from the operator's `info.fills` and `offboards.unlock_within_seconds`
+  /// ([addressArrivalMinutes]), or null when it publishes no round interval.
   int? addressMinutes() {
+    final f = _fills();
+    return addressArrivalMinutes(f?['round_interval_seconds'], f?['block_seconds'], _unlockSeconds());
+  }
+
+  /// The minutes a payment to an address the library just answered (`offboard`) takes, from the
+  /// settlement it said it goes in (`round_within_seconds`), else [addressMinutes]. The web
+  /// wallet's `offboardOutcome`.
+  int? offboardMinutes(Object? answer) {
+    final f = _fills();
+    final r = answer is Map ? answer['round_within_seconds'] : null;
+    return addressArrivalMinutes(r, f?['block_seconds'], _unlockSeconds()) ?? addressMinutes();
+  }
+
+  /// How long a move out of the Ark to the wallet's own address takes, in whole minutes
+  /// ([moveOutMinutes]), or null when the operator publishes no round interval.
+  int? moveOutMinutesNow() {
+    final f = _fills();
+    return moveOutMinutes(f?['round_interval_seconds'], f?['block_seconds'], _unlockSeconds());
+  }
+
+  /// The minutes a payment that settles first usually waits, from the operator's settings
+  /// ([settleMinutesOf]), before the library has said.
+  int settleMinutesNow() => settleMinutesOf(info);
+
+  /// When, in words, a line of what is arriving of [cause] ([arrivingCause]) is the wallet's,
+  /// at the operator's anchor depth ([causeWhen]).
+  String arrivingWhen(String cause) =>
+      causeWhen(cause, boardMin: boardMinutes(anchorDepth()), roundMin: roundMinutes(anchorDepth()));
+
+  Map? _fills() {
     final si = info?['server_info'];
-    final fills = si is Map && si['fills'] is Map ? si['fills'] as Map : (info?['fills'] is Map ? info!['fills'] as Map : null);
-    return addressArrivalMinutes(fills?['round_interval_seconds'], fills?['block_seconds']);
+    return si is Map && si['fills'] is Map ? si['fills'] as Map : (info?['fills'] is Map ? info!['fills'] as Map : null);
+  }
+
+  Object? _unlockSeconds() {
+    final si = info?['server_info'];
+    final o = si is Map ? si['offboards'] : null;
+    return o is Map ? o['unlock_within_seconds'] : null;
   }
 
   /// Whether one payment of [atoms] of [kind] ('BTC', or an asset id) fits the most the operator
@@ -808,10 +1056,24 @@ class LeafService extends ChangeNotifier {
     final dir = await dataDir();
     busy = true;
     notifyListeners();
+    final t0 = _restoreStarts();
     try {
       final cfg = {...op.toJson(), if (nodePassword.isNotEmpty) 'node_password': nodePassword};
-      final out = jsonDecode(await leaves.leavesJoin(dir: dir, mnemonic: m, configJson: jsonEncode(cfg)))
-          as Map<String, dynamic>;
+      Map<String, dynamic> out;
+      try {
+        out = jsonDecode(await leaves.leavesJoin(dir: dir, mnemonic: m, configJson: jsonEncode(cfg))) as Map<String, dynamic>;
+        await _setRestored();
+        _restoreEnds(t0);
+      } catch (e) {
+        // The wallet was made and its restore found nothing because the operator did not answer:
+        // it is kept, and stays finding what it holds until the operator answers.
+        final r = LeafRefusal.of(e);
+        _restoreEnds(t0);
+        if (r.kind != 'unreachable' || !await leaves.leavesExists(dir: dir, mnemonic: m)) rethrow;
+        debugPrint('[leaves] join: made, its restore not answered: ${r.message}');
+        await restoreOnce();
+        out = {'info': jsonDecode(await leaves.leavesRun(command: 'info', argsJson: '{}'))['result']};
+      }
       await _storage.write(key: _kOperator, value: jsonEncode(op.toJson()));
       await _storage.write(key: _kNodePassword, value: nodePassword);
       operator = op;
@@ -1138,7 +1400,14 @@ class LeafService extends ChangeNotifier {
   /// ([plainRefusal]); every other refusal is the library's.
   /// [person]: false for the wallet's own following of what was asked before (a trade's
   /// syncs and reads), which keeps no upkeep waiting.
-  Future<dynamic> pay(String command, [Map<String, dynamic> args = const {}, bool plain = false, bool person = true]) async {
+  Future<dynamic> pay(String command, [Map<String, dynamic> args = const {}, bool plain = false, bool person = true]) =>
+      _pay(command, args, plain, person);
+
+  /// [pay], with each stage of the payment written by [stage] before the library is asked:
+  /// 'asking' while it is asked (it may sign), 'waiting' while it waits for a round (nothing
+  /// signed). [payPending] keeps them, so an app closed meanwhile makes the payment once.
+  Future<dynamic> _pay(String command, Map<String, dynamic> args, bool plain, bool person,
+      {void Function(String stage)? stage}) async {
     // Whether this command holds the wallet's own reads and upkeep off (`_asking`). It does while
     // the library works for the person, and not while the command waits for a round to free the
     // planned coins it needs (up to hours): the wallet then goes on reading its mailbox and its
@@ -1152,6 +1421,8 @@ class LeafService extends ChangeNotifier {
     }
     hold(true);
     try {
+      if (person) await _waitRestored();
+      stage?.call('asking');
       return await payThroughRelease(
         command,
         args,
@@ -1176,6 +1447,7 @@ class LeafService extends ChangeNotifier {
           }
         },
         onWait: (w) {
+          if ((releasing == null) != (w == null)) stage?.call(w == null ? 'asking' : 'waiting');
           releasing = w;
           hold(w == null);
           notifyListeners();
@@ -1190,6 +1462,90 @@ class LeafService extends ChangeNotifier {
       }
       if (releasing != null) {
         releasing = null;
+        notifyListeners();
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // A payment that waits, written down: made once, even across a closed app (pending_sends.dart)
+  // -------------------------------------------------------------------------
+
+  String get _sendTag => DevMode.instance.tag ?? 'default';
+
+  Future<PendingStore> _pendingStore() async => _PrefsPendingStore(await SharedPreferences.getInstance());
+
+  /// A person's payment in the tree ([command] `send` to a receive code, `offboard` to an
+  /// address), written down while it waits for a round, so that an app closed meanwhile makes it
+  /// when the wallet is next open, and never twice ([resumePending]). [kind] 'code' or 'address',
+  /// [to] the code or address, [atoms] of [asset]; [history], when given, is the History entry
+  /// written for it should it be made after the app reopened (the library's `offboard` id added).
+  /// Otherwise as [pay] with `plain`.
+  Future<dynamic> payPending(String command, Map<String, dynamic> args,
+      {required String kind, required String asset, required BigInt atoms, required String to,
+      Map<String, dynamic>? history, String? ticker, int? precision}) async {
+    final store = await _pendingStore();
+    final rec = <String, dynamic>{
+      'id': '${DateTime.now().microsecondsSinceEpoch}-${asset.length > 8 ? asset.substring(0, 8) : asset}',
+      'kind': kind, 'asset': asset, 'atoms': atoms.toString(), 'to': to,
+      'command': command, 'args': args, 'history': ?history, 'ticker': ?ticker, 'precision': ?precision,
+      'at': DateTime.now().millisecondsSinceEpoch, 'state': 'asking',
+    };
+    final write = stageWriter(store, _sendTag, rec);
+    try {
+      return await _pay(command, args, true, true, stage: write);
+    } finally {
+      dropPending(store, _sendTag, '${rec['id']}');
+      notifyListeners();
+    }
+  }
+
+  /// Whether the same payment (asset, amount, recipient) is written down and not ended: the
+  /// review then says [DefaultWords.sameOnItsWay], since sending it again pays it twice.
+  Future<bool> samePendingNow(String asset, BigInt atoms, String to) async =>
+      samePending(await _pendingStore(), _sendTag, asset: asset, atoms: atoms.toString(), to: to) != null;
+
+  /// The payments written down and waiting: History shows each as [DefaultWords.rowSending].
+  Future<List<Map<String, dynamic>>> pendingNow() async => pendingSends(await _pendingStore(), _sendTag);
+
+  /// How payments made after the app reopened ended, when not made: each said once on Balance
+  /// ([pendingEndText]), then [markPendingEndTold].
+  Future<List<Map<String, dynamic>>> pendingEndsNow() async => pendingEnds(await _pendingStore(), _sendTag);
+  Future<void> markPendingEndTold(String id) async {
+    markEndTold(await _pendingStore(), _sendTag, id);
+    notifyListeners();
+  }
+
+  bool _resumed = false;
+
+  /// Once the wallet is open, once per run: each payment that was waiting when the app closed is
+  /// asked again with what was reviewed; one the library was being asked for then is never asked
+  /// again (it may have gone), and is said once on Balance. One asked again that is refused is
+  /// said once on Balance too: nothing left the wallet.
+  Future<void> resumePending() async {
+    if (_resumed || !open) return;
+    _resumed = true;
+    final store = await _pendingStore();
+    final got = takePending(store, _sendTag, DateTime.now());
+    for (final d in got.dropped) {
+      debugPrint('[send] not asked again (${d['why']}): ${d['kind']} ${d['atoms']}');
+    }
+    if (got.dropped.isNotEmpty) notifyListeners();
+    for (final rec in got.resume) {
+      debugPrint('[send] made after the app was closed while it waited: ${rec['kind']} ${rec['atoms']}');
+      final args = Map<String, dynamic>.from((rec['args'] as Map?) ?? const {});
+      try {
+        final v = await _pay('${rec['command']}', args, true, true, stage: stageWriter(store, _sendTag, rec));
+        final h = rec['history'];
+        if (h is Map && !offboardAlready(v)) {
+          final id = v is Map && v['offboard'] != null ? '${v['offboard']}' : null;
+          await WalletCache.addPayment({...Map<String, dynamic>.from(h), 'offboard': ?id, if (id != null) 'stage': 'pending'});
+        }
+      } catch (e) {
+        debugPrint('[send] the payment made after the app was closed was refused: $e');
+        noteEnd(store, _sendTag, rec, 'refused', DateTime.now());
+      } finally {
+        dropPending(store, _sendTag, '${rec['id']}');
         notifyListeners();
       }
     }
@@ -1212,6 +1568,7 @@ class LeafService extends ChangeNotifier {
     try {
       plans = await run('plans');
     } catch (_) {}
+    _historySoon();
     // The operator's assets (which it serves supervised or issuer-operated) and the
     // landing key, read once per open.
     if (info == null) {
@@ -1660,13 +2017,42 @@ Map<String, String> payableChannels(List<dynamic>? channels) {
   return m;
 }
 
-/// A payment waiting for the round that frees the planned coins it needs.
+/// A restore under way ([LeafService.restoring]): since when, how long it has run (`slow` past
+/// [LeafService.restoreSlow], `long` past [LeafService.restoreLong]), and why the operator does
+/// not answer, since when.
+class RestoreState {
+  const RestoreState({required this.since, this.slow, this.stalled, this.stalledSince});
+  final DateTime since;
+  final String? slow;
+  final String? stalled;
+  final DateTime? stalledSince;
+  RestoreState copy({String? slow, String? stalled, DateTime? stalledSince}) => RestoreState(
+      since: since, slow: slow ?? this.slow, stalled: stalled ?? this.stalled, stalledSince: stalledSince ?? this.stalledSince);
+}
+
+/// What default mode says under the total while a restore runs ([DefaultWords.finding] and its
+/// slow, long and stalled forms), or null when none does.
+String? restoreWords(RestoreState? r) {
+  if (r == null) return null;
+  if (r.stalled != null) return DefaultWords.findingStalled;
+  if (r.slow == 'long') return DefaultWords.findingLong;
+  if (r.slow == 'slow') return DefaultWords.findingSlow;
+  return DefaultWords.finding;
+}
+
+/// A payment waiting for a round: to free the planned coins it needs (`release`), for coins to
+/// settle first (`settle`), for channels it pays from to close (`channel`), for coins too many
+/// payments deep to be refreshed (`depth`), or for the wallet's own refresh of its asset already in
+/// a round (`round`). [finalBy] is when the library said it goes through (`settle` only), updated
+/// as it says more ([nextFinalBy]).
 class ReleaseWait {
-  ReleaseWait({required this.command, required this.coins, this.asset, required this.since});
+  ReleaseWait({required this.command, required this.coins, this.asset, required this.since, this.why = 'release', this.finalBy});
   final String command;
   final List<String> coins;
   final String? asset;
   final DateTime since;
+  final String why;
+  FinalBy? finalBy;
 }
 
 /// Whether the coins a release gave up are done with: none of them is still the wallet's
@@ -1698,12 +2084,46 @@ Map<String, Map> plannedCoins(Object? plans) {
   return out;
 }
 
-/// Runs [command] through [run]; when the library refuses it with kind `planned` (the
-/// unplanned coins fall short, the planned coins it names would cover it), gives those
-/// coins up in the next round (`plan_release`), syncs every [poll] until none of them is
-/// held or in that round any more, at most [wait], and asks again; at most [tries]
-/// releases. Every other answer and refusal is the library's, untouched. [onWait] hears
-/// the wait start (a [ReleaseWait]) and end (null); [synced] each sync's answer.
+/// How often a payment waiting for its coins to settle first, or for the wallet's own round,
+/// reads again.
+const kRoundPoll = Duration(seconds: 5);
+
+/// A coin just moved in that the wallet reads final and the operator not yet (its view of the
+/// chain a block behind, at anchor depth 0): asked again this often, for at most [kNotLiveFor].
+const kNotLiveEvery = Duration(seconds: 3);
+const kNotLiveFor = Duration(minutes: 2);
+
+/// Whether a refusal is the operator calling a coin not live yet (`not_live`).
+bool notLiveRefusal(LeafRefusal r) => RegExp(r'\bnot_live\b').hasMatch('${r.code ?? ''} ${r.message}');
+
+/// The coins of [asset] in the wallet's own round now (`given`, `forfeited`): a payment refused
+/// for want of live coins while they are waits for that round to end.
+List<String> inRoundCoins(List<dynamic> coins, String? asset) => [
+      for (final c in coins.whereType<Map>())
+        if (c['asset'] == asset && (c['state'] == 'given' || c['state'] == 'forfeited')) '${c['leaf_id']}'
+    ];
+
+/// Runs [command] through [run]. What the library holds back only for want of a round is never
+/// refused; the payment waits for that round and is asked again once it is through, a person in
+/// user mode asking nothing:
+/// - `planned` (the unplanned coins fall short, the planned coins it names would cover it): those
+///   coins are given up in the next round (`plan_release`), and the wallet syncs every [poll]
+///   until none of them is held or in that round any more;
+/// - `settle_first` (coins still arriving, at the operator's depth limit, or of a shape the other
+///   side does not read): `settle_first` puts the coins it names through the next round, asked
+///   again every [roundPoll] after a sync until it answers `ready`; its figures set the time the
+///   wait is told it goes by ([nextFinalBy]). An offboard's quote is answered as the library gave it;
+/// - `in_channel` (the wallet's side of a channel would cover it): those channels are closed into
+///   the next round, followed as a release;
+/// - `depth_limit` (coins too many payments from a round): the asset's live coins are refreshed in
+///   the next round, followed as a release;
+/// - "in live coins" while the wallet's own refresh of the asset is in a round: waits for it;
+/// - `not_live` (a coin just moved in the operator does not call live yet): asked again every
+///   [kNotLiveEvery], for [kNotLiveFor], never shown.
+/// At most [tries] waits of each payment, each for at most [wait]; past them a settle's words are
+/// [DefaultWords.settleGaveUp]. Every other answer and refusal is the library's, untouched.
+/// [onWait] hears each wait start (a [ReleaseWait]), its told time move, and end (null); [synced]
+/// each sync's answer. The web wallet's `paying` (leaves.js).
 Future<dynamic> payThroughRelease(
   String command,
   Map<String, dynamic> args, {
@@ -1713,37 +2133,134 @@ Future<dynamic> payThroughRelease(
   void Function(ReleaseWait? wait)? onWait,
   Future<void> Function(Object? sync)? synced,
   Duration poll = kReleasePoll,
+  Duration roundPoll = kRoundPoll,
   Duration wait = kReleaseWait,
   int tries = kReleaseTries,
 }) async {
   final clock = now ?? DateTime.now;
   final pause = sleep ?? (d) => Future<void>.delayed(d);
+  Future<void> sync() async {
+    try {
+      final v = await run('sync', const {});
+      await synced?.call(v);
+    } catch (_) {}
+  }
+
+  Future<List<dynamic>?> coinsNow() async {
+    try {
+      return (await run('coins', const {}) as List?) ?? const [];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Until the coins a round gives up are done with.
+  Future<void> released(List<String> coins) async {
+    final until = clock().add(wait);
+    for (;;) {
+      await sync();
+      final cs = await coinsNow();
+      if (cs != null && releaseDone(cs, coins)) return;
+      if (!clock().isBefore(until)) throw LeafRefusal('refused', kReleaseTimeout);
+      await pause(poll);
+    }
+  }
+
+  // A wait: told, run, its end told.
+  Future<void> waiting(ReleaseWait w, Future<void> Function() f) async {
+    onWait?.call(w);
+    try {
+      await f();
+    } finally {
+      onWait?.call(null);
+    }
+  }
+
+  var notLive = 0;
   for (var i = 0;; i++) {
     try {
       return await run(command, args);
     } catch (e) {
       final r = LeafRefusal.of(e);
-      if (r.kind != 'planned' || r.release.isEmpty || i >= tries) throw r;
-      onWait?.call(ReleaseWait(command: command, coins: r.release, asset: r.asset, since: clock()));
-      try {
-        await run('plan_release', {'leaves': r.release});
-        final until = clock().add(wait);
-        for (;;) {
-          try {
-            final v = await run('sync', const {});
-            await synced?.call(v);
-          } catch (_) {}
-          List<dynamic>? coins;
-          try {
-            coins = (await run('coins', const {}) as List?) ?? const [];
-          } catch (_) {}
-          if (coins != null && releaseDone(coins, r.release)) break;
-          if (!clock().isBefore(until)) throw LeafRefusal('refused', kReleaseTimeout);
-          await pause(poll);
-        }
-      } finally {
-        onWait?.call(null);
+      if (notLiveRefusal(r) && kNotLiveEvery * notLive < kNotLiveFor) {
+        notLive++;
+        await pause(kNotLiveEvery);
+        await sync();
+        i--;
+        continue;
       }
+      final payAsset = '${args['asset'] ?? args['give_asset'] ?? ''}';
+      if (r.kind == 'settle_first' && command != 'offboard_quote') {
+        if (i >= tries) throw LeafRefusal('refused', DefaultWords.settleGaveUp, code: 'settle_gave_up', plain: true);
+        final coins = r.coins;
+        final ask = <String, dynamic>{if (coins.isNotEmpty) 'coins': coins else 'asset': r.asset};
+        final w = ReleaseWait(command: command, coins: coins, asset: r.asset, since: clock(), why: 'settle',
+            finalBy: nextFinalBy(null, r.fields, clock()));
+        await waiting(w, () async {
+          final until = clock().add(wait);
+          for (var first = true;; first = false) {
+            if (!first) await sync();
+            final v = await run('settle_first', ask);
+            final n = nextFinalBy(w.finalBy, v is Map ? v : null, clock());
+            if (n != w.finalBy) {
+              w.finalBy = n;
+              onWait?.call(w);
+            }
+            if (v is! Map || v['ready'] == true) return;
+            if (!clock().isBefore(until)) {
+              throw LeafRefusal('refused', DefaultWords.settleGaveUp, code: 'settle_gave_up', plain: true);
+            }
+            await pause(roundPoll);
+          }
+        });
+        continue;
+      }
+      if (r.kind == 'in_channel' && r.close.isNotEmpty && i < tries) {
+        final close = r.close;
+        await waiting(ReleaseWait(command: command, coins: close, asset: r.asset, since: clock(), why: 'channel'), () async {
+          final q = await run('quote', {'leaves': close});
+          await run('participate', {'leaves': close, 'shown': (q as Map)['coins']});
+          await released(close);
+        });
+        continue;
+      }
+      if (r.code == 'depth_limit' && i < tries && payAsset.isNotEmpty) {
+        final live = [
+          for (final c in (await coinsNow() ?? const []).whereType<Map>())
+            if (c['asset'] == payAsset && c['state'] == 'live') '${c['leaf_id']}'
+        ];
+        if (live.isEmpty) throw r;
+        await waiting(ReleaseWait(command: command, coins: live, asset: payAsset, since: clock(), why: 'depth'), () async {
+          final q = await run('quote', {'leaves': live});
+          await run('participate', {'leaves': live, 'shown': (q as Map)['coins']});
+          await released(live);
+        });
+        continue;
+      }
+      if (r.kind == 'refused' && r.message.contains('in live coins') && payAsset.isNotEmpty && i < tries) {
+        final held = inRoundCoins(await coinsNow() ?? const [], payAsset);
+        if (held.isNotEmpty) {
+          await waiting(ReleaseWait(command: command, coins: held, asset: payAsset, since: clock(), why: 'round'), () async {
+            final until = clock().add(wait);
+            for (;;) {
+              await sync();
+              final cs = await coinsNow() ?? const [];
+              if (inRoundCoins([for (final c in cs) if (c is Map && held.contains('${c['leaf_id']}')) c], payAsset).isEmpty) return;
+              if (!clock().isBefore(until)) {
+                throw LeafRefusal('refused',
+                    "the wallet's own round did not end in time; nothing was paid, and the payment can be asked again");
+              }
+              await pause(roundPoll);
+            }
+          });
+          continue;
+        }
+      }
+      if (r.kind != 'planned' || r.release.isEmpty || i >= tries) throw r;
+      await waiting(ReleaseWait(command: command, coins: r.release, asset: r.asset, since: clock()), () async {
+        await run('plan_release', {'leaves': r.release});
+        await released(r.release);
+      });
     }
   }
 }
@@ -2137,21 +2654,154 @@ Future<(BigInt, BigInt)?> boardAll(Future<dynamic> Function(String, [Map<String,
 }
 
 /// The most minutes a payment to an address out of the tree takes to reach the receiving
-/// wallet's figure, from the operator's interval between settlements ([roundSeconds]) and the
-/// chain's block interval ([blockSeconds], 60 when it says none). The whole way, not the
-/// settlement alone: the settlement's block, the paying wallet handing over its part once that
-/// block is in, the operator's payment to the address and its block, and the wallets' own passes
-/// and reads of the chain: four blocks and four minutes beside the settlement, rounded up to five
-/// minutes. On the testnet (a settlement a minute, a block a minute) that is ten minutes; payments
-/// measured there took three to six. The web wallet's `arrivalMinutes` (default-arca.js).
-int? addressArrivalMinutes(Object? roundSeconds, Object? blockSeconds) {
-  final n = roundSeconds is num ? roundSeconds : num.tryParse('${roundSeconds ?? ''}');
+/// wallet's figure, from the operator's interval between settlements ([roundSeconds]), the
+/// chain's block interval ([blockSeconds], 60 when it says none) and the most the operator says it
+/// takes to unlock the payment in a block ([unlockSeconds], its `offboards.unlock_within_seconds`;
+/// [kUnlockWithin] when it says none). The whole way, not the settlement alone: the settlement,
+/// its block and its certificate ([kAddressPathBlocks]), the unlock, and [kAddressPathSlack] for
+/// the wallets to read the chain, rounded up to five minutes: fifteen on the testnet while its
+/// operator publishes no unlock time. The web wallet's `arrivalMinutes` (default-arca.js).
+int? addressArrivalMinutes(Object? roundSeconds, Object? blockSeconds, [Object? unlockSeconds]) {
+  final n = _num(roundSeconds);
   if (n == null || n <= 0) return null;
-  final b0 = blockSeconds is num ? blockSeconds : num.tryParse('${blockSeconds ?? ''}');
-  final b = b0 != null && b0 > 0 ? b0 : 60;
-  final m = ((n + 4 * b + 240) / 60).ceil();
+  final m = ((n + kAddressPathBlocks * _blockOf(blockSeconds) + _unlockOf(unlockSeconds) + kAddressPathSlack) / 60).ceil();
   final five = (m / 5).ceil() * 5;
   return five < 5 ? 5 : five;
+}
+
+const kAddressPathBlocks = 2;
+const kAddressPathSlack = 120;
+const kUnlockWithin = 600;
+const kMoveOutBlocks = 2;
+const kMoveOutSlack = 30;
+
+num? _num(Object? v) => v is num ? v : num.tryParse('${v ?? ''}');
+num _blockOf(Object? b) {
+  final v = _num(b);
+  return v != null && v > 0 ? v : 60;
+}
+
+num _unlockOf(Object? u) {
+  final v = _num(u);
+  return v != null && v > 0 ? v : kUnlockWithin;
+}
+
+/// The most minutes a move out of the Ark to the wallet's own address takes (for a stake, a
+/// pool, a mix, a confidential payment): the operator's next settlement ([roundSeconds]), the
+/// wallet handing over its part of it at once, the settlement's block and the operator's unlock
+/// of the output in a block ([unlockSeconds], as for [addressArrivalMinutes]), with
+/// [kMoveOutBlocks] blocks and [kMoveOutSlack] seconds for the reads on either side. Nothing
+/// waits on another wallet: fourteen on the testnet. Null when the operator publishes no
+/// interval. The web wallet's `moveOutMinutes`.
+int? moveOutMinutes(Object? roundSeconds, Object? blockSeconds, [Object? unlockSeconds]) {
+  final n = _num(roundSeconds);
+  if (n == null || n <= 0) return null;
+  final m = ((n + kMoveOutBlocks * _blockOf(blockSeconds) + _unlockOf(unlockSeconds) + kMoveOutSlack) / 60).ceil();
+  return m < 1 ? 1 : m;
+}
+
+/// The minutes a deposit takes to be usable: a Sequentia block, and its block certified with its
+/// anchor buried under [anchorDepth] Bitcoin blocks (ten minutes each), rounded up to five. Five
+/// at depth 0: no anchor-depth wait is added that the operator does not count.
+int boardMinutes(Object? anchorDepth) {
+  final d = _num(anchorDepth);
+  final m = (d != null && d > 0 ? d * 10 : 0) + 5;
+  return (m / 5).ceil() * 5;
+}
+
+/// The minutes a settlement's coin takes to be the wallet's: the settlement, and its block
+/// certified with its anchor buried under [anchorDepth] Bitcoin blocks. 1 at depth 0 ("about a
+/// minute"); otherwise a minute and ten for each Bitcoin block, rounded up to five.
+int roundMinutes(Object? anchorDepth) {
+  final d = _num(anchorDepth);
+  if (d == null || d <= 0) return 1;
+  return ((1 + d * 10) / 5).ceil() * 5;
+}
+
+/// The minutes a payment that settles first usually waits before it goes, as the library's
+/// `settle_first` counts it (`usual_in_seconds`): the operator's next settlement; a settlement
+/// more when it holds them for every participant ([held]: its batches have no sweep); a block for
+/// the settlement and one for its certificate; ten minutes for each block of anchor depth the
+/// operator counts finality at (none at depth 0); and the operator's release: three of its passes
+/// when it publishes how long one takes ([passSeconds], one more pass then to build the
+/// settlement), else a settlement interval and a block. 6 on the testnet. The web wallet's
+/// `settleMinutes`.
+int settleMinutes(Object? roundSeconds, Object? blockSeconds, Object? anchorDepth, {bool held = false, Object? passSeconds}) {
+  final r0 = _num(roundSeconds);
+  final r = r0 != null && r0 > 0 ? r0 : 60;
+  final b = _blockOf(blockSeconds);
+  final d0 = _num(anchorDepth);
+  final d = d0 != null && d0 > 0 ? d0 : 0;
+  final p0 = _num(passSeconds);
+  final p = p0 != null && p0 > 0 ? p0 : null;
+  final release = p != null ? 3 * p : r + b;
+  final m = ((r + (p ?? 0) + (held ? r : 0) + 2 * b + d * 600 + release) / 60).ceil();
+  return m < 1 ? 1 : m;
+}
+
+/// [settleMinutes] for an operator as the library's `info` answers it (null: the defaults).
+int settleMinutesOf(Map? info) {
+  final si = info?['server_info'] is Map ? info!['server_info'] as Map : const {};
+  final f = si['fills'] is Map ? si['fills'] as Map : const {};
+  final b = si['batches'];
+  return settleMinutes(f['round_interval_seconds'], f['block_seconds'], info?['anchor_depth'],
+      held: b is Map && b['no_sweep'] == true, passSeconds: f['round_pass_seconds']);
+}
+
+/// The steps a payment settling first waits for, in order.
+const kWaitSteps = ['round', 'forfeits', 'block', 'certificate', 'anchor', 'release'];
+
+/// When a payment settling first is told it goes, and the step it waits for.
+typedef FinalBy = ({DateTime at, String? step});
+
+/// The time a payment settling first is told it goes by, from each answer of the library's
+/// `settle_first` or its `settle_first` refusal ([answer]: `usual_in_seconds`, else
+/// `final_in_seconds`; `waiting_for`; `ready`): the first answer sets it, and it stays while the
+/// step waited for stands or moves on (a step slower than usual makes it late, not later); it is
+/// set again only when the step goes back (a new settlement, an anchor rollback). The web
+/// wallet's `nextFinalBy`.
+FinalBy? nextFinalBy(FinalBy? prev, Map? answer, DateTime now) {
+  final secs = _num(answer?['usual_in_seconds'] ?? answer?['final_in_seconds']);
+  if (answer == null || answer['ready'] == true || secs == null) return prev;
+  final at = now.add(Duration(milliseconds: (secs * 1000).round()));
+  final step = answer['waiting_for']?.toString();
+  if (prev == null) return (at: at, step: step);
+  final back = step != null && prev.step != null && kWaitSteps.indexOf(step) < kWaitSteps.indexOf(prev.step!);
+  return back ? (at: at, step: step) : (at: prev.at, step: step ?? prev.step);
+}
+
+/// How long past the time it was told a payment settling first reads as taking longer.
+const kSettleLate = Duration(minutes: 2);
+
+/// The words of a payment settling first at [now]: within the minutes left to [finalBy], or
+/// [minutes] before the library has said; past [finalBy] by [kSettleLate], that it takes longer
+/// and goes by itself. The web wallet's `settleWords`.
+String settleWords(DateTime? finalBy, int? minutes, DateTime now) {
+  if (finalBy == null) return DefaultWords.goesThrough(minutes ?? 1);
+  if (now.isAfter(finalBy.add(kSettleLate))) return DefaultWords.goesThroughLate;
+  final left = (finalBy.difference(now).inMilliseconds / 60000).ceil();
+  return DefaultWords.goesThrough(left < 1 ? 1 : left);
+}
+
+/// The cause of a line of what is arriving: `return` (a coin coming home on the chain), `board`
+/// (money moved in from the chain), or `round` (a coin of a settlement). The web wallet's
+/// `arrivingCause`.
+String arrivingCause(Map a) {
+  if (a['state'] == 'exiting') return 'return';
+  if (a['deposit'] == true || a['kind'] == 'board') return 'board';
+  return 'round';
+}
+
+/// The seconds after which a line of [cause] is taking longer than it said.
+int statedSeconds(String cause, {int boardMin = 5, int roundMin = 1}) =>
+    cause == 'return' ? 2 * 86400 : cause == 'board' ? boardMin * 60 : roundMin <= 1 ? 180 : roundMin * 60;
+
+/// When, in words, for a line of [cause]: "about a minute" for a settlement's coin at anchor
+/// depth 0, never an anchor-depth wait the operator does not count.
+String causeWhen(String cause, {int boardMin = 5, int roundMin = 1}) {
+  if (cause == 'return') return DefaultWords.comingBackWhen;
+  if (cause == 'board') return DefaultWords.boardWhen(boardMin);
+  return roundMin <= 1 ? DefaultWords.arrivingSoon : DefaultWords.boardWhen(roundMin);
 }
 
 /// Whether the library's answer to an `offboard` is a payment already on its way: the same amount
@@ -2284,3 +2934,15 @@ Set<String> boardTxidsOf(Object? boards) => {
         for (final b in boards.whereType<Map>())
           if (b['server'] is Map && (b['server'] as Map)['txid'] is String) (b['server'] as Map)['txid'] as String,
     };
+
+/// The pending payments' store over SharedPreferences.
+class _PrefsPendingStore implements PendingStore {
+  _PrefsPendingStore(this.p);
+  final SharedPreferences p;
+  @override
+  String? getString(String key) => p.getString(key);
+  @override
+  void setString(String key, String value) => unawaited(p.setString(key, value));
+  @override
+  void remove(String key) => unawaited(p.remove(key));
+}

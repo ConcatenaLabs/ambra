@@ -1,12 +1,25 @@
 /// Default mode's own sentences, as the default-mode contract gives them (sequentia-web-wallet
 /// `docs/DEFAULT_MODE.md`, the same in every Sequentia wallet): change them there first.
 class DefaultWords {
-  static const receiveCode = 'Receive code';
-  static const receiveCodeLine = 'Any asset, any amount. A payment from another Sequentia wallet arrives in seconds. '
-      'Each code is paid once; a new one shows when it is.';
-  static const copyCode = 'Copy receive code';
-  static const codeCopied = 'Receive code copied';
   static const newCode = 'New code';
+  // Receive's one card: the QR code, this one line, and Copy; the rest behind More options.
+  static const receiveLine = 'Scan or share to get paid in BTC or any asset.';
+  static const copy = 'Copy';
+  static const moreOptions = 'More options';
+  static const fewerOptions = 'Fewer options';
+  static const requestAmount = 'Request a specific amount';
+  /// While a new code is asked for: the QR code holds the wallet's address meanwhile.
+  static const receiveWait = 'Making your receive code\u2026';
+  /// The line while Confidential is on: the QR code is the wallet's confidential address alone.
+  static const receiveTipConf = 'Any Sequentia asset, any amount, paid to your confidential address.';
+  /// A payment coming in while Receive is open (receive_watch.dart); once it counts, [received].
+  static const paymentArriving = 'Payment arriving\u2026';
+  /// Under More options: the card with the wallet's account for restricted assets.
+  static const restrictedReceive = 'Receive a restricted asset';
+  static const restrictedLine = 'Restricted assets are held in an account kept for this wallet. Give a sender your '
+      'account id, or the deposit address for one asset.';
+  static const accountId = 'Your account id (AID)';
+  static String depositFor(String ticker) => 'Deposit address for $ticker';
   static const amountInBtc = 'Amount in BTC (optional)';
   /// The amount's label when it is asked in an asset rather than BTC.
   static const amountOptional = 'Amount (optional)';
@@ -46,8 +59,8 @@ class DefaultWords {
   static String confidentialAmountHidden(String ticker) =>
       'Anyone reading the chain can see that this payment is $ticker, but not how much.';
   static const confidentialSeen = 'This payment\u2019s amount and asset can still be worked out by anyone reading the chain.';
-  /// When coins moved out of the Ark are ready: [minutes] is the most it takes
-  /// (addressArrivalMinutes), null when the operator publishes no round interval.
+  /// When coins moved out of the Ark to the wallet's own address are ready: [minutes] is the most
+  /// it takes (moveOutMinutes), null when the operator publishes no settlement interval.
   static String readyIn(int? minutes) => minutes == null
       ? 'They are ready shortly.'
       : 'They are ready within $minutes minute${minutes == 1 ? '' : 's'}.';
@@ -95,6 +108,66 @@ class DefaultWords {
       '$amount $ticker to this address is already on its way, so nothing more was sent. $arrives To pay the same again, send once it has arrived.';
   static String fee(String amount, String ticker) => 'Fee $amount $ticker';
   static String arriving(String amount, String ticker) => '$amount $ticker arriving';
+  /// Under an asset's figure: a payment received and still arriving, with how long (a coin of a
+  /// settlement is the wallet's once its block is certified, at the operator's anchor depth 0).
+  static String arrivingIn(String amount, String ticker) => '$amount $ticker arriving, in about a minute';
+  /// The figure of an asset held only in a payment still arriving: never a bare 0.
+  static const arrivingFigure = 'Arriving';
+  /// History's rows for what is not in the figure yet, and when it will be ([causeWhen]).
+  static const rowArriving = 'Arriving';
+  static const rowComingBack = 'Coming back';
+  static const arrivingSoon = 'about a minute';
+  static String boardWhen(int n) => 'usually within $n minutes';
+  static const comingBackWhen = 'within about two days';
+  static String comingBackWithin(int hours) => 'within about $hours hour${hours == 1 ? '' : 's'}';
+  static const takingLonger = 'taking longer than usual; the wallet keeps at it';
+  /// A payment that waits for the wallet's own money being moved (in a settlement now), [when] as
+  /// [causeWhen] says it.
+  static String waitRound(String when) => 'Your money is being moved: this goes ahead by itself ($when).';
+
+  /// A payment that waits only for the next settlement (coins still arriving settle first, or the
+  /// wallet's own upkeep is moving them): when it goes through ([settleWords]), past that time that
+  /// it takes longer, and, after three hours, that it did not go.
+  static String goesThrough(int minutes) =>
+      minutes <= 1 ? 'Goes through in about a minute' : 'Goes through within about $minutes minutes';
+  static const goesThroughLate = 'Taking longer than usual: this goes ahead by itself, or nothing is sent';
+  static const settleGaveUp = 'This payment could not go through yet: nothing was sent, and your money stays in your wallet.';
+
+  /// Money held on the chain moved in first, then sent or traded in one step: when it goes through
+  /// ([n] minutes at most), past that, or refused by the network.
+  static String bringIn(int n) => goesThrough(n);
+  static const bringLate = 'This is taking longer than usual. Nothing was sent, and your money is still yours.';
+  static const bringRefused = 'Nothing was sent, and your money is still yours. It can go to an address: ask for one, or paste one.';
+  static const feeMoved = 'The fee changed while your money was moved in, so nothing was sent. Here it is with the fee now.';
+
+  /// While a wallet opened on this phone for the first time finds what it holds (its restore), and
+  /// once that has run a few minutes, and far longer than any history should take.
+  static const finding = 'Syncing… finding everything this wallet holds.';
+  static const findingSlow = 'Syncing… this wallet has a long history, so finding everything it holds takes a few minutes. '
+      'Nothing has moved, and it opens by itself once it has.';
+  static const findingLong = 'Syncing… finding everything this wallet holds is taking far longer than it should. '
+      'Nothing has moved, and your coins are still yours. Close the app and open it again to start again.';
+  /// A payment or trade asked then.
+  static const findingLongPay = 'Your wallet is taking far longer than it should to find everything it holds, so nothing has moved. '
+      'Close the app and open it again to start again; your coins are still yours.';
+  static const findingTip = 'Scan or share to get paid in BTC or any asset. Your wallet is still finding everything it holds.';
+  /// The same while the service that holds the coins for instant payments does not answer: the
+  /// wallet asks again every half minute and never shows itself empty.
+  static const findingStalled = 'Syncing… the service that holds your coins for instant payments is not answering, so this wallet '
+      'has not found them yet. They are still yours, and show here once it answers.';
+  static const findingStalledPay = 'The service that holds your coins for instant payments is not answering, so this wallet has not '
+      'found them yet. Nothing has moved. They are still yours: they show in your balance once it answers, and can be sent from then.';
+  /// A payment or trade asked while the wallet opens: it goes on by itself once it has.
+  static const waitOpening = 'Your wallet is still opening; this goes on by itself once it has.';
+  static const stillOpening = 'Your wallet has not finished opening, so nothing has moved. If it does not open, close the app and open it again.';
+
+  /// A payment that waits to be made (pending_sends.dart): its Activity row while it waits; how it
+  /// ended, said once on Balance; and the review of the same payment asked again meanwhile.
+  static const rowSending = 'Sending';
+  static String pendingNotSent(String amount, String ticker) => '$amount $ticker was not sent: nothing left your wallet.';
+  static String pendingMaybeSent(String amount, String ticker) =>
+      'A payment of $amount $ticker may have gone before the app closed: check Activity before sending it again.';
+  static const sameOnItsWay = 'The same payment is already on its way: sending this pays it twice.';
   /// Held, spendable before, and taken back out of the chain with the Bitcoin block it rested on.
   static String redoing(String amount, String ticker) => '$amount $ticker being redone after a Bitcoin reorganisation';
   /// Not refreshed while the wallet was away: taken on the chain under its own key before it could
@@ -197,7 +270,9 @@ class DefaultWords {
 
   /// Every sentence above, filled with sample values: what the test reads.
   static List<String> all() => [
-        receiveCode, receiveCodeLine, copyCode, codeCopied, newCode, amountInBtc, amountOptional,
+        newCode, amountInBtc, amountOptional,
+        receiveLine, copy, moreOptions, fewerOptions, requestAmount, receiveWait, receiveTipConf, paymentArriving,
+        restrictedReceive, restrictedLine, accountId, depositFor('USDX'),
         confidential, confidentialLine, confidentialOn, addressCopied,
         recipient, recipientHint, review('5', 'USDX'), reviewLine, sent('5', 'USDX', 1.2), stillArriving('USDX'),
         stillArrivingWithin('USDX', 10), sendingLater('5', 'USDX'), sentMade('5', 'USDX', 10), notMade('5', 'USDX', 'tb1q68apqvgwps\u2026zedu'),
@@ -205,7 +280,12 @@ class DefaultWords {
         codeTakesAssets, addressNotNow, confidentialPurpose, confidentialAmountHidden('USDX'), confidentialSeen, readyIn(null), readyIn(1), readyIn(12),
         movingOut('1.00004 USDX', confidentialPurpose, 1), movingWaits('1.00004 USDX', confidentialPurpose),
         cannotMoveNow('1.00004 USDX'), notEnough('1', 'USDX'), notMoved, notReady, arrivesIn(null), arrivesIn(1), arrivesIn(12), sentThen('5', 'USDX', arrivesIn(1)), sentAlready('5', 'USDX', arrivesIn(5)), keepOpen,
-        fee('5', 'USDX'), arriving('5', 'USDX'), redoing('5', 'USDX'), keptSafe('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
+        fee('5', 'USDX'), arriving('5', 'USDX'), arrivingIn('5', 'USDX'), arrivingFigure, rowArriving, rowComingBack,
+        arrivingSoon, boardWhen(5), comingBackWhen, comingBackWithin(1), comingBackWithin(3), takingLonger, waitRound(arrivingSoon),
+        goesThrough(1), goesThrough(6), goesThroughLate, settleGaveUp, bringIn(10), bringLate, bringRefused, feeMoved,
+        finding, findingSlow, findingLong, findingLongPay, findingTip, findingStalled, findingStalledPay, waitOpening, stillOpening,
+        rowSending, pendingNotSent('5', 'USDX'), pendingMaybeSent('5', 'USDX'), sameOnItsWay,
+        redoing('5', 'USDX'), keptSafe('5', 'USDX'), received('5', 'USDX'), btcFee, feeIn('USDX'),
         arrivesAfterBlock, noFees, btcSentAfterBlock('0.001'),
         btcUpTo('0.001'), couldNotSend, byAddress(arrivesAfterBlock), arrivesNextBlock, moving('0.001', 'BTC'),
         byAddressLarge('1,500'), byAddressNoWay, giveCode, invoiceNoWay,

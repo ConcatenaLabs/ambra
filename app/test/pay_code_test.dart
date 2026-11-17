@@ -176,4 +176,69 @@ void main() {
       expect(q.typeNumber, lessThanOrEqualTo(16));
     });
   });
+
+  // The library writes `reads` in every request: the record formats it takes coins in (arca
+  // covenant/src/batch.rs RECORD_FORMATS), which a payer must see (pay-code.test.mjs).
+  group('reads in the short form', () {
+    const liveReads = ['leaf-2', 'leaf-3', 'accumulator-1', 'accumulator-4', 'coin-2', 'landing-2'];
+    final infoOp = 'ab' * 32, infoGen = 'cd' * 32;
+    String hexOf(String s) => utf8.encode(s).map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+    final req = <String, dynamic>{
+      'kind': 'request', 'genesis_hash': infoGen, 'operator': infoOp, 'owner': '11' * 32, 'owner_nonce': '22' * 32,
+      'mailbox': '33' * 32, 'exit_delay_units': 4096, 'until': 1793350000, 'landing': '44' * 20, 'template': 'vtxo-2',
+    };
+    String lib(Map<String, dynamic> r) => 'arca:${hexOf(jsonEncode(r))}';
+    Map<String, dynamic>? back(String short) =>
+        libraryRequest(expandRequest(short, operator: infoOp, genesis: infoGen)!);
+
+    test("the library's list in two bytes, and back exactly", () {
+      expect(recordFormats, liveReads);
+      final r = {...req, 'reads': liveReads};
+      final short = compactRequest(lib(r));
+      expect(short, isNotNull, reason: 'a request with reads goes short');
+      expect(back(short!), r);
+      expect(bech32mDecode(short)!.$2.length - bech32mDecode(compactRequest(lib(req))!)!.$2.length, 3,
+          reason: 'two bytes of mask, one count');
+      // A shorter list, a list with a name the table does not hold, and an empty one, each back as written.
+      for (final reads in [
+        ['leaf-2', 'coin-2'],
+        [...liveReads, 'coin-9'],
+        ['coin-9'],
+        <String>[],
+      ]) {
+        final x = {...req, 'reads': reads};
+        expect(back(compactRequest(lib(x))!), x, reason: jsonEncode(reads));
+      }
+      // A list the short form could not give back as written stays in the library's spelling.
+      for (final reads in <Object>[
+        ['coin-2', 'leaf-2'],
+        ['leaf-2', 'leaf-2'],
+        ['coin-9', 'leaf-2'],
+        ['Leaf 2'],
+        'leaf-2',
+        [7],
+      ]) {
+        expect(compactRequest(lib({...req, 'reads': reads})), isNull, reason: jsonEncode(reads));
+      }
+      // A mask naming a bit past the table is not read.
+      final d = [...bech32mDecode(short)!.$2];
+      d[d.length - 3] |= 0x80;
+      expect(readShortRequest(bech32mEncode('sqr', d)), isNull);
+    });
+
+    // A receive request exactly as the live leaf library made it (the testnet's operator and chain).
+    const live = 'request:7b22657869745f64656c61795f756e697473223a3235342c2267656e657369735f68617368223a2264646431316435346338376132626439343430306664333163653035643865313131306262346237386537313033663733383334323038366663346561393265222c226b696e64223a2272657175657374222c226c616e64696e67223a2236313039643437353038663732613036613162303533303561303637326339653430383530663332222c226d61696c626f78223a2230353966656533663030383630393164376439623562393138383539613331383130626132353466363661366662353061353865636138623438656630643234222c226f70657261746f72223a2262366634633539323461643831393437363538636638356262393364393236376566633534633766636232653435373765386339353463363866613038376262222c226f776e6572223a2230356139613531613236653363303463363035393231353339393362383664343231386438386566343566386361376639613139633132306630383031316634222c226f776e65725f6e6f6e6365223a2234343938353938326433313135623661313063366234313265373835393865633966623332623232653962316564313933633161656536303738393164316134222c227265616473223a5b226c6561662d32222c226c6561662d33222c22616363756d756c61746f722d31222c22616363756d756c61746f722d34222c22636f696e2d32222c226c616e64696e672d32225d2c22756e74696c223a313739373139353238327d';
+
+    test("the live library's request goes short, under 300 characters, and comes back exactly", () {
+      final r = libraryRequest(live)!;
+      expect(r['reads'], liveReads);
+      final short = compactRequest(live);
+      expect(short, isNotNull, reason: 'the live request has nothing the short form leaves out');
+      expect(short!.length, lessThan(300));
+      expect(live.length, greaterThan(4 * short.length));
+      expect(libraryRequest(expandRequest(short, operator: r['operator'] as String, genesis: r['genesis_hash'] as String)!), r);
+      final code = PayCode(address: tb1, ark: vectors['ark'] as String, sequentia: live).build();
+      expect(code, matches(RegExp(r'&sequentia=SQR1[0-9A-Z]+$')));
+    });
+  });
 }

@@ -256,11 +256,21 @@ String _down(String v) => _bechParts(v) != null ? v.toLowerCase() : v;
 // ---- the short receive request -------------------------------------------------------------
 
 const requestHrp = 'sqr';
-const _fV2 = 1, _fLanding = 2, _fAsset = 4, _fValue = 8, _fChannels = 16;
+const _fV2 = 1, _fLanding = 2, _fAsset = 4, _fValue = 8, _fChannels = 16, _fReads = 32;
 const _carried = {
   'kind', 'genesis_hash', 'operator', 'owner', 'owner_nonce', 'mailbox', 'exit_delay_units',
-  'until', 'landing', 'asset', 'value', 'template', 'channels',
+  'until', 'landing', 'asset', 'value', 'template', 'channels', 'reads',
 };
+
+/// The record formats a request's `reads` names by bit, in the leaf library's order (arca
+/// `covenant/src/batch.rs` `RECORD_FORMATS`). `reads` is the list of formats the wallet takes
+/// coins in; a payer gives it only coins of those formats, so it must travel. The short form
+/// carries it as two bytes (big-endian, bit k for the k-th name here), then a count byte and each
+/// name the table does not hold (a length byte, then its letters). Never reorder or remove a name:
+/// a code made with this table is read with it; a name added later travels by its letters until
+/// the table is extended, here and in every copy of `pay-code.js`.
+const recordFormats = ['leaf-2', 'leaf-3', 'accumulator-1', 'accumulator-4', 'coin-2', 'landing-2'];
+final _formatRe = RegExp(r'^[a-z0-9][a-z0-9._-]{0,62}$');
 
 bool _isHex(Object? s, int n) => s is String && s.length == 2 * n && RegExp(r'^[0-9a-fA-F]+$').hasMatch(s);
 List<int> _hexBytes(String s) => [for (var i = 0; i < s.length; i += 2) int.parse(s.substring(i, i + 2), radix: 16)];
@@ -312,12 +322,34 @@ String? compactRequest(String text) {
     channels = [for (final e in c.entries) MapEntry('${e.key}', e.value)];
     if (channels.any((e) => !_isHex(e.key, 32) || !_isHex(e.value, 32))) return null;
   }
+  // reads: the table's names in its order, then names it does not hold, each once; anything else
+  // stays in the library's spelling, so the list comes back exactly as it was written.
+  var readsMask = 0;
+  final readsExtra = <String>[];
+  if (r.containsKey('reads')) {
+    final list = r['reads'];
+    if (list is! List || list.length > 32 || list.toSet().length != list.length) return null;
+    var last = -1, extra = false;
+    for (final f in list) {
+      if (f is! String || !_formatRe.hasMatch(f)) return null;
+      final k = recordFormats.indexOf(f);
+      if (k >= 0) {
+        if (extra || k < last) return null;
+        last = k;
+        readsMask |= 1 << k;
+      } else {
+        extra = true;
+        readsExtra.add(f);
+      }
+    }
+  }
   var flags = 0;
   if (r.containsKey('template')) flags |= _fV2;
   if (r.containsKey('landing')) flags |= _fLanding;
   if (r.containsKey('asset')) flags |= _fAsset;
   if (value != null) flags |= _fValue;
   if (channels != null) flags |= _fChannels;
+  if (r.containsKey('reads')) flags |= _fReads;
   final b = <int>[
     1, flags,
     ..._hexBytes(r['operator'] as String).sublist(0, 4),
@@ -342,6 +374,14 @@ String? compactRequest(String text) {
         ..addAll(_hexBytes(e.value as String));
     }
   }
+  if (r.containsKey('reads')) {
+    b.addAll([readsMask >> 8, readsMask & 0xff, readsExtra.length]);
+    for (final f in readsExtra) {
+      b
+        ..add(f.length)
+        ..addAll(utf8.encode(f));
+    }
+  }
   return bech32mEncode(requestHrp, b);
 }
 
@@ -353,7 +393,7 @@ String? compactRequest(String text) {
   final b = d.$2;
   if (b.length < 112 || b[0] != 1) return null;
   final flags = b[1];
-  if (flags & ~31 != 0) return null;
+  if (flags & ~63 != 0) return null;
   String at(int i, int n) => _bytesHex(b.sublist(i, i + n));
   final r = <String, dynamic>{
     'kind': 'request',
@@ -401,6 +441,30 @@ String? compactRequest(String text) {
       ch[at(s, 32)] = at(s + 32, 32);
     }
     r['channels'] = ch;
+  }
+  if (flags & _fReads != 0) {
+    final s = need(2);
+    if (s == null) return null;
+    final mask = (b[s] << 8) | b[s + 1];
+    if (mask >> recordFormats.length != 0) return null;
+    final reads = [for (var k = 0; k < recordFormats.length; k++) if (mask & (1 << k) != 0) recordFormats[k]];
+    final n = need(1);
+    if (n == null) return null;
+    for (var k = 0; k < b[n]; k++) {
+      final l = need(1);
+      if (l == null) return null;
+      final f0 = need(b[l]);
+      if (f0 == null) return null;
+      String f;
+      try {
+        f = utf8.decode(b.sublist(f0, f0 + b[l]));
+      } catch (_) {
+        return null;
+      }
+      if (!_formatRe.hasMatch(f) || reads.contains(f)) return null;
+      reads.add(f);
+    }
+    r['reads'] = reads;
   }
   if (i != b.length) return null;
   return (operatorPrefix: at(2, 4), genesisPrefix: at(6, 4), request: r);

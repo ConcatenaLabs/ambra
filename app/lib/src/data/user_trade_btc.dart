@@ -45,6 +45,76 @@ const int kInvoiceLeftSeconds = 600;
 /// A step whose outcome is unknown is looked for this long before the trade is called failed.
 const int kUncertainMs = 10 * 60 * 1000;
 
+/// How long the maker has to lock its side of a purchase paid with BTC: a maker that has not paid
+/// the asset in by then is not going to, so the trade comes back with nothing of the wallet's moved.
+/// The web wallet's MAKER_LOCK_MS.
+const int kMakerLockMs = 5 * 60 * 1000;
+
+/// A stated wait passed by this long reads as taking longer than usual. The web wallet's
+/// SETTLE_LATE_MS.
+const int kSettleLateMs = 120000;
+
+/// The operator's anchor depth as the library's `info` answers it, or null.
+int? anchorDepthOf(Map? info) {
+  final d = info?['anchor_depth'];
+  return d is num ? d.toInt() : int.tryParse('${d ?? ''}');
+}
+
+/// The minutes a coin waits to be settled by the operator's next round, as the leaf library counts
+/// it: the round; a round more when the operator holds its rounds for the other participations'
+/// forfeits ([held]: its batches have no sweep); a block for the round and one for its certificate;
+/// about ten minutes for each Bitcoin block of anchor depth; and the operator's release, three of its
+/// passes when it publishes how long one takes ([passSeconds], one more pass then to build the
+/// round), else a round and a block. 6 on the testnet. The web wallet's settleMinutes.
+int settleMinutes(Object? roundSeconds, Object? blockSeconds, Object? anchorDepth, {bool held = false, Object? passSeconds}) {
+  num? n(Object? v) => v is num ? v : num.tryParse('${v ?? ''}');
+  final r = (n(roundSeconds) ?? 0) > 0 ? n(roundSeconds)! : 60;
+  final b = (n(blockSeconds) ?? 0) > 0 ? n(blockSeconds)! : 60;
+  final d = (n(anchorDepth) ?? 0) > 0 ? n(anchorDepth)! : 0;
+  final p = (n(passSeconds) ?? 0) > 0 ? n(passSeconds)! : null;
+  final release = p != null ? 3 * p : r + b;
+  final m = ((r + (p ?? 0) + (held ? r : 0) + 2 * b + d * 600 + release) / 60).ceil();
+  return m < 1 ? 1 : m;
+}
+
+/// [settleMinutes] for an operator as the library's `info` answers it (null: the defaults). The web
+/// wallet's settleMinutesOf.
+int settleMinutesOf(Map? info) {
+  final si = info?['server_info'] is Map ? info!['server_info'] as Map : const {};
+  final f = si['fills'] is Map ? si['fills'] as Map : const {};
+  final batches = si['batches'];
+  return settleMinutes(f['round_interval_seconds'], f['block_seconds'], anchorDepthOf(info),
+      held: batches is Map && batches['no_sweep'] == true, passSeconds: f['round_pass_seconds']);
+}
+
+const List<String> _waitSteps = ['round', 'forfeits', 'block', 'certificate', 'anchor', 'release'];
+
+/// When a wait the library states ends, from each of its answers (`usual_in_seconds`, what it
+/// usually takes, else `final_in_seconds`, the most; and `waiting_for`, the step): the first answer
+/// sets it, and it stays while the step waited for stands or moves on (a step slower than usual makes
+/// it late, not later); it is set again only when the step goes back (a new round, an anchor
+/// rollback). [prev] is the last `{finalBy, step}` (ms, the step's name) or null. The web wallet's
+/// nextFinalBy.
+Map<String, dynamic>? nextFinalBy(Map? prev, Map? answer, int nowMs) {
+  final secs = answer?['usual_in_seconds'] ?? answer?['final_in_seconds'];
+  if (answer == null || answer['ready'] == true || secs is! num) return prev == null ? null : Map<String, dynamic>.from(prev);
+  final at = nowMs + (secs * 1000).round();
+  final step = answer['waiting_for'] as String?;
+  if (prev == null || prev['finalBy'] == null) return {'finalBy': at, 'step': step};
+  final ps = prev['step'] as String?;
+  final back = step != null && ps != null && _waitSteps.indexOf(step) < _waitSteps.indexOf(ps);
+  return back ? {'finalBy': at, 'step': step} : {'finalBy': prev['finalBy'], 'step': step ?? ps};
+}
+
+/// Whether [e] is the library's refusal (a step it will not take), rather than a step that did not
+/// answer: its kind `refused`, or words that start so.
+bool isRefusal(Object e) {
+  try {
+    if ((e as dynamic).kind == 'refused') return true;
+  } catch (_) {}
+  return RegExp(r'^(Exception: )?refused\b', caseSensitive: false).hasMatch('$e');
+}
+
 /// The seconds of median time the leaf received under the hash must keep before its home date,
 /// for a Bitcoin payment whose whole lock is `blocks`.
 int needSeconds(int? blocks) => ((blocks ?? 18) + kExtraBlocks) * kBitcoinBlockSeconds + kReactionSeconds;
@@ -321,7 +391,21 @@ class BtcTrades {
       rec['spends'] = t.quote!['spends'];
       rec['amount'] = t.quote!['amount'];
       await put(rec);
-      final r = (await run('lightning_pay', {'invoice': o['invoice'], 'asset': t.quote!['asset'], 'max_fee_ppm': maxFeePpm, 'shown': t.quote})) as Map;
+      Map r;
+      try {
+        r = (await run('lightning_pay', {'invoice': o['invoice'], 'asset': t.quote!['asset'], 'max_fee_ppm': maxFeePpm, 'shown': t.quote})) as Map;
+      } catch (e) {
+        // What the payment would spend changed since the ticket was shown (the wallet's coins moved
+        // meanwhile: a coin arrived or settled, and another one is chosen): nothing was signed, and
+        // the price is asked again and shown, never paid on terms nobody saw.
+        if (!'$e'.contains('changed since it was shown')) rethrow;
+        rec['state'] = 'failed';
+        rec['error'] = 'what the payment spends changed before it was confirmed';
+        await put(rec);
+        release(maker, '${o['swap']}');
+        if (t.invoice != null) _cancel(_forTerms(t), '${t.invoice!['payment_hash']}');
+        throw const BtcLapsed();
+      }
       rec['change'] = r['change'];
       rec['state'] = 'sent';
       rec['sentAt'] = now();
@@ -351,6 +435,13 @@ class BtcTrades {
     // as the trade is followed, and a receive it never pays lapses and the trade comes back.
     rec['state'] = 'waiting';
     rec['waitingSince'] = now();
+    // What the row says the wait is before the library's first answer: the library's own figure for a
+    // leaf made by the operator's next round ([settleMinutesOf], its step "round").
+    Map? info;
+    try {
+      info = (await run('info')) as Map?;
+    } catch (_) {}
+    rec['waitFirstBy'] = (rec['waitingSince'] as int) + settleMinutesOf(info) * 60000;
     await put(rec);
     try {
       await fetchJson('$maker/v1/btc/lock', post: {'swap': rec['swap'], 'invoice': r['invoice']});
@@ -450,6 +541,17 @@ class BtcTrades {
         rec['returnedAt'] = now();
         return put(rec);
       }
+      // A maker that has not paid the asset in by now is not going to: nothing of the wallet's has
+      // moved, so the trade comes back and the maker lets its offer go. The wallet never pays BTC for
+      // a trade it has called returned.
+      final since = ((rec['waitingSince'] ?? rec['at']) as num?)?.toInt() ?? now();
+      if ((rcv['state'] == 'waiting' || rcv['state'] == null) && now() - since >= kMakerLockMs) {
+        release('${rec['maker']}', '${rec['swap']}');
+        rec['state'] = 'returned';
+        rec['returnedAt'] = now();
+        rec['why'] = 'the maker did not lock its side in time';
+        return put(rec);
+      }
       // The maker's lock, asked for again in case it missed it.
       if (rcv['state'] == 'waiting') {
         fetchJson('${rec['maker']}/v1/btc/lock', post: {'swap': rec['swap'], 'invoice': rec['invoiceX']}).catchError((_) => <String, dynamic>{});
@@ -458,6 +560,12 @@ class BtcTrades {
       try {
         r = (await run('lightning_receive_ready', {'hash': hash, 'need_seconds': needSeconds(lock)})) as Map;
       } catch (e) {
+        // Only the library's refusal says the leaf will never do (nothing of the wallet's has left);
+        // an operator that does not answer now is asked again.
+        if (!isRefusal(e)) {
+          log('[user trade] not ready yet: $e');
+          return put(rec);
+        }
         log('[user trade] the leaf will not do: $e');
         rec['state'] = 'returned';
         rec['returnedAt'] = now();
@@ -467,6 +575,13 @@ class BtcTrades {
       if (r['ready'] != true) {
         if (r['why'] != rec['readyWhy']) log('[user trade] not yet: ${r['why']}');
         rec['readyWhy'] = r['why'];
+        // The wait the row states: the library's own (`usual_in_seconds`, else `final_in_seconds`, and
+        // its step), kept while the step stands or moves on. While the maker has not paid in
+        // (`payment`, which no round bounds) it is the time the maker has to lock its side.
+        final prev = rec['waitBy'] is Map && (rec['waitBy'] as Map)['step'] != 'payment' ? rec['waitBy'] as Map : null;
+        rec['waitBy'] = r['waiting_for'] == 'payment'
+            ? {'finalBy': (((rec['waitingSince'] ?? rec['at']) as num?)?.toInt() ?? now()) + kMakerLockMs, 'step': 'payment'}
+            : nextFinalBy(prev, r, now());
         return put(rec);
       }
       rec['state'] = 'sent';
@@ -506,6 +621,11 @@ class BtcTrades {
       if (st['state'] != 'complete') return put(rec);
       rec['preimage'] = st['preimage'];
       await put(rec);
+      // The operator is handed the preimage before anything else, so what was bought never rests on
+      // the app staying open: the operator serves it, and the wallet on any device claims the asset at
+      // its next sync. Safe to hand on: it opens the wallet's leaf only with the wallet's own key, and
+      // the maker, paid, knows it already.
+      await _postPreimage(rec);
       await run('lightning_receive_preimage', {'hash': hash, 'preimage': st['preimage']});
       try {
         await run('sync');
@@ -513,6 +633,8 @@ class BtcTrades {
         log('[user trade] sync: $e');
       }
     }
+    // Handed on once more while the claim has not run, should the first try have failed.
+    if (rec['preimage'] != null && rec['posted'] != true && rec['receiveState'] != 'received') await _postPreimage(rec);
     if (rec['preimage'] != null) {
       final r2 = (((await run('lightning_receives')) as Map?)?[hash] as Map?) ?? const {};
       rec['receiveState'] = r2['state'];
@@ -538,6 +660,17 @@ class BtcTrades {
 }
 
 extension on BtcTrades {
+  /// Hands the operator the preimage of a purchase whose BTC is paid; `posted` once it took it.
+  Future<void> _postPreimage(Map<String, dynamic> rec) async {
+    try {
+      await run('lightning_post_preimage', {'hash': rec['hash'], 'preimage': rec['preimage']});
+      rec['posted'] = true;
+      await put(rec);
+    } catch (e) {
+      log('[user trade] post preimage: $e');
+    }
+  }
+
   /// What a sync said of the trade's steps that did not go: a participation or Lightning step's
   /// error or refusal, or a witness that did not succeed (then the wallet moves nothing on).
   void _logSync(Object? v) {

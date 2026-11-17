@@ -55,6 +55,12 @@ class StandIn {
   final btcPaid = <String>[];
   var parts = <Map<String, dynamic>>[];
   bool ready = false;
+  /// What `lightning_receive_ready` adds to a not-ready answer (its stated wait), and an error it
+  /// throws instead.
+  Map<String, dynamic> readyWait = const {};
+  Object? readyThrows;
+  /// The maker quotes nothing (it holds what it sells for a purchase still to pay).
+  bool noQuotes = false;
   String? want, posted, claimed, stored;
   BigInt? makerSats, lastWant;
   int? maxDelay, needAsked;
@@ -104,7 +110,8 @@ class StandIn {
         return receives;
       case 'lightning_receive_ready':
         needAsked = a['need_seconds'] as int;
-        return ready ? {'ready': true} : {'ready': false, 'why': 'the received leaf\'s round is not final'};
+        if (readyThrows != null) throw readyThrows!;
+        return ready ? {'ready': true} : {'ready': false, 'why': 'the received leaf\'s round is not final', ...readyWait};
       case 'lightning_receive_preimage':
         receives['${a['hash']}']!['preimage'] = a['preimage'];
         receives['${a['hash']}']!['state'] = 'received';
@@ -128,6 +135,7 @@ class StandIn {
 
   Future<Map<String, dynamic>> fetchJson(String url, {Map<String, dynamic>? post}) async {
     if (url.endsWith('/v1/quotes')) {
+      if (noQuotes) return {'quotes': []};
       return {
         'quotes': [
           {'give_asset': 'BTC', 'want_asset': x, 'rate_num': '2', 'rate_den': '1', 'min_give': '1000', 'max_give': '1000000'},
@@ -461,6 +469,59 @@ void main() {
     expect(s.btcPaid, isEmpty);
   });
 
+  test('buying with BTC: the row states the library\'s wait, an operator that does not answer is asked again, and the proof is handed on', () async {
+    final s = StandIn()
+      ..makerSats = BigInt.from(50000)
+      ..claimed = '${100000 - 616}';
+    final eng = engine(s, 'BTC', x);
+    final q = await eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
+    final t0 = DateTime.now().millisecondsSinceEpoch;
+    var r = await eng.confirm(q.choice!, q.ticket!);
+    // Before the library's first answer: its figure for the operator's next round.
+    expect((r['waitFirstBy'] as int) - (r['waitingSince'] as int), settleMinutesOf(null) * 60000);
+    expect(tradeStateWord(r, t0), UserWords.waitingOther(settleMinutesOf(null)));
+    s.receives[h]!['state'] = 'issuing';
+    s.readyWait = {'waiting_for': 'block', 'usual_in_seconds': 90};
+    r = await eng.advance((await eng.records()).first);
+    expect((r['waitBy'] as Map)['step'], 'block');
+    expect(tradeStateWord(r, DateTime.now().millisecondsSinceEpoch), UserWords.waitingOther(2));
+    // An operator that does not answer now is no refusal: the trade waits on.
+    s.readyThrows = Exception('the operator did not answer');
+    r = await eng.advance((await eng.records()).first);
+    expect(r['state'], 'waiting');
+    s.readyThrows = null;
+    s.ready = true;
+    r = await eng.advance((await eng.records()).first);
+    expect(r['preimage'], p);
+    expect(s.calls, contains('lightning_post_preimage'), reason: 'the operator is handed the proof before the claim');
+    expect(s.calls.indexOf('lightning_post_preimage') < s.calls.indexOf('lightning_receive_preimage'), isTrue);
+  });
+
+  test('buying with BTC: the library\'s refusal of the leaf returns the trade, nothing paid', () async {
+    final s = StandIn()..makerSats = BigInt.from(50000);
+    final eng = engine(s, 'BTC', x);
+    final q = await eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
+    await eng.confirm(q.choice!, q.ticket!);
+    s.receives[h]!['state'] = 'issuing';
+    s.readyThrows = Exception('refused: the leaf\'s home date is too near');
+    final r = await eng.advance((await eng.records()).first);
+    expect(r['state'], 'returned');
+    expect(s.btcPaid, isEmpty);
+  });
+
+  test('a second purchase paid with BTC, asked while one is still to pay and nobody offers the pair: said as that', () async {
+    final s = StandIn()
+      ..makerSats = BigInt.from(50000)
+      ..claimed = '${100000 - 616}';
+    final eng = engine(s, 'BTC', x);
+    final q = await eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
+    await eng.confirm(q.choice!, q.ticket!);
+    s.noQuotes = true;
+    final q2 = await eng.quote(pay: 'BTC', receive: x, amount: BigInt.from(50000));
+    expect(q2.why, 'btc-ahead');
+    expect(forbiddenIn(UserWords.btcAhead), isEmpty);
+  });
+
   test('a wallet with no Bitcoin Lightning is offered no BTC trade', () async {
     final s = StandIn();
     expect((await engine(s, 'BTC', x, btc: false).quote(pay: 'BTC', receive: x, amount: BigInt.from(50000))).why, 'no-funds');
@@ -577,10 +638,21 @@ void main() {
     expect(s.btcPaid, isEmpty);
   });
 
-  test('the rows say what is already true, with the minutes waited', () {
+  test('the rows say what is already true: a purchase waiting states the library\'s wait, then that it is late', () {
     const t = 10 * 60000;
-    expect(tradeStateWord({'state': 'waiting', 'source': 'btc-gateway', 'waitingSince': t - 30000}, t), UserWords.waitingOther);
-    expect(tradeStateWord({'state': 'waiting', 'source': 'btc-gateway', 'waitingSince': 0}, t), '${UserWords.waitingOther} (10 min)');
+    // Before the library's first answer: its figure for the operator's next round.
+    expect(tradeStateWord({'state': 'waiting', 'source': 'btc-gateway', 'waitingSince': t, 'waitFirstBy': t + 6 * 60000}, t),
+        UserWords.waitingOther(6));
+    // The library's own wait, counted down.
+    expect(tradeStateWord({'state': 'waiting', 'source': 'btc-gateway', 'waitingSince': 0, 'waitFirstBy': 6 * 60000, 'waitBy': {'finalBy': t + 90000, 'step': 'block'}}, t),
+        UserWords.waitingOther(2));
+    expect(UserWords.waitingOther(1), contains('within about 1 minute.'));
+    // Past it by two minutes: late, never a count of minutes waited.
+    expect(tradeStateWord({'state': 'waiting', 'source': 'btc-gateway', 'waitingSince': 0, 'waitBy': {'finalBy': t - 120001}}, t), UserWords.waitingOtherLate);
+    expect(tradeStateWord({'state': 'waiting', 'source': 'btc-gateway', 'waitingSince': 0, 'waitBy': {'finalBy': t - 60000}}, t), UserWords.waitingOther(1));
+    // Paying the BTC, then paid and handed on: what was bought is collected even if the app closes.
+    expect(tradeStateWord({'state': 'sent', 'source': 'btc-gateway', 'dir': 'buy', 'sentAt': t}, t), UserWords.btcPaying);
+    expect(tradeStateWord({'state': 'sent', 'source': 'btc-gateway', 'dir': 'buy', 'preimage': p, 'posted': true, 'sentAt': t}, t), UserWords.btcCollecting);
     expect(tradeStateWord({'state': 'sent', 'source': 'btc-gateway', 'dir': 'buy', 'preimage': p, 'receiveState': 'received', 'sentAt': t - 120000}, t),
         '${UserWords.received} (2 min)');
     expect(tradeStateWord({'state': 'sent', 'source': 'leaf-maker', 'sentAt': t}, t), UserWords.sent);

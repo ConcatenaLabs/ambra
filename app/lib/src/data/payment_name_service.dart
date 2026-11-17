@@ -22,8 +22,18 @@ import 'wallet_repository.dart';
 /// the Bitcoin ark for the amount a payer chose) and keeps the stock of signed receive codes it
 /// leaves with the service topped up (name_stock.dart), so a Sequentia wallet paying the name gets
 /// a new code of this wallet's while it is closed too.
+///
+/// In default mode every wallet holds a name with nothing asked ([LnAddress.ensure]): the name its
+/// key holds at the service, else its word name; never again by itself once its person removed it,
+/// on any device. A name is shown ([named]) only once the service has confirmed it since the wallet
+/// opened and while the service answers; until then Receive shows the full code.
 class PaymentNameService extends ChangeNotifier {
-  PaymentNameService._();
+  PaymentNameService._() {
+    // Back in default mode: the wallet gets its name, as when it opened.
+    DevMode.instance.addListener(() {
+      if (!DevMode.instance.on) _ensure();
+    });
+  }
   static final PaymentNameService instance = PaymentNameService._();
 
   /// What a payer may send, in sats: from this up to the ark's largest coin, under what goes to
@@ -44,12 +54,26 @@ class PaymentNameService extends ChangeNotifier {
   String? get name => _a?.name;
   String? get address => _a?.address;
 
+  /// Whether the service has confirmed, since the wallet opened, that the wallet holds [name].
+  bool get verified => _a?.verified ?? false;
+
+  /// Whether the service failed to answer the last time it was asked.
+  bool get unreachable => _a?.unreachable ?? false;
+
+  /// 'busy' while the service limits new names from this network (and the wallet asks again).
+  String? get refused => _a?.refused;
+
+  /// The name a payer can be given now: confirmed by the service and the service answering
+  /// (`recvNamed` in the web wallet). Receive's QR code is this name, or the full code without one.
+  String? get named => verified && !unreachable ? address : null;
+
   /// The name as a person reads it: a word name with a capital for each word.
   String? get display => _a?.display;
 
   /// Whether the name held is this wallet's word name.
   bool get isWordName => _a?.isWordName ?? false;
-  String? get lnurl => _a?.lnurl;
+  /// The LNURL-pay a receive code carries, once the service has confirmed the name.
+  String? get lnurl => verified ? _a?.lnurl : null;
 
   /// How many signed codes this wallet has left with the service, as last topped up.
   int get stocked => _a?.stock?.mine.length ?? 0;
@@ -72,7 +96,7 @@ class PaymentNameService extends ChangeNotifier {
       debugPrint('[lnaddr] no name key: $e');
       return;
     }
-    final prefKey = 'ambra.lnaddr.name.$tag', stockKey = 'ambra.lnaddr.stock.$tag';
+    final prefKey = 'ambra.lnaddr.name.$tag', stockKey = 'ambra.lnaddr.stock.$tag', removedKey = 'ambra.lnaddr.removed.$tag';
     _a = LnAddress(
       base: Backend.lsp,
       domain: domain,
@@ -93,16 +117,36 @@ class PaymentNameService extends ChangeNotifier {
         final p = await SharedPreferences.getInstance();
         n == null ? await p.remove(prefKey) : await p.setString(prefKey, n);
       },
+      loadRemoved: () async => (await SharedPreferences.getInstance()).getBool(removedKey) ?? false,
+      saveRemoved: (v) async {
+        final p = await SharedPreferences.getInstance();
+        v ? await p.setBool(removedKey, true) : await p.remove(removedKey);
+      },
       log: (s) => debugPrint(s),
       onChange: notifyListeners,
     );
-    await _a!.recover();
-    _a!.start();
+    final a = _a!;
+    await a.recover();
+    a.start();
     notifyListeners();
+    _ensure();
+  }
+
+  /// Default mode's name for the open wallet, made with nothing asked ([LnAddress.ensure]); the
+  /// link to the service starts once it is there.
+  void _ensure() {
+    final a = _a;
+    if (a == null || DevMode.instance.on) return;
+    unawaited(a.ensure(want: () => !DevMode.instance.on).then((_) {
+      if (identical(a, _a)) {
+        a.start();
+        notifyListeners();
+      }
+    }, onError: (Object e) => debugPrint('[lnaddr] ensure: $e')));
   }
 
   void stop() {
-    _a?.stop();
+    _a?.close();
     _a = null;
     _key = null;
     _tag = null;

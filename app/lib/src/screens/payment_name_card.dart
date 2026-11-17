@@ -7,9 +7,11 @@ import '../data/payment_name_service.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
 
-/// "Your payment name", under the receive code: a name of the wallet's own at the node's domain,
-/// which another wallet pays in an amount it chooses, a Lightning wallet included. The web
-/// wallet's name box, in the contract's words (sequentia-web-wallet `docs/DEFAULT_MODE.md`).
+/// "Your payment name": a name of the wallet's own at the node's domain, which another wallet pays
+/// in an amount it chooses, a Lightning wallet included. Default mode keeps it in Settings (the More
+/// tab), where it is changed or removed, since Receive shows it in its QR code; developer mode keeps
+/// it on Receive, under the address. The web wallet's name box, in the contract's words
+/// (sequentia-web-wallet `docs/DEFAULT_MODE.md`, "Receive").
 class PaymentNameCard extends StatefulWidget {
   const PaymentNameCard({super.key});
   @override
@@ -114,15 +116,28 @@ class _PaymentNameCardState extends State<PaymentNameCard> {
   Widget build(BuildContext context) {
     final svc = PaymentNameService.instance;
     final dev = DevMode.instance.on;
-    final name = svc.address;
+    // A name kept from before shows once the service has confirmed it; until then the card says
+    // nothing and offers nothing, so no name is copied or replaced on a stale word.
+    final checking = svc.address != null && !svc.verified;
+    final name = checking ? null : svc.address;
+    // No name yet because the service limits new names from this network: said, and asked again.
+    final tip = name != null
+        ? (dev ? NameWords.devTip : NameWords.tip)
+        : svc.refused == 'busy'
+            ? NameWords.newBusy
+            : NameWords.none;
     return AmbraCard(
       key: const Key('payment-name'),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         SectionLabel(dev ? NameWords.devLabel : NameWords.label),
+        if (!checking) ...[
+          const SizedBox(height: 12),
+          Text(tip, key: const Key('payment-name-tip'), style: AmbraText.sub),
+        ],
         const SizedBox(height: 12),
-        Text(name != null ? (dev ? NameWords.devTip : NameWords.tip) : NameWords.none, style: AmbraText.sub),
-        const SizedBox(height: 12),
-        if (_editing) ...[
+        if (checking)
+          const SizedBox.shrink()
+        else if (_editing) ...[
           AmbraField(
             key: const Key('payment-name-input'),
             label: NameWords.choose,
@@ -167,7 +182,21 @@ class _PaymentNameCardState extends State<PaymentNameCard> {
               ScaffoldMessenger.of(context).showSnackBar(ambraSnack(NameWords.copied));
             },
           ),
-          GhostButton(label: _busy ? NameWords.removing : NameWords.remove, onPressed: _remove),
+          // Default mode changes a name in place: registering another releases the first.
+          if (!dev)
+            SecondaryButton(
+              key: const Key('payment-name-change'),
+              label: NameWords.change,
+              icon: Icons.edit,
+              onPressed: _busy
+                  ? null
+                  : () => setState(() {
+                        _editing = true;
+                        _status = null;
+                      }),
+            ),
+          GhostButton(
+              key: const Key('payment-name-remove'), label: _busy ? NameWords.removing : NameWords.remove, onPressed: _remove),
           if (!svc.isWordName) _quiet(const Key('payment-name-words'), _busy ? NameWords.getting : NameWords.useWords, _busy ? null : _words),
         ],
         if (_status != null) ...[

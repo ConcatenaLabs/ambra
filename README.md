@@ -194,11 +194,26 @@ module that implements it.
   The wallet's Lightning channels are read apart from the on-chain sync, so a sync that fails
   hides none of them. Review shows what you pay, what you receive and one line of fees, each in
   the asset it is paid in, before anything is signed; **Trade** confirms it, and the trade then
-  reads **Sent**, **Settled** once final, or **Returned: nothing traded.**, with nothing to do
-  either way. Settling waits for Bitcoin blocks, so while it waits the row says what is already
-  true, with the minutes waited: "Waiting for the other side. Nothing has left your wallet yet."
-  (buying with BTC, until the asset is held for the wallet) or "Received. Settled after the next
-  Bitcoin blocks." A purchase with BTC whose maker's invoice runs out while it waits asks the
+  reads **Sent**, **Settled** once its settling round is final, or **Returned: nothing traded.**,
+  with nothing to do either way. A row states a wait only as the leaf library states it, and
+  otherwise the minutes it has waited: buying with BTC, until the asset is held for the wallet,
+  "Keep the app open: your BTC is paid once what you buy is held for you, within about N minutes.
+  Nothing has left your wallet yet. If the app closes first, nothing is traded." (N from
+  `lightning_receive_ready`, and before its first answer the library's figure for the operator's
+  next round), then "Paying your BTC. Keep the app open a moment more." and "Paid. What you bought is arriving, and it comes to
+  your wallet even if the app closes." (the operator is handed the proof at once); a received
+  trade settling in a round, "Received, settling (within about N min)" (the wallet's figure for a
+  round of its operator). Past a stated wait by two minutes the row says it is taking longer than
+  usual. Such trades are followed every few seconds. When the other side says its offer is gone
+  (the network refused its completion), or a coin the trade paid from was spent elsewhere, the
+  wallet takes its coins back at once and prices the trade again in the same row, going ahead
+  only at the price accepted or better, the other side's own new offer first; otherwise
+  "Returned: nothing traded. The price moved while it waited.", and after three gone offers
+  "Returned: nothing traded." A pair offered within the last three minutes that nobody offers
+  this moment reads "Getting a price for <get> for <pay>: it takes a moment. Nothing has moved." and is asked again every few
+  seconds. The phone keeps every unfinished trade's record and the newest 200 ended ones (1 MB at
+  most); a trade whose record cannot be kept is not made, and nothing is signed. A purchase with
+  BTC whose maker's invoice runs out while it waits asks the
   maker for a new one under the same hash, amount, lock and fee, and never pays one that ran
   out; when there is none, it reads "Returned: nothing traded. The other side's offer ran out
   while the trade waited." It trades only what settles in one step from the wallet's coins in a leaf
@@ -284,7 +299,16 @@ module that implements it.
     `app/lib/src/data/config.dart` (`Backend.arcaOperatorKey`; a custom node pins none and
     joins nothing by itself). The join restores this phrase's leaves. While the operator
     cannot be reached the wallet works on the chain as before and tries again every two
-    minutes.
+    minutes. While the restore runs (`LeafService.restoreOnce`; one cut short, the app
+    closed or the operator not answering, runs again at the next open, before the wallet
+    opens), default mode says "Syncing… finding everything this wallet holds." rather than any
+    figure (`LeafService.findingWords`): after two minutes that a long history takes a few
+    minutes, after thirty that it takes far longer than it should; while the operator does not
+    answer that its coins are not found yet and still its own, asking again every half minute,
+    never showing the wallet empty. A payment asked meanwhile waits for the restore, or ends at
+    once in those words. Once open, the coins the history gave up are checked half a second at
+    a time (`restore_history {budget_ms}`) only while nobody asks the wallet for anything, so a
+    receive code, a price or a payment waits for one slice at most.
   - Its words are the default-mode contract's (sequentia-web-wallet `docs/DEFAULT_MODE.md`), held in
     `app/lib/src/data/default_words.dart` and tested against the contract's forbidden words.
     Default mode shows no rail: a row's details show only Staked, what vests later, and a
@@ -303,18 +327,31 @@ module that implements it.
     until final. Developer mode lists it with the rest of the claims on the Leaves screen and as
     "in vesting claims" beside the row (`app/lib/src/data/vesting.dart`, the web wallet's
     `default-arca.js`).
-  - Receive shows the wallet's one **receive code** (`app/lib/src/data/pay_code.dart`, the
-    web wallet's format): a BIP321 request,
+  - Receive is one card of three things, so a person can hold the screen up to be paid at once:
+    the QR code, one line, "Scan or share to get paid in BTC or any asset.", and **Copy**.
+    Everything else sits behind **More options** (**Fewer options** while open): where the
+    payment name is changed, an amount to request, **New code**, **Show full code**,
+    **Confidential** and **Receive a restricted asset** (the account id and a deposit address, in
+    a card under the first). Leaving Receive closes More options and turns those off again. A
+    payment coming in is said on the card under the line, "Payment arriving…", then "Received
+    `<amount> <TICKER>`.", read from the figures Balance counts (`receive_watch.dart`, the web
+    wallet's `receive-watch.js`), so a move of the wallet's own, coins of its own coming home or a
+    trade says nothing. The QR code holds the wallet's payment name (below) while it has one,
+    else its one **receive code** (`app/lib/src/data/pay_code.dart`, the web wallet's format),
+    else, while a code is made ("Making your receive code…") or before the wallet holds coins
+    with the operator or BTC on the ark, its address. The code is a BIP321 request,
     `BITCOIN:<ADDRESS>?ark=<BITCOIN ARK ADDRESS>&sequentia=<SQR1…>`. The address
     is the shared tb1 address, `ark` is where BTC arrives in seconds, and `sequentia` is the
-    single-use receive request where an asset arrives in seconds, in its short form. Neither
+    single-use receive request where an asset arrives in seconds, in its short form (`SQR1…`,
+    about 230 characters where the library's own spelling runs to about 1,200; it carries every
+    field of the library's request, `reads` included, and gives it back exactly). Neither
     extra part is required, so any Bitcoin wallet reads it as a plain request for the address.
     It is drawn in upper case as a QR code with alphanumeric segments at level M
     (`payCodeQr`), so it scans at a glance from another screen. The code shows at once from
     what the wallet last drew, syncing or not, gains a way to be paid in place when one opens,
     and is replaced when it is paid, when its request is within a day of lapsing, or on
     "New code", which also moves the code to the next address (the old one stays until the new
-    one is ready). Receive has one optional field, "Amount in BTC (optional)", with a menu
+    one is ready). More options has one optional field, "Amount in BTC (optional)", with a menu
     beside it of what the amount is in: BTC, and each asset the operator receives over
     Lightning (the menu shows only when there is more than BTC; for an asset the field reads
     "Amount (optional)"). With an amount in BTC the code also carries `amount=` and a
@@ -328,14 +365,15 @@ module that implements it.
     payment name carries the name's LNURL-pay in `lightning=` (LUD-01 bech32, `LNURL1…`), which
     any Lightning wallet pays in an amount it chooses; readers give it apart (`PayCode.lnurl`),
     never as an invoice.
-  - Under the code, one switch, **Confidential**: "Asks the payer to hide the amount, and the
+  - Under More options, one switch, **Confidential**: "Asks the payer to hide the amount, and the
     asset where it can, from everyone but you and them." What is hidden is the payer's wallet's
     doing: this one hides the amount, and says when the asset can be seen (Send, below). On, the code is the wallet's confidential address at the
-    same index alone (`tsqb1…`), and a second line says what stays public: that a payment was
+    same index alone (`tsqb1…`), the card's line reads "Any Sequentia asset, any amount, paid to
+    your confidential address.", and a second line says what stays public: that a payment was
     made; that a payment arriving in seconds is never confidential (the operator publishes each
     batch's leaves, asset and value), so this one arrives after the next block; and that BTC is
     never confidential, so receiving BTC needs the switch off. It is off each time Receive opens.
-  - **Your payment name**, under the code (`app/lib/src/data/lnaddr.dart`, the web wallet's
+  - **Your payment name** (`app/lib/src/data/lnaddr.dart`, the web wallet's
     `lnaddr.js`; `payment_name_service.dart`): a name of the wallet's own at the node's domain
     (`name@sequentiatestnet.com`), which another wallet pays in an amount it chooses, a
     Lightning wallet included (it is a Lightning address, LNURL-pay). The name is held by a
@@ -347,8 +385,25 @@ module that implements it.
     of its own inside the twenty New code cycles through, so a restore finds every payment, each
     signed by the name's key over the name, the domain and the code. The service hands each out
     once to a Sequentia wallet paying the name, open or closed, then the most recent again,
-    paid without its single-use part. Developer mode calls it **Lightning address**. Only the
-    default node has names.
+    paid without its single-use part. Developer mode calls it **Lightning address** and keeps it
+    on Receive, under the address. Only the default node has names.
+    Every wallet holds one by default, made with nothing asked when it is opened in default mode
+    (`LnAddress.ensure`): the name its key holds at the service, so a restored wallet gets its
+    name back, else its word name. While the service does not answer the wallet asks again,
+    after five seconds and then at a pause growing to a minute, and the name shows once it
+    answers, without leaving the screen; while the service limits new names from the wallet's
+    network, the card reads "Too many names were made from your network just now. Try again in a
+    few minutes." and the wallet asks again by itself. A name kept from before shows only once
+    the service has confirmed, since the wallet opened, that the key still holds it, and an open
+    wallet stops showing a name the moment it is released or changed on another device. A name
+    the person removed is never made again by itself, on this phone or any other holding the
+    phrase: the service keeps the removal with the name's key, and a removal only this phone
+    knows of is told to the service (`decline`).
+    Default mode keeps the name's card in Settings (the More tab): the name, "Anyone can look this
+    name up and pay you at it, in any amount they choose, and see the address each payment goes
+    to. A Sequentia wallet can pay it while this wallet is closed; other wallets, while it is
+    open.", **Copy**, **Change name** and **Remove name**. A released name answers no payer from
+    then on and is never given to another wallet.
     Without a name the card offers **Get a name**, with **Choose your own** as a quiet link.
     **Get a name** gives the wallet its word name in one tap (`word_name.dart`, the web wallet's
     `word-name.js`): two words from a list, written together and shown with a capital for each
@@ -358,19 +413,17 @@ module that implements it.
     The words are the EFF short wordlist less every BIP39 word, so no word of a recovery phrase is
     ever part of a public name (credit in `NOTICE`). A wallet holding a name of its own choosing
     sees **Use a word name instead**, a quiet link that swaps it for its word name.
-  - With a name, no amount and Confidential off, Receive shows the **name** as its QR code
-    (`nameQrText`: the bare `name@domain` in lower case, the spelling every wallet that pays
-    names reads from a scan), as one card that says the name once: the name, "Any asset, any
-    amount, a new receive code of yours for each payer. A Sequentia wallet can pay this name
-    while this wallet is closed; other wallets, while it is open.", "Anyone who has your name can
-    look it up and get a receive code of yours.", **Copy name** and **Show full code** (whose
-    **Show name** goes back), the Confidential switch, and **Remove name** as a quiet link at
-    its foot; the separate name card shows only with the full code. An amount or Confidential
-    gives the full code.
+  - With a name the service confirms and answers for, no amount and Confidential off, Receive's
+    QR code is the **name** (`nameQrText`: the bare `name@domain` in lower case, about 30
+    characters, the spelling every wallet that pays names reads from a scan), and **Copy** copies
+    it. More options then reads "Your payment name is AmberFalcon@sequentiatestnet.com. You can
+    change or remove it in Settings." and offers **Show full code**: the full code in the QR code
+    and written under it, with the line "For a wallet that can't look names up, or to pay
+    without a connection. Each code is paid once; a new one shows when it is."; **Show name**
+    goes back. An amount or Confidential gives the full code.
     While a code handed out in the
     last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
-    the address alone; so does user mode until the wallet holds coins with the operator or
-    BTC on the ark.
+    the address, New address, the confidential address on request and the name under them.
   - Payments that arrive at once, over channel leaves (`app/lib/src/data/leaf_service.dart`):
     where the operator makes channel leaves of an asset, the wallet's own care
     (`careArgs`, `channels: true`) opens one in each such asset from half of the wallet's
@@ -415,9 +468,12 @@ module that implements it.
     An address send the chain cannot cover is paid out of the leaves (the library's
     `offboard_quote`, then `offboard` on the quote shown): "Send <amt> <TICKER>?", "It
     arrives within <N> minutes. Keep this screen open meanwhile." (the most the whole way to
-    the other wallet takes: the operator's round interval, four blocks and four minutes,
-    rounded up to five minutes, `addressArrivalMinutes`; ten on the testnet), and the fee when
-    there is one. The wallet signs its part of the operator's settlement as it is made, and
+    the other wallet takes: the operator's round interval, its block and certificate, the most
+    the operator says it takes to unlock the payment in a block, ten minutes when it says none,
+    and two minutes of reads, rounded up to five minutes, `addressArrivalMinutes`; fifteen on
+    the testnet while its operator publishes no unlock time), and the fee when there is one. A
+    move out of the Ark to the wallet's own address (for a stake, a pool, a mix) waits on no
+    other wallet, and says so in its own minutes (`moveOutMinutes`). The wallet signs its part of the operator's settlement as it is made, and
     one closed before then makes nothing, so after Send it says "Sending <amt> <TICKER>. Keep
     this screen open until it is sent." until the library's `offboards` reads it made
     (`unlocking` or `paid`), and only then "Sent <amt> <TICKER>. It arrives within <N>
@@ -657,7 +713,23 @@ module that implements it.
   of its own that no plan names (`plan_release`), syncs every 15 seconds until that round
   is final and the new leaves are held, and asks again (at most three releases, and three
   hours of waiting, after which it says that nothing was paid and the payment can be asked
-  again). The person waits one round and sees nothing else. Every leaf command a screen
+  again). The person waits one round and sees nothing else. The same path waits, and asks
+  again, for whatever else only a round holds back: coins the library names to settle first
+  (`settle_first`, kind `settle_first`: a payment received still arriving, coins at the
+  operator's depth limit), put through the next round and read every five seconds until they
+  can be spent, the wait said as "Goes through within about <N> minutes", counted down to the
+  time the library gives (`settleWords`; <N> before it has said from the operator's round,
+  blocks and anchor depth, `settleMinutes`, 6 on the testnet), "Taking longer than usual: this
+  goes ahead by itself, or nothing is sent" two minutes past it, and after three hours "This
+  payment could not go through yet: nothing was sent, and your money stays in your wallet.";
+  channels whose side would cover it (`in_channel`), closed into the next round; coins too
+  many payments deep (`depth_limit`), refreshed; the wallet's own refresh of the asset already
+  in a round; and a coin the operator does not call live yet (`not_live`), asked again for two
+  minutes. A payment that waits this way can be written down (`LeafService.payPending`,
+  `app/lib/src/data/pending_sends.dart`): an app closed while it waits makes it at the next
+  open, with what was reviewed; one closed while the library was being asked is never asked
+  again and Balance says once that it may have gone; one made after reopening that does not
+  go is said once as not sent. Every leaf command a screen
   starts goes through this one path (`LeafService.pay`, `payThroughRelease` in
   `app/lib/src/data/leaf_service.dart`), the user-mode Swap tab's included. A release
   costs the refresh fee the asset's schedule asks then (none in the coin's free window).

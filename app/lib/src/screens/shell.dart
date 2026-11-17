@@ -25,10 +25,12 @@ import '../data/pay_code.dart';
 import '../data/lnaddr.dart' show NameWords, nameQrText;
 import '../data/payment_name_service.dart';
 import '../data/receive_index.dart';
+import '../data/receive_watch.dart';
 import '../data/ln_max_payment.dart' show receivableAssets, receiveState;
 import '../data/ark_limits.dart' show arkLimitsNow, goesToAddress, directUsd, usdFigure;
 import '../data/problem_report.dart' show ReportWords;
 import '../data/leaf_service.dart';
+import '../data/pending_sends.dart' show pendingEndText;
 import '../data/lightning_service.dart';
 import '../data/ln_payment_limit.dart';
 import '../data/ln_rail.dart';
@@ -185,7 +187,7 @@ class _ShellState extends State<Shell> {
     final tabs = <Widget>[
       BalanceTab(isActive: _tab == 0),
       SendTab(isActive: _tab == 1),
-      const ReceiveTab(),
+      ReceiveTab(isActive: _tab == 2),
       SwapTab(isActive: _tab == 3),
       HistoryTab(isActive: _tab == 4),
       const MoreTab(),
@@ -212,6 +214,44 @@ class _ShellState extends State<Shell> {
 // ---------------------------------------------------------------------------
 // Balance (M3: shows network + your main receive address; live balances = M4)
 // ---------------------------------------------------------------------------
+/// How the payments made after the app reopened ended, when not made: each said once
+/// ([pendingEndText]), dismissed with OK.
+class _PendingEndsCard extends StatelessWidget {
+  const _PendingEndsCard();
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: LeafService.instance,
+        builder: (context, _) => FutureBuilder<List<Map<String, dynamic>>>(
+          future: LeafService.instance.pendingEndsNow(),
+          builder: (context, snap) {
+            final ends = snap.data ?? const <Map<String, dynamic>>[];
+            if (ends.isEmpty) return const SizedBox.shrink();
+            return Column(children: [
+              for (final e in ends)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: AmbraCard(
+                    child: Row(children: [
+                      Expanded(child: Text(_endText(e), key: const Key('balance-pending-end'), style: AmbraText.sub)),
+                      TextButton(
+                          onPressed: () => LeafService.instance.markPendingEndTold('${e['id']}'), child: const Text('OK')),
+                    ]),
+                  ),
+                ),
+            ]);
+          },
+        ),
+      );
+
+  static String _endText(Map e) {
+    final asset = '${e['asset'] ?? ''}';
+    final label = SeqAssets.labelFor(asset);
+    final ticker = '${e['ticker'] ?? label.ticker}';
+    final precision = e['precision'] is int ? e['precision'] as int : label.precision;
+    return pendingEndText(e, formatAtoms('${e['atoms'] ?? 0}', precision), ticker);
+  }
+}
+
 class BalanceTab extends StatefulWidget {
   const BalanceTab({super.key, this.isActive = false});
   final bool isActive;
@@ -544,7 +584,16 @@ class _BalanceTabState extends State<BalanceTab> {
               padding: EdgeInsets.only(top: 6),
               child: Text('Live prices unavailable; see per-asset amounts below.', style: AmbraText.sub),
             ),
+          // While a restore finds what the wallet holds, default mode says so under the total
+          // (the web wallet's docs/DEFAULT_MODE.md, Balance).
+          if (!dev && LeafService.instance.findingWords() != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(LeafService.instance.findingWords()!, key: const Key('balance-finding'), style: AmbraText.sub),
+            ),
           const SizedBox(height: 24),
+          // A payment that waited when the app closed and was not made after it reopened: said once.
+          const _PendingEndsCard(),
           // The service holding coins for instant payments does not answer: one card above the
           // list, in either mode, to take them home (home_coins.dart), whatever else has loaded.
           const _HomeCard(),
@@ -2120,7 +2169,8 @@ class _AccountKeyCardState extends State<AccountKeyCard> {
 // Receive (M3: shared tb1 default + confidential tsqb1 opt-in, copy, cycle)
 // ---------------------------------------------------------------------------
 class ReceiveTab extends StatefulWidget {
-  const ReceiveTab({super.key});
+  const ReceiveTab({super.key, this.isActive = false});
+  final bool isActive;
   @override
   State<ReceiveTab> createState() => _ReceiveTabState();
 }
@@ -2169,9 +2219,14 @@ class _ReceiveTabState extends State<ReceiveTab> {
   // With a payment name: Receive shows the name as its QR code until "Show full code" ([_showFull]),
   // an amount or Confidential asks for the full code. Off each time Receive opens.
   bool _showFull = false;
-  // Remove name, at the foot of the name's one card.
-  bool _nameRemoving = false;
-  String? _nameError;
+  // Default mode's one card keeps everything but the QR code, its line and Copy behind More
+  // options ([_more]); Receive a restricted asset opens its own card under it ([_restricted]).
+  // Leaving Receive closes both, as it turns Show full code and Confidential off.
+  bool _more = false, _restricted = false;
+  // What the card says about a payment coming in while Receive is in front (receive_watch.dart).
+  final _watch = ReceiveWatch();
+  Timer? _watchTimer;
+  bool _watchReading = false;
   // What the optional amount is in: 'BTC', or an asset the operator receives in over Lightning.
   String _recvAsset = 'BTC';
   String _codeAsset = 'BTC';
@@ -2201,6 +2256,90 @@ class _ReceiveTabState extends State<ReceiveTab> {
     PaymentNameService.instance.receiveIndex = () => _codeIndex ?? _index;
     _load();
     unawaited(_restoreCode().whenComplete(_onLeaves));
+    if (widget.isActive) _watchStart();
+  }
+
+  @override
+  void didUpdateWidget(ReceiveTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive && !oldWidget.isActive) _watchStart();
+    if (!widget.isActive && oldWidget.isActive) {
+      // Leaving Receive closes More options and turns Show full code, Confidential and Receive a
+      // restricted asset off again.
+      _watchStop();
+      setState(() {
+        _more = false;
+        _restricted = false;
+        _showFull = false;
+        _conf = false;
+        _confAddr = null;
+      });
+    }
+  }
+
+  /// Each asset's figure as Balance counts it, and what of it is on its way: what the card's line
+  /// about a payment coming in reads (the web wallet's `recvSnapshot`). The chain's part is the
+  /// last one read, less what a move of the wallet's own took from it ([LeafService.onchainLessBoards]),
+  /// so such a move says nothing.
+  Future<Map<String, ReceiveFigure>> _figures() async {
+    final l = LeafService.instance, ark = ArkBtcService.instance;
+    final chain = {
+      for (final b in await WalletCache.loadBalances() ?? const <core.AssetBalance>[])
+        b.assetId: BigInt.tryParse(b.atoms) ?? BigInt.zero,
+    };
+    final leaves = l.joined ? l.leafAtoms() : const <String, BigInt>{};
+    final arriving = l.joined ? l.arrivingAtoms() : const <String, BigInt>{};
+    final out = <String, ReceiveFigure>{};
+    for (final id in {...chain.keys, ...leaves.keys, ...arriving.keys}) {
+      final inFig = arriving[id] ?? BigInt.zero;
+      final settled = l.onchainLessBoards(id, chain[id] ?? BigInt.zero) + (leaves[id] ?? BigInt.zero) - inFig;
+      out[id] = (settled: settled > BigInt.zero ? settled : BigInt.zero, arriving: inFig);
+    }
+    final btcChain = BigInt.tryParse(await WalletCache.loadBtc() ?? '') ?? BigInt.zero;
+    final btcSettled = btcChain + ark.held - ark.arriving;
+    out['BTC'] = (settled: btcSettled > BigInt.zero ? btcSettled : BigInt.zero, arriving: ark.arriving);
+    return out;
+  }
+
+  /// Receive came to the front: what the wallet holds now is the base, and every change of the
+  /// wallet's figures is read against it (and every few seconds, for a figure nobody announces).
+  void _watchStart() {
+    if (DevMode.instance.on) return;
+    _watch.stop();
+    _watchTimer?.cancel();
+    _watchTimer = Timer.periodic(const Duration(seconds: 3), (_) => _watchTick());
+    _watchTick();
+  }
+
+  void _watchStop() {
+    _watchTimer?.cancel();
+    _watchTimer = null;
+    _watch.stop();
+  }
+
+  Future<void> _watchTick() async {
+    if (!mounted || !widget.isActive || DevMode.instance.on || _watchReading) return;
+    _watchReading = true;
+    try {
+      final snap = await _figures();
+      if (!mounted || !widget.isActive) return;
+      final before = _watch.state;
+      _watch.watching ? _watch.update(snap) : _watch.start(snap);
+      if (_watch.state != before) setState(() {});
+    } catch (e) {
+      debugPrint('[ambra-receive] figures not read: $e');
+    } finally {
+      _watchReading = false;
+    }
+  }
+
+  /// The card's line about a payment coming in, or null.
+  String? get _arrival {
+    final st = _watch.state;
+    if (st == null || DevMode.instance.on) return null;
+    if (!st.received) return DefaultWords.paymentArriving;
+    final label = st.asset == 'BTC' ? null : SeqAssets.labelFor(st.asset);
+    return DefaultWords.received(formatAtoms(st.atoms.toString(), label?.precision ?? 8), label?.ticker ?? 'BTC');
   }
 
   /// The payment name came, changed or went: a code without an amount carries it.
@@ -2214,6 +2353,11 @@ class _ReceiveTabState extends State<ReceiveTab> {
     if (!mounted) return;
     setState(() {});
     _load();
+    if (DevMode.instance.on) {
+      _watchStop();
+    } else if (widget.isActive) {
+      _watchStart();
+    }
   }
 
   /// The code last drawn, shown at once, unless its receive request lapses within a day.
@@ -2327,6 +2471,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
     final l = LeafService.instance;
     final ark = ArkBtcService.instance;
     if (DevMode.instance.on || !mounted) return;
+    unawaited(_watchTick());
     if (_drawing) {
       _drawAgain = true;
       return;
@@ -2335,14 +2480,6 @@ class _ReceiveTabState extends State<ReceiveTab> {
     final paid = ark.received;
     final invoicePaid = (paid != null && paid.hash == _codeInvoiceHash) ||
         (_codeAsset == 'BTC' && _codeAmount.isNotEmpty && ark.open && ark.spendable + ark.arriving > _arkSeen);
-    if (paid != null && paid.hash == _codeInvoiceHash && _toldPaid != paid.hash) {
-      _toldPaid = paid.hash;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context)
-            .showSnackBar(ambraSnack(DefaultWords.received(formatAtoms(paid.sats.toString(), 8), 'BTC')));
-      });
-    }
     if (l.arrivedCount != _paidAt) {
       _paidAt = l.arrivedCount;
       _fresh = true;
@@ -2377,7 +2514,6 @@ class _ReceiveTabState extends State<ReceiveTab> {
 
   String? _codeInvoice;
   String? _codeInvoiceHash; // the payment hash of the code's lightning= invoice
-  String? _toldPaid;
 
   // The optional BTC amount: with one, the code also names it and carries an invoice from
   // the Bitcoin ark for exactly that amount, which the wallet claims while it is open.
@@ -2564,6 +2700,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
     DevMode.instance.removeListener(_onMode);
     PaymentNameService.instance.removeListener(_onName);
     PaymentNameService.instance.receiveIndex = () => BtcState.instance.unifiedNext;
+    _watchTimer?.cancel();
     _invWatch++;
     _amountDebounce?.cancel();
     _btcAmount.dispose();
@@ -2608,26 +2745,14 @@ class _ReceiveTabState extends State<ReceiveTab> {
     }
   }
 
-  /// What Receive shows as its code: the confidential address while [_conf] is on, else the code.
-  String? get _shown => _conf ? _confAddr : _code;
-
-  Future<void> _removeName() async {
-    setState(() {
-      _nameRemoving = true;
-      _nameError = null;
-    });
-    try {
-      await PaymentNameService.instance.release();
-    } catch (e) {
-      _nameError = '$e';
-    } finally {
-      if (mounted) setState(() => _nameRemoving = false);
-    }
-  }
+  /// Default mode's name: one the name service has confirmed since the wallet opened and answers
+  /// for now ([PaymentNameService.named]). A name it cannot be reached at is never shown: payers
+  /// could not look it up. Receive shows the full code meanwhile, and the name once it answers.
+  String? get _recvName => DevMode.instance.on ? null : PaymentNameService.instance.named;
 
   /// The wallet's payment name can stand for its code: it has one, no amount is typed and
   /// Confidential is off (DEFAULT_MODE.md, Receive).
-  bool get _named => PaymentNameService.instance.address != null && !_conf && _btcAmount.text.trim().isEmpty;
+  bool get _named => _recvName != null && !_conf && _btcAmount.text.trim().isEmpty;
 
   /// Receive shows the name as its QR code ([nameQrText]).
   bool get _nameView => _named && !_showFull;
@@ -2658,6 +2783,191 @@ class _ReceiveTabState extends State<ReceiveTab> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Widget _qr(Key key, Widget picture) => Center(
+        child: Container(
+          key: key,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+          child: picture,
+        ),
+      );
+
+  Widget _quietButton(Key key, String label, VoidCallback? onPressed) => Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton(
+          key: key,
+          style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 4), foregroundColor: AmbraColors.dim),
+          onPressed: onPressed,
+          child: Text(label, style: const TextStyle(decoration: TextDecoration.underline, color: AmbraColors.dim)),
+        ),
+      );
+
+  /// Default mode's Receive (sequentia-web-wallet `docs/DEFAULT_MODE.md`, "Receive"): one card of
+  /// three things, the QR code, one line and Copy, with a payment's arrival said under the line;
+  /// everything else behind More options (the name's place in Settings, an amount, New code, Show
+  /// full code, Confidential, Receive a restricted asset). The QR code is the wallet's payment name
+  /// while it has one the service confirms, else the full receive code, else (while a code is made,
+  /// or the wallet holds nothing with the operator yet) its address.
+  List<Widget> _simpleReceive() {
+    final name = _recvName;
+    final nameView = _nameView;
+    final amountEmpty = _btcAmount.text.trim().isEmpty;
+    // What the QR code holds and Copy copies.
+    final String? shown = nameView
+        ? nameQrText(name!)
+        : _conf
+            ? _confAddr
+            : (_code ?? _codeAddr ?? _address);
+    final codeShown = !nameView && !_conf && _code != null;
+    final String line;
+    if (_conf) {
+      line = DefaultWords.receiveTipConf;
+    } else if (_showFull && name != null) {
+      line = NameWords.fullTip;
+    } else if (_codeMode && _code == null && !nameView) {
+      line = DefaultWords.receiveWait;
+    } else {
+      line = DefaultWords.receiveLine;
+    }
+    final arrival = _arrival;
+    final amountRow = _codeMode && !_conf && (ArkBtcService.instance.open || _recvChoices().length > 1);
+    final restricted = _ampAid != null;
+    return [
+      AmbraCard(
+        key: const Key('receive-card'),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (shown == null)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Center(child: CircularProgressIndicator(color: AmbraColors.amber)),
+            )
+          else
+            _qr(
+                Key(nameView ? 'receive-name-qr' : 'receive-code-qr'),
+                codeShown
+                    ? QrImageView.withQr(qr: payCodeQr(_code!), size: 288, backgroundColor: Colors.white)
+                    : QrImageView(data: shown, version: QrVersions.auto, size: 288, backgroundColor: Colors.white)),
+          const SizedBox(height: 12),
+          Text(line, key: const Key('receive-line'), textAlign: TextAlign.center, style: AmbraText.sub),
+          // The code's text is shown only when asked for: the full code, for a wallet that can't
+          // look names up.
+          if (_showFull && name != null && codeShown) ...[
+            const SizedBox(height: 10),
+            SelectableText(_code!, key: const Key('receive-code-text'), style: AmbraText.mono.copyWith(fontSize: 11)),
+          ],
+          if (arrival != null) ...[
+            const SizedBox(height: 10),
+            Text(arrival,
+                key: const Key('receive-arrival'),
+                textAlign: TextAlign.center,
+                style: AmbraText.body.copyWith(color: _watch.state!.received ? AmbraColors.green : AmbraColors.dim)),
+          ],
+          const SizedBox(height: 14),
+          SecondaryButton(
+            key: const Key('receive-copy'),
+            label: DefaultWords.copy,
+            icon: Icons.copy,
+            onPressed: shown == null ? null : () => _copy(shown, DefaultWords.addressCopied),
+          ),
+          const SizedBox(height: 4),
+          _quietButton(const Key('receive-more'), _more ? DefaultWords.fewerOptions : DefaultWords.moreOptions,
+              () => setState(() => _more = !_more)),
+          if (_more) ...[
+            if (name != null) ...[
+              const SizedBox(height: 6),
+              Text(NameWords.settingsLine(PaymentNameService.instance.display ?? name),
+                  key: const Key('receive-name-line'), style: AmbraText.sub),
+            ],
+            if (amountRow) ...[
+              const SizedBox(height: 14),
+              const SectionLabel(DefaultWords.requestAmount),
+              const SizedBox(height: 8),
+              AmbraField(
+                  key: const Key('receive-btc-amount'),
+                  label: _recvAsset == 'BTC' ? DefaultWords.amountInBtc : DefaultWords.amountOptional,
+                  controller: _btcAmount,
+                  hint: '0.0',
+                  onChanged: _onAmount,
+                  suffix: _recvChoices().length > 1 ? _assetMenu() : null),
+              if (_largeWhyFor(_codeAsset, _codeAmount) != null) ...[
+                const SizedBox(height: 8),
+                Text(_largeWhyFor(_codeAsset, _codeAmount)!, key: const Key('receive-why'), style: AmbraText.sub),
+              ],
+            ],
+            const SizedBox(height: 10),
+            SecondaryButton(
+              key: const Key('receive-code-new'),
+              label: DefaultWords.newCode,
+              icon: Icons.refresh,
+              onPressed: _newCode,
+            ),
+            if (name != null && !_conf && amountEmpty) ...[
+              const SizedBox(height: 10),
+              SecondaryButton(
+                key: Key(_showFull ? 'receive-show-name' : 'receive-show-full'),
+                label: _showFull ? NameWords.showName : NameWords.showFull,
+                icon: _showFull ? Icons.alternate_email : Icons.qr_code,
+                onPressed: () => setState(() => _showFull = !_showFull),
+              ),
+            ],
+            const SizedBox(height: 6),
+            // Its own Material: the card's background would hide the tile's ink.
+            Material(
+              type: MaterialType.transparency,
+              child: SwitchListTile(
+                key: const Key('receive-confidential'),
+                contentPadding: EdgeInsets.zero,
+                activeThumbColor: AmbraColors.amber,
+                value: _conf,
+                onChanged: (v) {
+                  setState(() {
+                    _conf = v;
+                    _confAddr = null;
+                  });
+                  if (v) unawaited(_drawConf());
+                },
+                title: const Text(DefaultWords.confidential, style: AmbraText.body),
+                subtitle: const Text(DefaultWords.confidentialLine, style: AmbraText.sub),
+              ),
+            ),
+            if (_conf) Text(DefaultWords.confidentialOn, key: const Key('receive-confidential-on'), style: AmbraText.sub),
+            if (restricted)
+              _quietButton(const Key('receive-restricted'), DefaultWords.restrictedReceive,
+                  () => setState(() => _restricted = !_restricted)),
+          ],
+        ]),
+      ),
+      // The wallet's account for restricted assets, under the first card: the only hex identifier
+      // Receive shows in default mode.
+      if (restricted && _restricted) ...[
+        const SizedBox(height: 18),
+        AmbraCard(
+          key: const Key('receive-restricted-card'),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const SectionLabel(DefaultWords.restrictedReceive),
+            const SizedBox(height: 12),
+            const Text(DefaultWords.restrictedLine, style: AmbraText.sub),
+            const SizedBox(height: 12),
+            const Text(DefaultWords.accountId, style: AmbraText.sub),
+            const SizedBox(height: 6),
+            SelectableText(_ampAid!, style: AmbraText.mono.copyWith(fontSize: 14)),
+            const SizedBox(height: 10),
+            SecondaryButton(label: DefaultWords.copy, icon: Icons.copy, onPressed: () => _copy(_ampAid!, DefaultWords.addressCopied)),
+            if (_ampAddress != null && OpenAmpService.instance.assets.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(DefaultWords.depositFor(OpenAmpService.instance.assets.first.ticker), style: AmbraText.sub),
+              const SizedBox(height: 6),
+              SelectableText(_ampAddress!, style: AmbraText.mono.copyWith(fontSize: 14)),
+              const SizedBox(height: 10),
+              SecondaryButton(
+                  label: DefaultWords.copy, icon: Icons.copy, onPressed: () => _copy(_ampAddress!, DefaultWords.addressCopied)),
+            ],
+          ]),
+        ),
+      ],
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListView(
@@ -2665,161 +2975,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
       children: [
         const Text('Receive', style: AmbraText.h1),
         const SizedBox(height: 20),
-        if (_codeMode) ...[
-          if (_nameView) ...[
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
-                child: QrImageView(
-                    key: const Key('receive-name-qr'),
-                    data: nameQrText(PaymentNameService.instance.address!),
-                    version: QrVersions.auto,
-                    size: 288,
-                    backgroundColor: Colors.white),
-              ),
-            ),
-            const SizedBox(height: 18),
-          ] else if (_shown != null) ...[
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
-                child: _conf
-                    ? QrImageView(
-                        key: const Key('receive-code-qr'),
-                        data: _confAddr!,
-                        version: QrVersions.auto,
-                        size: 288,
-                        backgroundColor: Colors.white)
-                    : QrImageView.withQr(
-                        key: const Key('receive-code-qr'),
-                        qr: payCodeQr(_code!),
-                        size: 288,
-                        backgroundColor: Colors.white),
-              ),
-            ),
-            const SizedBox(height: 18),
-          ],
-          AmbraCard(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              SectionLabel(_nameView ? NameWords.label : DefaultWords.receiveCode),
-              const SizedBox(height: 12),
-              if (_nameView) ...[
-                // One card says the name once: the name, what it does, that it is public.
-                // A word name with a capital for each word; the QR code and Copy hold it in lower case.
-                SelectableText(PaymentNameService.instance.display ?? PaymentNameService.instance.address!,
-                    key: const Key('receive-name'), style: AmbraText.mono),
-                const SizedBox(height: 8),
-                const Text(NameWords.qrTip, key: Key('receive-name-tip'), style: AmbraText.sub),
-                const SizedBox(height: 6),
-                const Text(NameWords.public, key: Key('receive-name-public'), style: AmbraText.sub),
-                const SizedBox(height: 14),
-                SecondaryButton(
-                  key: const Key('receive-name-copy'),
-                  label: NameWords.copyName,
-                  icon: Icons.copy,
-                  onPressed: () => _copy(nameQrText(PaymentNameService.instance.address!), NameWords.copiedName),
-                ),
-                const SizedBox(height: 10),
-                SecondaryButton(
-                  key: const Key('receive-show-full'),
-                  label: NameWords.showFull,
-                  icon: Icons.qr_code,
-                  onPressed: () => setState(() => _showFull = true),
-                ),
-              ] else if (_shown == null)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 18),
-                  child: Center(child: CircularProgressIndicator(color: AmbraColors.amber)),
-                )
-              else ...[
-                if (!_conf) ...[
-                  Text(_named ? NameWords.fullTip : DefaultWords.receiveCodeLine, style: AmbraText.sub),
-                  const SizedBox(height: 14),
-                ],
-                SecondaryButton(
-                  key: const Key('receive-code-copy'),
-                  label: DefaultWords.copyCode,
-                  icon: Icons.copy,
-                  onPressed: () => _copy(_shown!, DefaultWords.codeCopied),
-                ),
-                const SizedBox(height: 10),
-                SecondaryButton(
-                  key: const Key('receive-code-new'),
-                  label: DefaultWords.newCode,
-                  icon: Icons.refresh,
-                  onPressed: _newCode,
-                ),
-                if (_named) ...[
-                  const SizedBox(height: 10),
-                  SecondaryButton(
-                    key: const Key('receive-show-name'),
-                    label: NameWords.showName,
-                    icon: Icons.alternate_email,
-                    onPressed: () => setState(() => _showFull = false),
-                  ),
-                ],
-              ],
-              if (_shown != null || _nameView) ...[
-                if (!_conf && (ArkBtcService.instance.open || _recvChoices().length > 1)) ...[
-                  const SizedBox(height: 14),
-                  AmbraField(
-                      key: const Key('receive-btc-amount'),
-                      label: _recvAsset == 'BTC' ? DefaultWords.amountInBtc : DefaultWords.amountOptional,
-                      controller: _btcAmount,
-                      hint: '0.0',
-                      onChanged: _onAmount,
-                      suffix: _recvChoices().length > 1 ? _assetMenu() : null),
-                  if (_largeWhyFor(_codeAsset, _codeAmount) != null) ...[
-                    const SizedBox(height: 8),
-                    Text(_largeWhyFor(_codeAsset, _codeAmount)!, key: const Key('receive-why'), style: AmbraText.sub),
-                  ],
-                ],
-              ],
-              const SizedBox(height: 6),
-              // Its own Material: the card's background would hide the tile's ink.
-              Material(
-                type: MaterialType.transparency,
-                child: SwitchListTile(
-                  key: const Key('receive-confidential'),
-                  contentPadding: EdgeInsets.zero,
-                  activeThumbColor: AmbraColors.amber,
-                  value: _conf,
-                  onChanged: (v) {
-                    setState(() {
-                      _conf = v;
-                      _confAddr = null;
-                    });
-                    if (v) unawaited(_drawConf());
-                  },
-                  title: const Text(DefaultWords.confidential, style: AmbraText.body),
-                  subtitle: const Text(DefaultWords.confidentialLine, style: AmbraText.sub),
-                ),
-              ),
-              if (_conf) Text(DefaultWords.confidentialOn, key: const Key('receive-confidential-on'), style: AmbraText.sub),
-              if (_nameView) ...[
-                const SizedBox(height: 4),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton(
-                    key: const Key('receive-name-remove'),
-                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 4), foregroundColor: AmbraColors.dim),
-                    onPressed: _nameRemoving ? null : _removeName,
-                    child: Text(_nameRemoving ? NameWords.removing : NameWords.remove,
-                        style: const TextStyle(decoration: TextDecoration.underline, color: AmbraColors.dim)),
-                  ),
-                ),
-                if (_nameError != null) Text(_nameError!, style: const TextStyle(color: AmbraColors.red)),
-              ],
-            ]),
-          ),
-          // The name's own card, to choose or remove one, except while Receive's card shows the name.
-          if (PaymentNameService.instance.available && !_nameView) ...[
-            const SizedBox(height: 18),
-            const PaymentNameCard(),
-          ],
-        ] else ...[
+        if (!DevMode.instance.on) ..._simpleReceive() else ...[
         if (_address != null) ...[
           Center(
             child: Container(
@@ -3120,6 +3276,14 @@ class MoreTab extends StatelessWidget {
             ]),
           ),
         ),
+        // Default mode's payment name lives here, where it is changed or removed (Receive shows it in
+        // its QR code); developer mode keeps it on Receive.
+        ListenableBuilder(
+          listenable: Listenable.merge([DevMode.instance, PaymentNameService.instance]),
+          builder: (context, _) => !DevMode.instance.on && PaymentNameService.instance.available
+              ? const Padding(padding: EdgeInsets.only(top: 14), child: PaymentNameCard())
+              : const SizedBox.shrink(),
+        ),
         const SizedBox(height: 14),
         AmbraCard(
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -3266,7 +3430,8 @@ class MoreTab extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             SecondaryButton(
-              label: 'Mix (CoinJoin)',
+              // Default mode names no protocol (the web wallet's More menu says "Mix").
+              label: DevMode.instance.on ? 'Mix (CoinJoin)' : 'Mix',
               icon: Icons.shuffle,
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MixScreen())),
             ),
