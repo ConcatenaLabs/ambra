@@ -348,9 +348,11 @@ Future<LnAddressTarget> resolveLnAddress({
 /// The invoice an LNURL-pay at [url] (LUD-06) makes for exactly [msat]: BTC only. A payment name at
 /// another service is paid this way ([resolveLnAddress]), and so is an LNURL itself
 /// ([lnurlPayUrl]); [what] names it in the words shown. With [descriptionHashOf] (an invoice's
-/// description hash, hex, or null), the invoice must commit to the service's `metadata`, as LUD-06
-/// asks: its description hash is the SHA-256 of the metadata as served, so it is the invoice the
-/// payer was shown a request for, not one of anyone else's.
+/// description hash, hex, or null), an invoice that carries a description hash must commit to the
+/// service's `metadata`, as LUD-06 asks: the hash is the SHA-256 of the metadata as served, so it
+/// is the invoice the payer was shown a request for. One that carries none (a plain description,
+/// as every Sequentia name service's invoice is until it can commit, ambra#284) is paid as before:
+/// refusing it would refuse every such name (ambra#285).
 Future<LnAddressTarget> resolveLnurlPay({
   required Uri url,
   required bool btc,
@@ -392,7 +394,7 @@ Future<LnAddressTarget> resolveLnurlPay({
     try {
       h = descriptionHashOf(pr);
     } catch (_) {}
-    if (meta is! String || h == null || h.toLowerCase() != hexOf(sha256.convert(utf8.encode(meta)).bytes)) {
+    if (h != null && (meta is! String || h.toLowerCase() != hexOf(sha256.convert(utf8.encode(meta)).bytes))) {
       throw LnAddressError('The $what answered with an invoice for something other than this payment.');
     }
   }

@@ -316,10 +316,36 @@ void main() {
     test('an invoice committing to the metadata is paid', () async {
       expect((await pay(withHash)).invoice, withHash);
     });
-    test('one committing to something else, to nothing, or with no metadata served, is not', () async {
+    test('one committing to something else, or to metadata the service did not serve, is not', () async {
       await expectLater(pay(otherHash), throwsA(predicate((e) => '$e' == refused)));
-      await expectLater(pay(inv0), throwsA(predicate((e) => '$e' == refused)));
       await expectLater(pay(withHash, metadata: null), throwsA(predicate((e) => '$e' == refused)));
+    });
+
+    // ambra#285: the Sequentia name services' invoices carry a plain description and no hash yet
+    // (ambra#284); refusing them refused every name paid by LNURL.
+    test('one with a plain description and no hash is paid, as the name services make them', () async {
+      expect((await pay(inv0)).invoice, inv0);
+    });
+
+    test('a name at another Sequentia domain, paid by LNURL with no name domain of its own (a custom node)', () async {
+      final ours = jsonEncode([
+        ['text/plain', 'Payment to carol@names.example'],
+        ['text/identifier', 'carol@names.example'],
+      ]);
+      final c = MockClient((r) async => r.url.path == '/.well-known/lnurlp/carol'
+          ? http.Response(jsonEncode({'tag': 'payRequest', 'callback': 'https://names.example/lnurlp/carol/cb', 'minSendable': 1000, 'maxSendable': 1000000000, 'metadata': ours}), 200)
+          : http.Response(jsonEncode({'pr': inv0}), 200));
+      final t = await resolveLnAddress(
+        text: 'carol@names.example',
+        btc: true,
+        msat: msat,
+        domain: null,
+        base: 'https://node.example/lsp',
+        decodeMsat: (pr) => decodeBtcInvoice(pr)['msat'] as BigInt,
+        descriptionHashOf: (pr) => decodeBtcInvoice(pr)['description_hash'] as String?,
+        client: c,
+      );
+      expect(t.invoice, inv0);
     });
   });
 

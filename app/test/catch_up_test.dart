@@ -43,6 +43,8 @@ class FakeLibrary {
   int mailboxReads = 0;
   // The node or the operator not answering a schedule read; a catch-up that answers with an error.
   bool scheduleThrows = false;
+  // What `coins` lists.
+  List<Map<String, dynamic>> coinList = [];
   bool catchUpErrs = false;
 
   Map<String, dynamic> mailbox() {
@@ -89,8 +91,9 @@ class FakeLibrary {
         return {'mailbox': mb, 'caught_up': caughtUp, 'schedule': {'now': now}};
       case 'balance':
         return {'arca': {}};
-      case 'claims':
       case 'coins':
+        return coinList;
+      case 'claims':
       case 'participations':
         return [];
       default:
@@ -174,6 +177,22 @@ void main() {
       expect(w!.nulls, kCatchUpSlowAfter, reason: 'an error never resets the count');
       expect(w.tries, 0, reason: 'nor is it a whole catch-up');
       expect(catchUpSyncIn(w, now: kCatchUpSlowAfter), kCatchUpSlowMs - 1);
+    });
+
+    test('two writers merge by leaf id: neither undoes what the other added or took in (ambra#286)', () {
+      CatchUpWait w(List<String> ids, {int since = 0, int tries = 0, int nulls = 0, int? at}) =>
+          CatchUpWait(since: since, pending: ids, tries: tries, nulls: nulls, attemptAt: at);
+      // The other took x in; this one still holds it: x is not waited for any more.
+      expect(mergeWaits(w(['x']), w(['x']), null), isNull);
+      // The other added y; this one wrote nothing since: y is waited for.
+      expect(mergeWaits(null, null, w(['y']))!.pending, ['y']);
+      // Both added, both still hold, one let go.
+      expect(mergeWaits(w(['a', 'b']), w(['a', 'c']), w(['a', 'b', 'd']))!.pending, ['a', 'c', 'd']);
+      final m = mergeWaits(w(['a']), w(['a'], since: 5, tries: 2, nulls: 1, at: 50), w(['a'], since: 3, tries: 1, nulls: 4, at: 70))!;
+      expect([m.since, m.tries, m.nulls, m.attemptAt], [3, 2, 4, 70]);
+      // The library's next catch-up: the other's when it changed it, else this one's.
+      expect(mergeOpenAt(100, 100, 700), 700);
+      expect(mergeOpenAt(100, 400, 100), 400);
     });
 
     test('the job wakes no later than the wait\'s next sync, rounded up to a second', () {
@@ -340,6 +359,7 @@ void main() {
       lib.elsewhere.add('x');
       await l.tickForTest(ticking: false);
       expect(l.catchUp?.pending, ['x']);
+      await l.catchUpWrittenForTest();
       // The job took the coin in meanwhile and ended the wait.
       final p = await SharedPreferences.getInstance();
       await p.setString('ambra.leaves.catchUp', jsonEncode({'wait': null, 'openAt': lib.now + kCatchUpEveryS}));
@@ -350,6 +370,7 @@ void main() {
     test('the wait survives the app closing', () async {
       lib.elsewhere.add('x');
       await l.tickForTest(ticking: false);
+      await l.catchUpWrittenForTest();
       final kept = jsonDecode((await SharedPreferences.getInstance()).getString('ambra.leaves.catchUp')!) as Map;
       expect((kept['wait'] as Map)['pending'], ['x']);
     });
@@ -413,5 +434,99 @@ void main() {
     test('without a wait, a failed pass names no wake time (the host retries in an hour)', () async {
       expect(await jobFailed(nowMs: 1000), isNull);
     });
+  });
+
+  // ambra#286: the scheduled job runs in the app's process on the wallet the app holds
+  // open; the two must not write their copies of the wait over each other.
+  group('the open app and the scheduled job, one wait (ambra#286)', () {
+    late FakeLibrary lib;
+    final l = LeafService.instance;
+    const host = MethodChannel('catch-up-test/job-and-app');
+    final notified = <String>[];
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      await LeafService.forgetCare();
+      lib = FakeLibrary();
+      LeafService.debugLibrary = lib.call;
+      l.resetReadsForTest();
+      l.open = true;
+      notified.clear();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(host, (c) async {
+        if (c.method == 'notify') notified.add('${(c.arguments as Map)['id']}');
+        return null;
+      });
+    });
+    tearDown(() {
+      l.stopPassesForTest();
+      l.open = false;
+      LeafService.debugLibrary = null;
+    });
+    Future<CatchUpWait?> kept() async {
+      final p = await SharedPreferences.getInstance();
+      await p.reload();
+      return CatchUpWait.fromJson((jsonDecode(p.getString('ambra.leaves.catchUp') ?? '{}') as Map)['wait']);
+    }
+    Future<num?> keptOpenAt() async =>
+        (jsonDecode((await SharedPreferences.getInstance()).getString('ambra.leaves.catchUp') ?? '{}') as Map)['openAt'] as num?;
+    Map<String, dynamic> pass({required bool appHoldsIt, Object? mailbox, Object? caughtUp, List coins = const []}) => {
+          'arrived': [],
+          'schedule': {'now': lib.now, 'next_sync_at': lib.now + 86400},
+          'wake_in': 86400,
+          'sync': {'mailbox': mailbox ?? {'accepted': [], 'refused': []}, 'caught_up': caughtUp, 'schedule': {'now': lib.now}},
+          'coins': coins,
+          'opened_for_the_job': !appHoldsIt,
+        };
+    final live = {'leaf_id': 'x', 'asset': 'bb' * 32, 'value': '5', 'state': 'live'};
+
+    // P5: the job's catch-up restores a coin the open app waits for.
+    test('a coin the job restores while the app holds the wallet is shown once, by the app', () async {
+      lib.elsewhere.add('x');
+      await l.tickForTest(ticking: false);
+      await l.catchUpWrittenForTest();
+      expect(l.catchUp?.pending, ['x']);
+      final before = l.arrivedCount;
+      await jobOutcome(pass(appHoldsIt: true, caughtUp: {'restored': [live]}, coins: [live]), host: host);
+      expect(notified, isEmpty, reason: 'the open app carries the wait');
+      lib.coinList = [live];
+      await l.run('coins');
+      expect(l.arrivedCount, before + 1);
+      expect(l.catchUp, isNull);
+    });
+
+    test('a coin a job of its own store took in is not shown again by the app, and the job\'s gate is kept', () async {
+      lib.elsewhere.add('x');
+      await l.tickForTest(ticking: false);
+      await l.catchUpWrittenForTest();
+      final before = l.arrivedCount;
+      await jobOutcome(pass(appHoldsIt: false, caughtUp: {'restored': [live]}, coins: [live]), host: host);
+      expect(notified, ['x']);
+      final gate = await keptOpenAt();
+      expect(gate, lib.now + kCatchUpEveryS);
+      lib.coinList = [live];
+      await l.run('coins');
+      expect(l.arrivedCount, before, reason: 'the job showed it already');
+      // A change of the app's own afterwards leaves the job's gate as it kept it.
+      lib.elsewhere.add('z');
+      await l.run('mailbox');
+      await l.catchUpWrittenForTest();
+      expect((await kept())!.pending, ['z']);
+      expect(await keptOpenAt(), gate);
+    });
+
+    // P8: the job's sync refuses a coin, then the app syncs on its own.
+    for (final holds in [true, false]) {
+      test('a coin the job\'s sync refused stays waited for when the app writes next (${holds ? 'the app holds the wallet' : 'a job of its own store'})', () async {
+        // The open app has read the wait already (none), as a live engine has.
+        await l.run('mailbox');
+        await l.catchUpWrittenForTest();
+        await jobOutcome(pass(appHoldsIt: holds, mailbox: refusal('y'), caughtUp: {'restored': []}), host: host);
+        expect((await kept())!.pending, ['y']);
+        await l.run('sync');
+        await l.catchUpWrittenForTest();
+        expect(l.catchUp?.pending, ['y']);
+        expect((await kept())!.pending, ['y']);
+      });
+    }
   });
 }

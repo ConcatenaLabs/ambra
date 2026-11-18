@@ -490,9 +490,10 @@ module that implements it.
     (`LNURL1…` in either case, with `lightning:` before it or not, LUD-17's `lnurlp://…`, or a
     `bitcoin:` code whose one way to pay is its LNURL; `lnurlOfSendInput`) is paid the same way:
     the URL a payment name stands for (`https://domain/.well-known/lnurlp/name`) as that name,
-    any other in BTC only, over Lightning, at the invoice it makes for exactly the amount. Such an
-    invoice must also commit to the metadata the service served (its description hash, LUD-06),
-    and the service's answers are read over https only: a redirect from https to anything else
+    any other in BTC only, over Lightning, at the invoice it makes for exactly the amount. An invoice
+    that carries a description hash must commit to the metadata the service served (LUD-06); one
+    with a plain description, as the Sequentia name services make, is paid as it is. The
+    service's answers are read over https only: a redirect from https to anything else
     stops the payment. Anything that is not a code, a name or an LNURL (an address, an invoice, an account id) takes the path
     it always took.
     An address send the chain cannot cover is paid out of the leaves (the library's

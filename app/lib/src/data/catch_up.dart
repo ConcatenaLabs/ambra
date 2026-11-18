@@ -204,3 +204,33 @@ int? jobWakeIn(Object? libraryWake, int? waitMs) {
   if (wait == null) return lib;
   return wait < lib ? wait : lib;
 }
+
+/// Two writers of one kept wait, the open app and the scheduled job (which runs in the app's
+/// process on the wallet the app holds): [mine] is this writer's copy, [kept] what is kept now,
+/// [base] what this writer last read or wrote there. Merged by leaf id, three ways, so neither
+/// undoes the other: a coin either one added is waited for, a coin either one took in (or let go)
+/// is not, a coin both still hold stays. The counts are the larger, the start the earlier.
+CatchUpWait? mergeWaits(CatchUpWait? base, CatchUpWait? mine, CatchUpWait? kept) {
+  final b = {...?base?.pending}, m = mine?.pending ?? const <String>[], k = kept?.pending ?? const <String>[];
+  final ks = {...k}, ms = {...m};
+  final ids = <String>[
+    for (final id in m)
+      if (ks.contains(id) || !b.contains(id)) id,
+    for (final id in k)
+      if (!ms.contains(id) && !b.contains(id)) id,
+  ];
+  if (ids.isEmpty) return null;
+  final both = [?mine, ?kept];
+  int? latest(int? Function(CatchUpWait) f) => both.map(f).whereType<int>().fold<int?>(null, (a, v) => a == null || v > a ? v : a);
+  return CatchUpWait(
+    since: both.map((w) => w.since).reduce((a, v) => v < a ? v : a),
+    pending: ids,
+    tries: latest((w) => w.tries) ?? 0,
+    nulls: latest((w) => w.nulls) ?? 0,
+    attemptAt: latest((w) => w.attemptAt),
+  );
+}
+
+/// The library's next catch-up time ([catchUpGate]) of two writers, as [mergeWaits]: the kept one
+/// when the other writer changed it since [base], else [mine].
+num? mergeOpenAt(num? base, num? mine, num? kept) => kept != base ? kept : mine;
