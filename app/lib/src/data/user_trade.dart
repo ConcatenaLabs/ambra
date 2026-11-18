@@ -258,6 +258,8 @@ class UserWords {
   // still being moved in by the wallet): never "you have none".
   // [soon]: the operator calls a coin ready once its block is certified (anchor depth 0), so it is
   // ready in a minute or two.
+  // Held by an order the person placed: they can act on it.
+  static String busy(String pay) => 'Your $pay is held by an order you placed, and can be traded once it is filled or cancelled. Nothing has moved.';
   static String notReady(String pay, [bool soon = false]) => soon
       ? 'Your $pay is on its way: it is ready to trade in a minute or two. Nothing has moved.'
       : 'Your $pay is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.';
@@ -285,11 +287,9 @@ class UserWords {
   static const noFirmOffer = 'Nobody could confirm a price for this just now. Nothing has moved: try again in a moment.';
   /// The wallet's own library was busy finishing something it started for longer than Review waits.
   static const walletBusy = 'Your wallet is still finishing something it started, so it could not get a price in time. Nothing has moved: try again in a moment.';
-  // Held, and shown in the balance, but not where a trade pays from yet (just arrived, or still
-  // being moved in by the wallet), while too little of it is ready for any offer.
-  static String partReady(String ready, String pay, [bool soon = false]) => soon
-      ? 'Only $ready of your $pay can be traded now, too little for any offer: the rest is on its way, ready in a minute or two. Nothing has moved.'
-      : 'Only $ready of your $pay can be traded now, too little for any offer: the rest is ready once the next Bitcoin blocks settle it. Nothing has moved.';
+  // More than the wallet holds, nothing of it on its way (the contract's words, the web wallet's
+  // moreThanHeld): [have] is the amount and its ticker.
+  static String moreThanHeld(String have) => 'That is more than your $have.';
   // BTC held at the wallet's address, which a trade cannot pay from until the wallet has moved it
   // where trades pay from: a move confirmed by [blocks] Bitcoin blocks (no time: Bitcoin's blocks
   // keep none).
@@ -382,6 +382,7 @@ class UserWords {
     enter,
     tooSmall,
     noFunds('XT'),
+    busy('XT'),
     notReady('XT'),
     notReady('XT', true),
     redoing('XT'),
@@ -395,8 +396,7 @@ class UserWords {
     opening,
     readying('XT'),
     readying('XT', true),
-    partReady('1 XT', 'XT'),
-    partReady('1 XT', 'XT', true),
+    moreThanHeld('1 XT'),
     btcMoving(2),
     btcMoving(1),
     btcMore(2),
@@ -834,7 +834,7 @@ class QuoteResult {
         choice = null;
   final Ticket? ticket;
   final Candidate? choice;
-  // not-listed | not-offered | no-funds | not-ready | redoing | freeing | readying | part-ready |
+  // not-listed | not-offered | no-funds | not-ready | busy | redoing | freeing | readying | part-ready |
   // btc-moving | too-small | no-firm-offer | wallet-busy | opening | btc-ahead | settle-first (only
   // inside the engine: [UserTradeEngine.quote] answers it with a ticket that settles first)
   final String? why;
@@ -1875,6 +1875,22 @@ class UserTradeEngine {
       !kEndedStates.contains(r['state']) &&
       r['preimage'] == null);
 
+  /// What the balance shows of [pay]: the app's figure ([UserTradeDeps.held], or [figure], the
+  /// larger), on the chain and as leaves.
+  Future<BigInt> _heldNow(String pay) async {
+    BigInt held = BigInt.zero;
+    if (d.held != null) {
+      try {
+        held = await d.held!(pay);
+      } catch (_) {}
+    }
+    try {
+      final f = figure?.call(pay);
+      if (f != null && f > held) held = f;
+    } catch (_) {}
+    return held;
+  }
+
   Future<QuoteResult> _quote({required String pay, required String receive, required BigInt amount}) async {
     _tooOldFrom = null;
     _liveShort = false;
@@ -1884,6 +1900,12 @@ class UserTradeEngine {
     final sources = admittedSources(ad.pairs, ad.genesis, pay, receive);
     if (sources.isEmpty) return QuoteResult.no('not-listed');
     final soonNow = soon;
+    // More than the balance shows: said so at once ("That is more than your …"), never settled first
+    // and waited for, since no settlement covers it. The web wallet's quoteHeld.
+    if (pay != kUserBtc && d.held != null) {
+      final shown = await _heldNow(pay);
+      if (shown > BigInt.zero && amount > shown) return QuoteResult.no('part-ready', ready: shown, soon: soonNow);
+    }
     // BTC is paid over the wallet's Bitcoin Lightning (in default mode its Bitcoin ark), never from a
     // leaf. BTC the wallet holds at its address is moved there for the trade, by itself.
     BigInt have;
@@ -1908,16 +1930,7 @@ class UserTradeEngine {
     if (have <= BigInt.zero) {
       // What the wallet shows it holds, though no trade can pay from it now: the wallet is asked to
       // make it ready (default mode boards coins on the chain by itself).
-      BigInt held = BigInt.zero;
-      if (d.held != null) {
-        try {
-          held = await d.held!(pay);
-        } catch (_) {}
-      }
-      try {
-        final f = figure?.call(pay);
-        if (f != null && f > held) held = f;
-      } catch (_) {}
+      final held = await _heldNow(pay);
       // The leaves are not open yet (the app has just started): what they hold is not known to be
       // payable or not, so the trade waits for them, priced again by itself.
       if (held > BigInt.zero && pay != kUserBtc && d.leavesOpen != null && !d.leavesOpen!()) return QuoteResult.no('opening');
@@ -1928,12 +1941,21 @@ class UserTradeEngine {
         try {
           d.prepare?.call(pay);
         } catch (_) {}
-        // Coins a Bitcoin reorganisation took back out of the chain, being redone: never a loss.
         if (pay != kUserBtc) {
+          var mine = const <Map>[];
           try {
-            final coins = (await _run('coins')) as List? ?? const [];
-            if (coins.any((c) => c is Map && c['asset'] == pay && c['redoing'] == true)) return QuoteResult.no('redoing');
+            mine = [for (final c in (await _run('coins')) as List? ?? const []) if (c is Map && c['asset'] == pay) c];
           } catch (_) {}
+          // Held by an order the person placed (a resting order's coin, an offer of theirs still
+          // open): true words, since the person can act on it (cancel the order).
+          if (mine.any((c) => c['order'] == true || c['state'] == 'offered')) return QuoteResult.no('busy');
+          // Coins a Bitcoin reorganisation took back out of the chain, being redone: never a loss.
+          if (mine.any((c) => c['redoing'] == true)) return QuoteResult.no('redoing');
+          // Everything else that holds it is the wallet's own doing (a refresh its upkeep runs, a
+          // payment under way, a coin not final yet): the trade waits for that round and goes, a
+          // ticket the person can accept now, never a refusal (the web wallet's settleFirst, D96).
+          // More than the balance shows was answered above.
+          return QuoteResult.no('settle-first');
         }
         return QuoteResult.no('not-ready', soon: soonNow);
       }
@@ -1956,6 +1978,10 @@ class UserTradeEngine {
     if (ind.isEmpty && have < amount && es.any((e) => sizeEntry(e, amount) != null)) {
       if (pay != kUserBtc && await _freePlanned(pay)) return QuoteResult.no('freeing', soon: soonNow);
       if (pay == kUserBtc && moving) return QuoteResult.no('btc-moving', moving: true);
+      // Part of what the balance shows waits for a round: settled first, then traded (D96). The
+      // wallet never names a tradable part of a balance. When nothing waits (the amount is more
+      // than the wallet holds), the answer is that.
+      if (pay != kUserBtc && (d.held == null || await _heldNow(pay) > have)) return QuoteResult.no('settle-first');
       return QuoteResult.no('part-ready', ready: have, soon: soonNow);
     }
     // Firm terms of the best [kFirmAtOnce], all asked at once, within the quote's time: an entry that cannot

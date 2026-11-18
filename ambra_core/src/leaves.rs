@@ -228,11 +228,19 @@ impl LeafWallet {
     /// What the scheduled job does: a `sync`, then `care` when `care` names
     /// its arguments (the app decides when it is due), then what arrived and
     /// when to wake. The answer is `{"arrived": [{leaf_id, asset, value,
-    /// kind}…], "schedule", "wake_in", "sync", "care", "coins"}`, `wake_in`
-    /// in seconds or `null`, `care` the library's answer, its refusal, or
-    /// `null` when it did not run, `coins` the library's `coins` after the
-    /// pass (the app's wait for coins paid to another store's code ends on
-    /// those it holds). A refused `care` does not fail the pass.
+    /// kind}…], "schedule", "wake_in", "sync", "care", "closed", "coins"}`,
+    /// `wake_in` in seconds or `null`, `care` the library's answer, its
+    /// refusal, or `null` when it did not run, `coins` the library's `coins`
+    /// after the pass (the app's wait for coins paid to another store's code
+    /// ends on those it holds). A refused `care` does not fail the pass.
+    ///
+    /// Default mode's care (`channels: false`) is followed by [`close_channels`],
+    /// as the app does after its own care: the wallet keeps its money in coins,
+    /// so a channel it still holds is closed into a coin at the next round even
+    /// while the app stays closed. Its answer is `closed` (`null` when it did not
+    /// run); a refused close does not fail the pass either. It runs before
+    /// `schedule` and `coins` are read, so those show the channel coins it gave
+    /// up (`given`) and the wake time follows them.
     pub fn background_sync(&mut self, care: Option<&Value>) -> Result<Value, Value> {
         let sync = self.run("sync", &json!({}))?;
         let arrived = arrivals(&sync["result"]["mailbox"]);
@@ -243,10 +251,68 @@ impl LeafWallet {
             },
             None => Value::Null,
         };
+        let closed = if care.is_some_and(default_mode_care) { close_channels(&mut |c, a| self.run(c, a)) } else { Value::Null };
         let schedule = self.run("schedule", &json!({}))?["result"].take();
         let coins = self.run("coins", &json!({}))?["result"].take();
         let wake = wake_in(&schedule, &coins);
-        Ok(json!({"arrived": arrived, "schedule": schedule, "wake_in": wake, "sync": sync["result"], "care": cared, "coins": coins}))
+        Ok(json!({"arrived": arrived, "schedule": schedule, "wake_in": wake, "sync": sync["result"], "care": cared, "closed": closed, "coins": coins}))
+    }
+}
+
+/// Whether `care`'s arguments are default mode's: channels neither opened nor
+/// folded (`channels: false`, the app's `careArgs`).
+pub fn default_mode_care(args: &Value) -> bool {
+    args["channels"] == json!(false)
+}
+
+/// The channel coins default mode closes into plain coins at the next round:
+/// each live one (`channels`' `coin_state`) that no participation holds yet
+/// (`coins` in another state). The app's `channelsToClose`, the web wallet's.
+pub fn channels_to_close(channels: &Value, coins: &Value) -> Vec<String> {
+    let held: Vec<&str> = coins
+        .as_array()
+        .map(|a| a.iter().filter(|c| c["state"].as_str() != Some("live")).filter_map(|c| c["leaf_id"].as_str()).collect())
+        .unwrap_or_default();
+    channels
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|c| c["coin_state"] == "live")
+                .filter_map(|c| c["leaf_id"].as_str())
+                .filter(|id| !held.contains(id))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Closes each live channel coin into a coin at the next round ([`channels_to_close`]):
+/// `quote` of those leaves, then `participate` with them at the fees the quote
+/// showed, through `run` (one library command, answering `{"result", …}`).
+/// The answer is `{"closed": [leaf…]}` (empty when there was none), or the
+/// refusal of the command that failed: nothing is retried here, the next care
+/// asks again.
+pub fn close_channels(run: &mut impl FnMut(&str, &Value) -> Result<Value, Value>) -> Value {
+    let mut result = |cmd: &str, args: Value| run(cmd, &args).map(|mut v| v["result"].take());
+    let channels = match result("channels", json!({})) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let coins = match result("coins", json!({})) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let ids = channels_to_close(&channels, &coins);
+    if ids.is_empty() {
+        return json!({"closed": []});
+    }
+    let quote = match result("quote", json!({"leaves": ids})) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match result("participate", json!({"leaves": ids, "shown": quote["coins"]})) {
+        Ok(_) => json!({"closed": ids}),
+        Err(e) => e,
     }
 }
 
@@ -464,6 +530,56 @@ mod tests {
         assert_eq!(wake_in(&json!({"now": 1000, "next_sync_at": null}), &spent), None);
         // A coin off the chain the schedule does not date: still daily.
         assert_eq!(wake_in(&json!({"now": 1000, "next_sync_at": null}), &json!([{"state": "exiting"}])), Some(DAILY));
+    }
+
+    // Default mode keeps its money in coins: the closed-app job closes each live
+    // channel coin at the next round, as the app does (review of the first round, A2).
+    #[test]
+    fn default_mode_closes_each_live_channel_at_the_fees_shown() {
+        let channels = json!([
+            {"leaf_id": "a", "coin_state": "live"},
+            {"leaf_id": "b", "coin_state": "given"},
+            {"leaf_id": "c", "coin_state": "live"},
+            {"coin_state": "live"}
+        ]);
+        let coins = json!([{"leaf_id": "c", "state": "given"}, {"leaf_id": "a", "state": "live"}]);
+        assert_eq!(channels_to_close(&channels, &coins), vec!["a".to_string()], "one already in a round is left alone");
+        assert!(channels_to_close(&json!(null), &json!(null)).is_empty());
+        assert!(default_mode_care(&json!({"channels": false, "scan": 27})));
+        assert!(!default_mode_care(&json!({"channels": true, "scan": 27})));
+
+        let lib = |quote_refused: bool, chans: Value| {
+            let mut calls: Vec<(String, Value)> = vec![];
+            let answer = {
+                let mut run = |cmd: &str, args: &Value| {
+                    calls.push((cmd.to_string(), args.clone()));
+                    match cmd {
+                        "channels" => Ok(json!({"result": chans.clone()})),
+                        "coins" => Ok(json!({"result": coins.clone()})),
+                        "quote" if quote_refused => Err(json!({"error": {"kind": "refused", "message": "refused: the fee is over the bound"}})),
+                        "quote" => Ok(json!({"result": {"coins": [{"leaf_id": "a", "fee": "3"}]}})),
+                        "participate" => Ok(json!({"result": {"participation": "p1"}})),
+                        _ => Err(json!({"error": {"kind": "refused"}})),
+                    }
+                };
+                close_channels(&mut run)
+            };
+            (answer, calls)
+        };
+        let (answer, calls) = lib(false, channels.clone());
+        assert_eq!(answer, json!({"closed": ["a"]}));
+        let names: Vec<&str> = calls.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(names, ["channels", "coins", "quote", "participate"]);
+        assert_eq!(calls[2].1, json!({"leaves": ["a"]}));
+        assert_eq!(calls[3].1, json!({"leaves": ["a"], "shown": [{"leaf_id": "a", "fee": "3"}]}), "at the fees the quote showed");
+        // Nothing live: no quote, nothing given up.
+        let (answer, calls) = lib(false, json!([{"leaf_id": "b", "coin_state": "given"}]));
+        assert_eq!(answer, json!({"closed": []}));
+        assert_eq!(calls.len(), 2);
+        // A refused quote is the answer, and nothing is given up.
+        let (answer, calls) = lib(true, channels.clone());
+        assert_eq!(answer["error"]["kind"], "refused");
+        assert!(!calls.iter().any(|(c, _)| c == "participate"));
     }
 
     #[test]

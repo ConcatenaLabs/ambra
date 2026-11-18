@@ -252,6 +252,8 @@ class SiteOrders {
         'not-offered' => UserWords.notOffered(_tick(get), _tick(pay)),
         'no-funds' => UserWords.noFunds(_tick(pay)),
         'not-ready' => UserWords.notReady(_tick(pay), q.soon),
+        'busy' => UserWords.busy(_tick(pay)),
+        'part-ready' => UserWords.moreThanHeld(_fmt(pay, q.ready)),
         'redoing' => UserWords.redoing(_tick(pay)),
         'freeing' => UserWords.freeing(_tick(pay), q.soon),
         _ => UserWords.tooSmall,
