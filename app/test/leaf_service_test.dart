@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ambra/src/data/leaf_service.dart';
@@ -117,6 +119,36 @@ void main() {
   // The reliability run of 2026-11-18: Ambra mobile held channels in five assets in default mode,
   // and a payment of 1 USDX found 1 USDX of live coins and waited 97 s for a round. Default mode
   // keeps its money in coins (the web wallet's contract): no channel opened, each held one closed.
+  // Review RV93 F1 / KR97 A1: the contract's "names none in its receive code". The library names
+  // every usable channel unless `receive` is asked with channels false (web main's receiveArgs).
+  // The reviewer's source test, its call form matched to receiveArgs; the name stock's codes too.
+  test('F1: default mode asks receive with channels false, for the code and the name stock', () {
+    expect(receiveArgs(false), {'channels': false});
+    expect(receiveArgs(true), isEmpty);
+    final src = File('lib/src/data/leaf_service.dart').readAsStringSync();
+    final i = src.indexOf('Future<String?> receiveCode()');
+    final body = src.substring(i, src.indexOf('\n  }\n', i));
+    expect(body, contains("run('receive', receiveArgs(DevMode.instance.on))"),
+        reason: 'receiveCode asks the library for a code naming no channel in default mode');
+    final stock = File('lib/src/data/payment_name_service.dart').readAsStringSync();
+    final j = stock.indexOf('Future<String?> _stockCode(');
+    expect(stock.substring(j, stock.indexOf('\n  }\n', j)), contains("run('receive', receiveArgs(DevMode.instance.on))"));
+  });
+
+  // Review KR97 A2: the closed-app job closes the channels default mode still holds, as the app's
+  // foreground care does (ambra_core leaves.rs background_sync; its own test covers the commands).
+  test('A2: the closed-app job closes channels after default mode\'s care', () {
+    final rs = File('../ambra_core/src/leaves.rs').readAsStringSync();
+    final i = rs.indexOf('pub fn background_sync(');
+    final body = rs.substring(i, rs.indexOf('\n    }\n', i));
+    expect(body, contains('care.is_some_and(default_mode_care)'));
+    expect(body, contains('close_channels('));
+    final dart = File('lib/src/data/leaf_service.dart').readAsStringSync();
+    expect(dart, contains('careArgs(await LeafService.scanNext(), channels: DevMode.instance.on)'),
+        reason: 'the job\'s care is default mode\'s in default mode');
+    expect(careArgs(7, channels: false)['channels'], false);
+  });
+
   test('default mode keeps its money in coins: care opens no channel, and each live one is closed', () {
     expect(careArgs(7, channels: false), {'channels': false, 'scan': 27});
     expect(careArgs(7, channels: true), {'channels': true, 'scan': 27});

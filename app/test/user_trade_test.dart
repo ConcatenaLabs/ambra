@@ -342,29 +342,33 @@ void main() {
     expect((await s.engine(makers: const [], now: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'not-offered');
     s.coins.first['state'] = 'spent';
     expect((await s.engine(now: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'no-funds');
-    // Held (the balance shows it) but no coin can pay now: not ready, and the wallet is asked to
-    // make it ready; held nowhere: none.
+    // More than the balance shows: said so at once, with what it shows, and nothing is made ready
+    // for it (the web wallet's part-ready, "That is more than your …"); held nowhere: none.
     final prepared = <String>[];
     final e = s.engine(now: () => 0, held: (a) async => a == x ? BigInt.from(500) : BigInt.zero, prepare: prepared.add);
-    expect((await e.quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'not-ready');
-    expect(prepared, [x]);
+    final more = await e.quote(pay: x, receive: y, amount: BigInt.from(400000));
+    expect([more.why, more.ready], ['part-ready', BigInt.from(500)]);
+    expect(prepared, isEmpty);
     final none = s.engine(now: () => 0, held: (_) async => BigInt.zero, prepare: prepared.add);
     expect((await none.quote(pay: x, receive: y, amount: BigInt.from(400000))).why, 'no-funds');
-    expect(prepared, [x]);
+    expect(prepared, isEmpty);
+    expect(UserWords.moreThanHeld('500 USDX'), 'That is more than your 500 USDX.');
     expect(UserWords.notReady('USDX'), 'Your USDX is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.');
   });
 
-  test('engine: at anchor depth 0 a coin not ready yet is on its way; one a reorganisation took back is being redone', () async {
+  test('engine: a coin not live yet settles first at every anchor depth; one a reorganisation took back is being redone', () async {
     final s = StandIn();
     s.coins.first['state'] = 'pending';
-    Future<BigInt> held(String a) async => a == x ? BigInt.from(500) : BigInt.zero;
-    final q0 = await s.engine(now: () => 0, held: held, anchorDepth: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000));
-    expect([q0.why, q0.soon], ['not-ready', true]);
-    expect(UserWords.notReady('USDX', q0.soon), 'Your USDX is on its way: it is ready to trade in a minute or two. Nothing has moved.');
-    for (final d in <int? Function()?>[() => 2, () => null, null]) {
+    // A coin the balance covers that is not live yet waits for its round: a ticket that settles first
+    // (the web wallet's D96), at every anchor depth, never "on its way" with nothing moved. The
+    // words for BTC not ready yet still say how soon.
+    Future<BigInt> held(String a) async => a == x ? BigInt.from(3000000) : BigInt.zero;
+    for (final d in <int? Function()?>[() => 0, () => 2, () => null, null]) {
       final q = await s.engine(now: () => 0, held: held, anchorDepth: d).quote(pay: x, receive: y, amount: BigInt.from(400000));
-      expect([q.why, q.soon], ['not-ready', false]);
+      expect(q.why, isNot('not-ready'));
+      expect(q.ok ? q.ticket!.source : q.why, q.ok ? 'settling' : 'readying', reason: '${q.why}');
     }
+    expect(UserWords.notReady('USDX', true), 'Your USDX is on its way: it is ready to trade in a minute or two. Nothing has moved.');
     s.coins.first['redoing'] = true;
     final r = await s.engine(now: () => 0, held: held, anchorDepth: () => 0).quote(pay: x, receive: y, amount: BigInt.from(400000));
     expect(r.why, 'redoing');

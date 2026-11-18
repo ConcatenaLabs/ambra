@@ -164,6 +164,21 @@ Future<Map<String, dynamic>> follow(UserTradeEngine eng, void Function() tick, {
 }
 
 void main() {
+  // Review RV93, F2: more than the balance shows, while every coin of the asset is in a round of the
+  // wallet's own, is answered as web main does (part-ready, "That is more than your <amount>."),
+  // never "not ready".
+  test('F2: more than the balance is never answered "not ready"', () async {
+    final s = SettleStandIn(deepAt: 'none');
+    s.coins[0]['state'] = 'given';
+    Future<BigInt> held(String a) async => a == x ? BigInt.from(3000000) : BigInt.zero;
+    final more = await s.engine(() => 1000000, held: held).quote(pay: x, receive: y, amount: BigInt.from(4000000));
+    expect(more.ok, isFalse);
+    expect(more.why, isNot('not-ready'), reason: 'web main: part-ready');
+    expect(UserWords.moreThanHeld('0.03 XT'), 'That is more than your 0.03 XT.');
+    expect(UserWords.all(), contains(UserWords.moreThanHeld('1 XT')));
+    expect(forbiddenIn(UserWords.moreThanHeld('1 XT')), isEmpty);
+  });
+
   // The reliability run of 2026-11-18: twice Ambra mobile answered "Your USDX is on its way: it is
   // ready to trade in a minute or two" and moved nothing, while every coin of the asset was in a
   // round of the wallet's own (its refresh of coins received out of round). The web wallet answers
@@ -183,7 +198,7 @@ void main() {
     s2.coins[0]['state'] = 'given';
     final more = await s2.engine(() => t, held: held).quote(pay: x, receive: y, amount: BigInt.from(4000000));
     expect(more.ok, isFalse);
-    expect(more.why, 'not-ready');
+    expect([more.why, more.ready], ['part-ready', BigInt.from(3000000)], reason: 'more than the balance shows: "That is more than your …"');
   });
 
   test('a coin held by an order the person placed is said as that, never "on its way"', () async {

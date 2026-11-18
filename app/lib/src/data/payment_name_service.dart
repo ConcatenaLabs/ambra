@@ -209,7 +209,8 @@ class PaymentNameService extends ChangeNotifier {
       if (ArkBtcService.instance.open) ark = await ArkBtcService.instance.address();
     } catch (_) {}
     try {
-      final r = await LeafService.instance.run('receive');
+      // The stock's codes name no channel in default mode either ([receiveArgs]).
+      final r = await LeafService.instance.run('receive', receiveArgs(DevMode.instance.on));
       seq = r is Map ? r['request']?.toString() : null;
     } catch (_) {}
     if (seq == null || seq.isEmpty) return null;

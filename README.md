@@ -436,9 +436,12 @@ module that implements it.
     last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
     the address, New address, the confidential address on request and the name under them.
   - Default mode keeps its money in coins, which every trade, swap and payment in the tree can
-    spend: its care opens and folds no channel leaf (`careArgs`, `channels: false`), and each
-    live channel coin the wallet still holds is closed into a coin at the next round
-    (`closeChannels`, `channelsToClose`), as the web wallet's default-mode contract says.
+    spend: its care opens and folds no channel leaf (`careArgs`, `channels: false`), its receive
+    codes and the payment name's stock codes name none (`receiveArgs`), and each live channel
+    coin the wallet still holds is closed into a coin at the next round, by the app after its
+    care (`closeChannels`, `channelsToClose`) and by the closed-app job after its own
+    (`background_sync`, `close_channels` in `ambra_core/src/leaves.rs`), as the web wallet's
+    default-mode contract says.
   - Payments that arrive at once, over channel leaves, in developer mode
     (`app/lib/src/data/leaf_service.dart`): where the operator makes channel leaves of an
     asset, the wallet's own care (`careArgs`, `channels: true`) opens one in each such asset
@@ -534,14 +537,15 @@ module that implements it.
     boarding, the leaf wallet is handed keys (its `address` command) until it has handed
     out as many as the main wallet, so it reads every key the balance can show a coin at:
     it finds its on-chain coins by a gap past the last key holding an unspent coin, the
-    main wallet by a gap past the last key with any history. A trade whose asset is held
-    but not payable yet, on the chain before its board, says "Your <ticker> is not ready to
-    trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved." (at anchor
-    depth 0, "Your <ticker> is on its way: it is ready to trade in a minute or two. Nothing has
-    moved.") and asks for that board at once; one held by an order the person placed says
-    "Your <ticker> is held by an order you placed, and can be traded once it is filled or
-    cancelled. Nothing has moved."; one held in the tree by the wallet's own round is the
-    ticket above, settled first.
+    main wallet by a gap past the last key with any history. A trade of more than the
+    balance shows says "That is more than your <amount>." at once. One whose asset the balance
+    covers but no coin pays now asks for that board at once and, held on the chain or in the
+    tree by the wallet's own round, is the ticket above, settled first; one held by an order the
+    person placed says "Your <ticker> is held by an order you placed, and can be traded once it
+    is filled or cancelled. Nothing has moved."; BTC not payable yet says "Your BTC is not ready
+    to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved." (at anchor
+    depth 0, "Your BTC is on its way: it is ready to trade in a minute or two. Nothing has
+    moved.").
   - An asset held in the wallet's own Lightning channel (a wallet made before its assets
     lived with the operator) moves into the tree by itself (`tickAssets`,
     `app/lib/src/data/lightning_to_ark.dart`): the leaf wallet asks to receive it over

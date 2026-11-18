@@ -1021,7 +1021,8 @@ class LeafService extends ChangeNotifier {
     // A code handed out is when a person waits for a payment: channels are read fast.
     _usedAt = DateTime.now();
     try {
-      final r = await run('receive');
+      // Default mode's code names no channel: the wallet keeps its money in coins ([receiveArgs]).
+      final r = await run('receive', receiveArgs(DevMode.instance.on));
       final req = r is Map ? r['request']?.toString() : null;
       return (req == null || req.isEmpty) ? null : req;
     } catch (_) {
@@ -2007,6 +2008,12 @@ const kReleaseTimeout =
 /// (its docs/DEFAULT_MODE.md).
 Map<String, dynamic> careArgs(int kitNextIndex, {bool channels = true}) => {'channels': channels, 'scan': kitNextIndex + 20};
 
+/// The arguments of the library's `receive` (the Receive code, the faucet's, the payment name's stock
+/// codes): in default mode the code names no channel, since the wallet keeps its money in coins and
+/// closes any channel it holds (the web wallet's receiveArgs); developer mode names every channel a
+/// payer can pay.
+Map<String, dynamic> receiveArgs(bool developer) => developer ? const {} : const {'channels': false};
+
 /// The channel coins default mode closes into plain coins at the next round: each live one that no
 /// participation holds yet ([coins] in another state). The web wallet's leaves.js channelsToClose.
 List<String> channelsToClose(List<dynamic> channels, [List<dynamic> coins = const []]) {
@@ -2467,6 +2474,9 @@ Future<Map<String, dynamic>> leafBackgroundPass(MethodChannel host) async {
       careJson: care == null ? '' : jsonEncode(care))) as Map<String, dynamic>;
   if (out['joined'] == false) return {'ok': true, 'wake_in': null, 'summary': 'no leaf wallet'};
   if (care != null) await LeafService.setCareClock(now);
+  // Default mode's care also closed the channels the wallet still held (`closed`), as the app does.
+  final closed = out['closed'] is Map ? (out['closed'] as Map)['closed'] : null;
+  if (closed is List && closed.isNotEmpty) debugPrint('[leaves] background: closing ${closed.length} channel(s) into coins at the next round');
   final arrived = arrivals({'accepted': out['arrived']});
   for (final a in arrived) {
     await notifyArrived(a, channel: host);

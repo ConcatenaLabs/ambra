@@ -631,7 +631,7 @@ class _UserComposerState extends State<UserComposer> {
             'freeing' => UserWords.freeing(p, q.soon),
             'readying' => UserWords.readying(p, q.soon),
             'btc-moving' => UserWords.btcMoving(widget.engine.btcMoveBlocks),
-            'part-ready' => UserWords.partReady(_amt(pay, q.ready ?? BigInt.zero), p, q.soon),
+            'part-ready' => UserWords.moreThanHeld(_amt(pay, q.ready ?? BigInt.zero)),
             'too-small' => UserWords.tooSmall,
             'no-firm-offer' => UserWords.noFirmOffer,
             'wallet-busy' => UserWords.walletBusy,
