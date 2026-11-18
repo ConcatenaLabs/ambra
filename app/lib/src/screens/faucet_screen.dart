@@ -124,8 +124,9 @@ class _FaucetScreenState extends State<FaucetScreen> {
         final r = await ApiClient.faucet(faucetBtcTo(addr, ark), asset: asset, wallet: _wallet);
         _paid(r.asset);
         if (r.ark) {
+          // Synced first, so the BTC figure agrees with the words.
           try {
-            await ArkBtcService.instance.refresh();
+            await ArkBtcService.instance.syncNow();
           } catch (_) {}
           if (mounted) setState(() => _status = DefaultWords.received(r.amount, 'BTC'));
         } else if (mounted) {

@@ -5,6 +5,8 @@
 //
 //   cd app && flutter test test/faucet_btc_test.dart
 
+import 'dart:io';
+
 import 'package:ambra/src/data/api_client.dart';
 import 'package:ambra/src/data/pay_code.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,5 +25,16 @@ void main() {
   test('without one: the chain address as it is', () {
     expect(faucetBtcTo(addr, null), addr);
     expect(faucetBtcTo(addr, ''), addr);
+  });
+
+  // ambra#279: BTC the faucet paid on the ark is said to have arrived only once the ark wallet has
+  // synced, so its figure agrees with the words (the ark is native code; the screen is read).
+  test('the faucet screen syncs the ark wallet before saying BTC arrived', () {
+    final src = File('lib/src/screens/faucet_screen.dart').readAsStringSync();
+    final i = src.indexOf('if (r.ark) {');
+    expect(i, greaterThan(0));
+    final branch = src.substring(i, src.indexOf('} else if (mounted)', i));
+    expect(branch, contains('ArkBtcService.instance.syncNow()'));
+    expect(branch.indexOf('syncNow()'), lessThan(branch.indexOf('DefaultWords.received')));
   });
 }

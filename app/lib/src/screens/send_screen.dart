@@ -493,6 +493,7 @@ class _SendTabState extends State<SendTab> {
             btc: _isBtc,
             msat: sats == null ? null : sats * BigInt.from(1000),
             decodeMsat: (pr) => decodeBtcInvoice(pr)['msat'] as BigInt,
+            descriptionHashOf: (pr) => decodeBtcInvoice(pr)['description_hash'] as String?,
             what: 'code',
           );
           if (!mounted) return;
@@ -514,6 +515,7 @@ class _SendTabState extends State<SendTab> {
           domain: Backend.lnaddrDomain,
           base: Backend.lsp,
           decodeMsat: (pr) => decodeBtcInvoice(pr)['msat'] as BigInt,
+            descriptionHashOf: (pr) => decodeBtcInvoice(pr)['description_hash'] as String?,
           pins: PaymentNameService.instance.pins,
         );
         if (!mounted) return;

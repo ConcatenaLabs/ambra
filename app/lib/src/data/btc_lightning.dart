@@ -51,8 +51,9 @@ int _polymod(List<int> values) {
 
 List<int> _expand(String hrp) => [...hrp.codeUnits.map((c) => c >> 5), 0, ...hrp.codeUnits.map((c) => c & 31)];
 
-/// A Bitcoin invoice read: `{sats, msat, payment_hash, expires_at, min_final_cltv}`; throws on an
-/// invoice that is not a whole, checksummed Bitcoin invoice with an amount and a hash.
+/// A Bitcoin invoice read: `{sats, msat, payment_hash, expires_at, min_final_cltv,
+/// description_hash}` (`description_hash` null when it carries none); throws on an invoice that is
+/// not a whole, checksummed Bitcoin invoice with an amount and a hash.
 Map<String, dynamic> decodeBtcInvoice(String invoice) {
   var s = invoice.trim().toLowerCase();
   if (s.startsWith('lightning:')) s = s.substring('lightning:'.length);
@@ -85,8 +86,21 @@ Map<String, dynamic> decodeBtcInvoice(String invoice) {
     ts = ts * 32 + vals[i];
   }
   final end = vals.length - 104 - 6;
-  String? hash;
+  String? hash, descriptionHash;
   int? cltv, expiry;
+  String bytes32(List<int> data) {
+    var acc = 0, bits = 0;
+    final out = <int>[];
+    for (final g in data) {
+      acc = ((acc << 5) | g) & 0xffff;
+      bits += 5;
+      if (bits >= 8) {
+        bits -= 8;
+        if (out.length < 32) out.add((acc >> bits) & 0xff);
+      }
+    }
+    return _hex(out);
+  }
   var i = 7;
   while (i + 3 <= end) {
     final type = vals[i], len = (vals[i + 1] << 5) | vals[i + 2];
@@ -107,6 +121,7 @@ Map<String, dynamic> decodeBtcInvoice(String invoice) {
       }
       hash = _hex(out);
     }
+    if (type == 23 && len == 52 && descriptionHash == null) descriptionHash = bytes32(data);
     if (type == 24 && cltv == null) cltv = asInt();
     if (type == 6 && expiry == null) expiry = asInt();
     i += len;
@@ -118,6 +133,7 @@ Map<String, dynamic> decodeBtcInvoice(String invoice) {
     'payment_hash': hash,
     'expires_at': ts + (expiry ?? 3600),
     'min_final_cltv': cltv ?? 18,
+    'description_hash': descriptionHash,
   };
 }
 

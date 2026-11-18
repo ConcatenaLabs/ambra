@@ -213,12 +213,34 @@ class LnAddressTarget {
   final bool reused;
 }
 
+/// The most redirects a read of a name or an LNURL follows.
+const kMaxRedirects = 5;
+
+/// A GET of [url] answered in JSON. Redirects are followed by hand, at most [kMaxRedirects], and
+/// never from https to anything else: a client that followed them itself would take an http
+/// redirect, and whoever sits on the network could then answer with an invoice of their own.
 Future<Map<String, dynamic>> _getJson(http.Client c, Uri url, Duration timeout) async {
   http.Response r;
-  try {
-    r = await c.get(url, headers: {'accept': 'application/json'}).timeout(timeout);
-  } catch (_) {
-    throw const LnAddressError('The address could not be reached. Check your connection and try again.');
+  var at = url;
+  for (var hops = 0;; hops++) {
+    try {
+      final req = http.Request('GET', at)
+        ..followRedirects = false
+        ..headers['accept'] = 'application/json';
+      r = await http.Response.fromStream(await c.send(req)).timeout(timeout);
+    } catch (_) {
+      throw const LnAddressError('The address could not be reached. Check your connection and try again.');
+    }
+    if (!r.isRedirect && !(r.statusCode >= 300 && r.statusCode < 400 && r.headers['location'] != null)) break;
+    final to = r.headers['location'];
+    final next = to == null ? null : at.resolve(to);
+    if (next == null || hops + 1 > kMaxRedirects) {
+      throw const LnAddressError('The address could not be reached. Check your connection and try again.');
+    }
+    if (at.scheme == 'https' && next.scheme != 'https') {
+      throw const LnAddressError('The address sent the request on to an address that is not secure, so nothing was sent.');
+    }
+    at = next;
   }
   Object? j;
   try {
@@ -264,6 +286,7 @@ Future<LnAddressTarget> resolveLnAddress({
   Duration timeout = const Duration(seconds: 20),
   NamePins? pins,
   int Function()? nowS,
+  String? Function(String invoice)? descriptionHashOf,
 }) async {
   final a = parseLnAddress(text);
   if (a == null) throw const LnAddressError('not a payment name');
@@ -317,18 +340,23 @@ Future<LnAddressTarget> resolveLnAddress({
       btc: btc,
       msat: msat,
       decodeMsat: decodeMsat,
+      descriptionHashOf: descriptionHashOf,
       client: c,
       timeout: timeout);
 }
 
 /// The invoice an LNURL-pay at [url] (LUD-06) makes for exactly [msat]: BTC only. A payment name at
 /// another service is paid this way ([resolveLnAddress]), and so is an LNURL itself
-/// ([lnurlPayUrl]); [what] names it in the words shown.
+/// ([lnurlPayUrl]); [what] names it in the words shown. With [descriptionHashOf] (an invoice's
+/// description hash, hex, or null), the invoice must commit to the service's `metadata`, as LUD-06
+/// asks: its description hash is the SHA-256 of the metadata as served, so it is the invoice the
+/// payer was shown a request for, not one of anyone else's.
 Future<LnAddressTarget> resolveLnurlPay({
   required Uri url,
   required bool btc,
   BigInt? msat,
   required BigInt Function(String invoice) decodeMsat,
+  String? Function(String invoice)? descriptionHashOf,
   http.Client? client,
   Duration timeout = const Duration(seconds: 20),
   String what = 'address',
@@ -358,6 +386,16 @@ Future<LnAddressTarget> resolveLnurlPay({
     throw LnAddressError('The $what answered with an invoice that does not read.');
   }
   if (got != msat) throw LnAddressError('The $what answered with an invoice for another amount.');
+  if (descriptionHashOf != null) {
+    final meta = p['metadata'];
+    String? h;
+    try {
+      h = descriptionHashOf(pr);
+    } catch (_) {}
+    if (meta is! String || h == null || h.toLowerCase() != hexOf(sha256.convert(utf8.encode(meta)).bytes)) {
+      throw LnAddressError('The $what answered with an invoice for something other than this payment.');
+    }
+  }
   return LnAddressTarget(invoice: pr);
 }
 

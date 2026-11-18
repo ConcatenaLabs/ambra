@@ -157,12 +157,14 @@ typedef CaughtIn = Map<String, dynamic>;
 
 /// After a sync: its own mailbox's refusals join the wait first (the sync's catch-up runs after its
 /// mailbox step, so one sync can refuse a coin and restore it), then what its catch-up restored is
-/// taken off, and the attempt is counted.
+/// taken off, and the attempt is counted. A catch-up that answered with an error (`{error}`) ran
+/// none: it counts towards the slow cadence ([kCatchUpSlowAfter]) like a sync that ran none, and
+/// never resets that count.
 ({CatchUpWait? wait, List<CaughtIn> arrived}) catchUpAfterSync(CatchUpWait? w, {required Object? sync, required int now}) {
   w = catchUpWait(w, mailbox: sync is Map ? sync['mailbox'] : null, now: now);
   if (w == null) return (wait: null, arrived: const []);
   final c = sync is Map ? sync['caught_up'] : null;
-  final ran = c is Map;
+  final ran = c is Map && c['error'] == null;
   final counted = w.copy(attemptAt: now, tries: w.tries + (caughtUpWhole(sync) ? 1 : 0), nulls: ran ? 0 : w.nulls + 1);
   final found = <String, Map>{
     for (final r in _listed(ran ? c['restored'] : null))
@@ -190,4 +192,15 @@ int? catchUpSyncIn(CatchUpWait? w, {required int now, num? libNow, num? openAt})
   final retry = w.attemptAt == null ? 0 : w.attemptAt! + gap - now;
   final gate = openAt == null || libNow == null ? 0 : ((openAt - libNow) * 1000).toInt();
   return [0, retry, gate].reduce((a, b) => a > b ? a : b);
+}
+
+/// When the scheduled job must wake, in seconds: the library's [libraryWake] (seconds, or null when
+/// nothing waits), and no later than the wait's next sync ([waitMs], from [catchUpSyncIn]; null
+/// when no wait), rounded up to a whole second.
+int? jobWakeIn(Object? libraryWake, int? waitMs) {
+  final lib = libraryWake is num ? libraryWake.toInt() : null;
+  final wait = waitMs == null ? null : (waitMs + 999) ~/ 1000;
+  if (lib == null) return wait;
+  if (wait == null) return lib;
+  return wait < lib ? wait : lib;
 }

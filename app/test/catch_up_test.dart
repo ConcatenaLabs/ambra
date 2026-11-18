@@ -13,6 +13,8 @@ import 'dart:convert';
 import 'package:ambra/src/data/catch_up.dart';
 import 'package:ambra/src/data/dev_mode.dart';
 import 'package:ambra/src/data/leaf_service.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -37,7 +39,11 @@ class FakeLibrary {
   final Set<String> refusedOnce = {};
   final Set<String> settled = {};
   final List<Map<String, dynamic>> syncs = [];
+  final List<String> commands = [];
   int mailboxReads = 0;
+  // The node or the operator not answering a schedule read; a catch-up that answers with an error.
+  bool scheduleThrows = false;
+  bool catchUpErrs = false;
 
   Map<String, dynamic> mailbox() {
     mailboxReads++;
@@ -49,8 +55,10 @@ class FakeLibrary {
   }
 
   Object? answer(String command, Map args) {
+    commands.add(command);
     switch (command) {
       case 'schedule':
+        if (scheduleThrows) throw StateError('the node does not answer');
         return {
           'now': now,
           'due': false,
@@ -64,7 +72,9 @@ class FakeLibrary {
       case 'sync':
         final mb = mailbox();
         Map<String, dynamic>? caughtUp;
-        if (lastCatchUp == null || now - lastCatchUp! >= kCatchUpEveryS) {
+        if (catchUpErrs) {
+          caughtUp = {'error': 'the operator did not answer the catch-up'};
+        } else if (lastCatchUp == null || now - lastCatchUp! >= kCatchUpEveryS) {
           lastCatchUp = now;
           final ripe = elsewhere.where(settled.contains).toList();
           elsewhere.removeWhere(ripe.contains);
@@ -88,8 +98,13 @@ class FakeLibrary {
     }
   }
 
-  Future<String> call(String command, String argsJson) async =>
-      jsonEncode({'result': answer(command, jsonDecode(argsJson) as Map)});
+  Future<String> call(String command, String argsJson) async {
+    try {
+      return jsonEncode({'result': answer(command, jsonDecode(argsJson) as Map)});
+    } on StateError catch (e) {
+      throw 'refused: ${e.message}';
+    }
+  }
 }
 
 void main() {
@@ -149,6 +164,24 @@ void main() {
       expect(w, isNull);
       w = catchUpWait(null, mailbox: refusal('x'), now: 0);
       expect(catchUpSyncIn(w, now: kCatchUpLastMs), isNull);
+    });
+
+    test('a catch-up that answers with an error ran none: it counts towards the slow cadence', () {
+      var w = catchUpWait(null, mailbox: refusal('x'), now: 0);
+      for (var i = 0; i < kCatchUpSlowAfter; i++) {
+        w = catchUpAfterSync(w, sync: {'caught_up': {'error': 'no answer'}}, now: i).wait;
+      }
+      expect(w!.nulls, kCatchUpSlowAfter, reason: 'an error never resets the count');
+      expect(w.tries, 0, reason: 'nor is it a whole catch-up');
+      expect(catchUpSyncIn(w, now: kCatchUpSlowAfter), kCatchUpSlowMs - 1);
+    });
+
+    test('the job wakes no later than the wait\'s next sync, rounded up to a second', () {
+      expect(jobWakeIn(86400, null), 86400);
+      expect(jobWakeIn(null, null), isNull);
+      expect(jobWakeIn(null, 60000), 60);
+      expect(jobWakeIn(86400, 1), 1);
+      expect(jobWakeIn(30, 600000), 30);
     });
 
     test('a failing node slows the attempts down, never spins', () {
@@ -239,11 +272,146 @@ void main() {
       expect(lib.syncs, hasLength(1), reason: 'a minute between two attempts, whatever the library\'s clock');
     });
 
+    test('out of view the pass keeps its usual pace and reads no more than before (ambra#276)', () async {
+      lib.requestAge = 7 * 86400;
+      final b = TestWidgetsFlutterBinding.instance;
+      b.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      try {
+        await l.tickForTest(ticking: false);
+        expect(l.plannedInForTest!.inSeconds, greaterThanOrEqualTo(50), reason: 'nextAsk, not the ten-second cap');
+      } finally {
+        b.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      }
+      l.stopPassesForTest();
+      l.resetReadsForTest();
+      await l.tickForTest(ticking: false);
+      expect(l.plannedInForTest!.inSeconds, lessThanOrEqualTo(LeafService.mailboxEvery.inSeconds), reason: 'in view, the ten-second cap');
+    });
+
+    test('out of view in developer mode, a week-old request is not read for at every pass', () async {
+      lib.requestAge = 7 * 86400;
+      await DevMode.instance.loadFor('abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about');
+      await DevMode.instance.set(true);
+      final b = TestWidgetsFlutterBinding.instance;
+      b.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      try {
+        await l.tickForTest(ticking: false);
+        expect(lib.mailboxReads, 0);
+      } finally {
+        b.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        await DevMode.instance.set(false);
+      }
+    });
+
+    test('a node that throws keeps the wait\'s cadence: ten minutes after ten attempts, not a pass a minute (ambra#277)', () async {
+      lib.elsewhere.add('x');
+      await l.tickForTest(ticking: false);
+      expect(l.catchUp?.pending, ['x']);
+      lib.scheduleThrows = true;
+      for (var i = 0; i < kCatchUpSlowAfter; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 3));
+        await l.tickForTest(ticking: false);
+      }
+      expect(l.catchUp!.nulls, kCatchUpSlowAfter);
+      expect(l.plannedInForTest!.inSeconds, greaterThan(9 * 60), reason: 'the next pass after ten failed attempts');
+    });
+
+    test('a catch-up that answers with an error is an attempt that ran none, never a reset (ambra#277)', () async {
+      lib.elsewhere.add('x');
+      lib.catchUpErrs = true;
+      await l.tickForTest(ticking: false);
+      await l.tickForTest(ticking: false);
+      expect(lib.syncs, hasLength(1));
+      expect(l.catchUp!.nulls, 1);
+      expect(l.catchUp!.tries, 0);
+    });
+
+    test('a catch-up sync is followed by the watchtowers\' deposits (ambra#275)', () async {
+      lib.elsewhere.add('x');
+      lib.settled.add('x');
+      await l.tickForTest(ticking: false);
+      await l.tickForTest(ticking: false);
+      expect(lib.syncs.single['args'], {'deposits': false});
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(lib.commands.indexOf('deposits'), greaterThan(lib.commands.indexOf('sync')));
+    });
+
+    test('back from the background, the wallet goes on with the wait as the job left it', () async {
+      lib.elsewhere.add('x');
+      await l.tickForTest(ticking: false);
+      expect(l.catchUp?.pending, ['x']);
+      // The job took the coin in meanwhile and ended the wait.
+      final p = await SharedPreferences.getInstance();
+      await p.setString('ambra.leaves.catchUp', jsonEncode({'wait': null, 'openAt': lib.now + kCatchUpEveryS}));
+      await l.openingSync(by: 'resume');
+      expect(l.catchUp, isNull);
+    });
+
     test('the wait survives the app closing', () async {
       lib.elsewhere.add('x');
       await l.tickForTest(ticking: false);
       final kept = jsonDecode((await SharedPreferences.getInstance()).getString('ambra.leaves.catchUp')!) as Map;
       expect((kept['wait'] as Map)['pending'], ['x']);
+    });
+  });
+
+  group('the scheduled job, with the app closed (ambra#278)', () {
+    const host = MethodChannel('catch-up-test/job');
+    final notified = <String>[];
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      notified.clear();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(host, (c) async {
+        if (c.method == 'notify') notified.add('${(c.arguments as Map)['id']}');
+        return null;
+      });
+    });
+    Future<void> keep(CatchUpWait? w, {num? openAt}) async =>
+        (await SharedPreferences.getInstance()).setString('ambra.leaves.catchUp', jsonEncode({'wait': w?.toJson(), 'openAt': openAt}));
+    Future<CatchUpWait?> kept() async =>
+        CatchUpWait.fromJson((jsonDecode((await SharedPreferences.getInstance()).getString('ambra.leaves.catchUp')!) as Map)['wait']);
+    Map<String, dynamic> pass({Object? mailbox, Object? caughtUp, List coins = const [], int wake = 86400, int now = 1800000000}) => {
+          'arrived': [],
+          'schedule': {'now': now, 'next_sync_at': now + wake},
+          'wake_in': wake,
+          'sync': {'mailbox': mailbox ?? {'accepted': [], 'refused': []}, 'caught_up': caughtUp, 'schedule': {'now': now}},
+          'coins': coins,
+        };
+
+    test('a refusal in the job starts the wait, kept for the app, and the job wakes for it', () async {
+      final r = await jobOutcome(pass(mailbox: refusal('y'), caughtUp: {'restored': []}), host: host, nowMs: 1000);
+      expect((await kept())!.pending, ['y']);
+      // The catch-up just ran whole: the library opens it again ten minutes on.
+      expect(r['wake_in'], kCatchUpEveryS);
+    });
+
+    test('a coin the app waited for, restored by the job\'s catch-up, is shown and ends the wait', () async {
+      await keep(catchUpWait(null, mailbox: refusal('x'), now: 0));
+      final r = await jobOutcome(pass(caughtUp: {'restored': [{'leaf_id': 'x', 'asset': 'aa', 'value': '5'}]}), host: host, nowMs: 1000);
+      expect(notified, ['x']);
+      expect(await kept(), isNull);
+      expect(r['wake_in'], 86400);
+    });
+
+    test('a coin the wallet holds after the job ends the wait too', () async {
+      await keep(catchUpWait(null, mailbox: refusal('x'), now: 0));
+      await jobOutcome(pass(coins: [{'leaf_id': 'x', 'asset': 'aa', 'value': '5', 'state': 'live'}]), host: host, nowMs: 1000);
+      expect(notified, ['x']);
+      expect(await kept(), isNull);
+    });
+
+    test('a failed pass is an attempt: a minute on, then ten minutes after ten in a row', () async {
+      await keep(catchUpWait(null, mailbox: refusal('x'), now: 0));
+      expect(await jobFailed(nowMs: 1000), kCatchUpRetryMs ~/ 1000);
+      for (var i = 1; i < kCatchUpSlowAfter; i++) {
+        await jobFailed(nowMs: 1000 + i);
+      }
+      expect((await kept())!.nulls, kCatchUpSlowAfter);
+      expect(await jobFailed(nowMs: 2000), kCatchUpSlowMs ~/ 1000);
+    });
+
+    test('without a wait, a failed pass names no wake time (the host retries in an hour)', () async {
+      expect(await jobFailed(nowMs: 1000), isNull);
     });
   });
 }
