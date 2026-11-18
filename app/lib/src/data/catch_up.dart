@@ -234,3 +234,41 @@ CatchUpWait? mergeWaits(CatchUpWait? base, CatchUpWait? mine, CatchUpWait? kept)
 /// The library's next catch-up time ([catchUpGate]) of two writers, as [mergeWaits]: the kept one
 /// when the other writer changed it since [base], else [mine].
 num? mergeOpenAt(num? base, num? mine, num? kept) => kept != base ? kept : mine;
+
+/// A pass of the scheduled job's part of the wait, as it hands it over: the wait (and the library's
+/// next catch-up time) it read, [baseWait] and [baseOpenAt], and what it made of them. The app is
+/// the one writer of the kept wait; the job writes each pass as an entry of its own, which the app
+/// merges in ([foldJobEntries]) and only then removes, so a pass the job writes while the app
+/// merges is never written over (ambra#288).
+class JobEntry {
+  const JobEntry({this.baseWait, this.baseOpenAt, this.wait, this.openAt});
+  final CatchUpWait? baseWait;
+  final num? baseOpenAt;
+  final CatchUpWait? wait;
+  final num? openAt;
+
+  Map<String, dynamic> toJson() =>
+      {'baseWait': baseWait?.toJson(), 'baseOpenAt': baseOpenAt, 'wait': wait?.toJson(), 'openAt': openAt};
+
+  static JobEntry? fromJson(Object? j) {
+    if (j is! Map) return null;
+    return JobEntry(
+      baseWait: CatchUpWait.fromJson(j['baseWait']),
+      baseOpenAt: j['baseOpenAt'] as num?,
+      wait: CatchUpWait.fromJson(j['wait']),
+      openAt: j['openAt'] as num?,
+    );
+  }
+}
+
+/// The wait as the app keeps it ([wait], [openAt]) with the job's [entries] folded in, in the
+/// order the job wrote them, each merged three ways from the state it was made from
+/// ([mergeWaits], [mergeOpenAt]): what the job added or took in is applied, what the app did since
+/// is kept.
+({CatchUpWait? wait, num? openAt}) foldJobEntries(CatchUpWait? wait, num? openAt, Iterable<JobEntry> entries) {
+  for (final e in entries) {
+    wait = mergeWaits(e.baseWait, wait, e.wait);
+    openAt = mergeOpenAt(e.baseOpenAt, openAt, e.openAt);
+  }
+  return (wait: wait, openAt: openAt);
+}

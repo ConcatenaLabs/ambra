@@ -2,6 +2,7 @@ import 'lightning_to_ark.dart';
 import 'speed_up_service.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show Random;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart' show SchedulerBinding;
@@ -546,6 +547,7 @@ class LeafService extends ChangeNotifier {
     if (open) leaves.leavesClose();
     open = false;
     info = null;
+    await _stampStopped();
     await _foreground(false);
     notifyListeners();
   }
@@ -1175,60 +1177,83 @@ class LeafService extends ChangeNotifier {
   num? _catchUpOpenAt;
   bool _catchUpLoaded = false;
 
-  /// What this engine last read or wrote of the kept wait: the scheduled job writes it too (in an
-  /// engine of its own, in this process while the app holds the wallet), and [_catchUpMerge]
-  /// takes in what it changed since, by leaf id, rather than writing over it (ambra#286).
-  CatchUpWait? _catchUpBase;
-  num? _catchUpBaseOpenAt;
-
-  Future<({CatchUpWait? wait, num? openAt})?> _catchUpKept({bool reload = true}) async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      if (reload) await p.reload();
-      final j = jsonDecode(p.getString(_kCatchUp) ?? 'null');
-      return j is Map ? (wait: CatchUpWait.fromJson(j['wait']), openAt: j['openAt'] as num?) : (wait: null, openAt: null);
-    } catch (_) {
-      return null;
-    }
-  }
+  /// The job's entries this engine has merged in ([_catchUpMerge]), removed once the wait they
+  /// went into is written ([_catchUpKeep]).
+  final Set<String> _catchUpConsumed = {};
 
   Future<void> _catchUpLoad() async {
     if (_catchUpLoaded) return;
     _catchUpLoaded = true;
-    final k = await _catchUpKept(reload: false);
+    final k = await readCatchUpKept(reload: false);
     if (k == null) return;
+    // The wait as kept, the job's entries since folded in.
     catchUp ??= k.wait;
     _catchUpOpenAt ??= k.openAt;
-    _catchUpBase = k.wait;
-    _catchUpBaseOpenAt = k.openAt;
+    _catchUpConsumed.addAll(k.entries);
+    if (k.entries.isNotEmpty) unawaited(_catchUpKeep());
   }
 
-  /// The kept wait read again and merged into this engine's ([mergeWaits]): a coin the job's sync
-  /// refused is waited for here too, and one the job took in is not announced again.
+  /// The job's entries written since, merged into this engine's wait ([foldJobEntries]): a coin the
+  /// job's sync refused is waited for here too, one the job took in is not announced again, and
+  /// the library's next catch-up time the job learned is kept. The app is the one writer of the
+  /// kept wait (ambra#288).
   Future<void> _catchUpMerge() async {
     await _catchUpLoad();
-    final k = await _catchUpKept();
-    if (k == null) return;
-    catchUp = mergeWaits(_catchUpBase, catchUp, k.wait);
-    _catchUpOpenAt = mergeOpenAt(_catchUpBaseOpenAt, _catchUpOpenAt, k.openAt);
-    _catchUpBase = k.wait;
-    _catchUpBaseOpenAt = k.openAt;
+    final fresh = await readJobEntries(skip: _catchUpConsumed);
+    if (fresh == null || fresh.isEmpty) return;
+    final f = foldJobEntries(catchUp, _catchUpOpenAt, fresh.map((e) => e.entry));
+    catchUp = f.wait;
+    _catchUpOpenAt = f.openAt;
+    _catchUpConsumed.addAll(fresh.map((e) => e.key));
+    unawaited(_catchUpKeep());
   }
 
   /// Back from the background: what the scheduled job did meanwhile, merged in.
   Future<void> _catchUpReload() => _catchUpMerge();
 
-  /// The wait kept, one write at a time, each merged with what is kept first.
+  /// Between the merge and the write of the wait: a job's pass written there must not be lost.
+  @visibleForTesting
+  static Future<void> Function()? debugBeforeCatchUpWrite;
+
+  /// The wait kept, one write at a time: the job's entries merged in first, the wait written, and
+  /// only then the entries that went into it removed. An entry the job writes meanwhile is a key of
+  /// its own, merged at the next change.
   Future<void> _catchUpKeep() => _catchUpWrites = _catchUpWrites.then((_) async {
         await _catchUpMerge();
         try {
+          await debugBeforeCatchUpWrite?.call();
           final p = await SharedPreferences.getInstance();
+          final done = {..._catchUpConsumed};
           await p.setString(_kCatchUp, jsonEncode({'wait': catchUp?.toJson(), 'openAt': _catchUpOpenAt}));
-          _catchUpBase = catchUp;
-          _catchUpBaseOpenAt = _catchUpOpenAt;
+          for (final k in done) {
+            await p.remove(k);
+          }
+          _catchUpConsumed.removeAll(done);
         } catch (_) {}
       });
   Future<void> _catchUpWrites = Future.value();
+
+  /// The app's upkeep runs: stamped at every pass (at most once a [kAliveStampEvery]), so the
+  /// scheduled job leaves the wait to the app only while it really runs ([kAppAliveMs]), whatever
+  /// ended the app's engine without a word (ambra#287).
+  DateTime? _aliveStampedAt;
+  Future<void> _stampAlive() async {
+    final now = DateTime.now();
+    final last = _aliveStampedAt;
+    if (last != null && now.difference(last) < kAliveStampEvery) return;
+    _aliveStampedAt = now;
+    try {
+      await (await SharedPreferences.getInstance()).setInt(kAppAliveKey, now.millisecondsSinceEpoch);
+    } catch (_) {}
+  }
+
+  /// The upkeep stopped (the wallet closed): the job carries the wait from its next pass.
+  Future<void> _stampStopped() async {
+    _aliveStampedAt = null;
+    try {
+      await (await SharedPreferences.getInstance()).remove(kAppAliveKey);
+    } catch (_) {}
+  }
 
   /// Once every write of the wait asked so far has landed.
   @visibleForTesting
@@ -2037,13 +2062,17 @@ class LeafService extends ChangeNotifier {
       await p.remove(_kScanNext);
       await p.remove(_kClaims);
       await p.remove(_kCatchUp);
+      await p.remove(kAppAliveKey);
+      for (final k in p.getKeys().where((k) => k.startsWith(kJobEntryPrefix)).toList()) {
+        await p.remove(k);
+      }
     } catch (_) {}
     instance
       ..catchUp = null
       .._catchUpOpenAt = null
-      .._catchUpBase = null
-      .._catchUpBaseOpenAt = null
-      .._catchUpLoaded = false;
+      .._catchUpLoaded = false
+      .._aliveStampedAt = null
+      .._catchUpConsumed.clear();
   }
 
   /// The assets the operator serves supervised.
@@ -2104,6 +2133,7 @@ class LeafService extends ChangeNotifier {
     _ticking = true;
     var wait = tick;
     final tickStarted = _nowMs;
+    await _stampAlive();
     try {
       final s = await run('schedule') as Map<String, dynamic>?;
       schedule = s;
@@ -2671,11 +2701,82 @@ Future<Map<String, dynamic>> leafBackgroundPass(MethodChannel host) async {
   };
 }
 
+/// The key the app's upkeep stamps at every pass (ms since the epoch), and how long a stamp says
+/// the upkeep still runs: twice its longest pass (the wait's slow cadence), so a live app is never
+/// taken for gone, and one whose engine ended without a word is within that (ambra#287).
+const kAppAliveKey = 'ambra.leaves.catchUp.appAlive';
+const kAppAliveMs = 2 * kCatchUpSlowMs;
+const kAliveStampEvery = Duration(seconds: 30);
+
+/// The keys of the job's entries ([JobEntry]): the prefix, then the time written (ms, padded so
+/// they sort) and a random part. An entry older than [kJobEntryKeepMs] belongs to a wait that has
+/// ended, and is let go of unread.
+const kJobEntryPrefix = 'ambra.leaves.catchUp.job.';
+const kJobEntryKeepMs = 2 * kCatchUpLastMs;
+
+int? _entryTime(String key) => int.tryParse(key.substring(kJobEntryPrefix.length).split('.').first);
+
+/// The job's entries kept now, in the order written, but [skip] (those already merged), each with
+/// its key; null when the preferences do not read.
+Future<List<({String key, JobEntry entry})>?> readJobEntries({Set<String> skip = const {}, bool reload = true, int? nowMs}) async {
+  try {
+    final p = await SharedPreferences.getInstance();
+    if (reload) await p.reload();
+    final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    final keys = p.getKeys().where((k) => k.startsWith(kJobEntryPrefix) && !skip.contains(k)).toList()..sort();
+    final out = <({String key, JobEntry entry})>[];
+    for (final k in keys) {
+      final t = _entryTime(k);
+      final e = JobEntry.fromJson(jsonDecode(p.getString(k) ?? 'null'));
+      if (e == null || t == null || now - t > kJobEntryKeepMs) {
+        if (!skip.contains(k)) await p.remove(k);
+        continue;
+      }
+      out.add((key: k, entry: e));
+    }
+    return out;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// The wait as it stands for whoever reads it: the app's kept wait with the job's entries since
+/// folded in ([foldJobEntries]), and the keys of those entries.
+Future<({CatchUpWait? wait, num? openAt, List<String> entries})?> readCatchUpKept({bool reload = true, int? nowMs}) async {
+  try {
+    final p = await SharedPreferences.getInstance();
+    if (reload) await p.reload();
+    final j = jsonDecode(p.getString(LeafService._kCatchUp) ?? 'null');
+    final es = await readJobEntries(reload: false, nowMs: nowMs) ?? const [];
+    final f = foldJobEntries(j is Map ? CatchUpWait.fromJson(j['wait']) : null, j is Map ? j['openAt'] as num? : null, es.map((e) => e.entry));
+    return (wait: f.wait, openAt: f.openAt, entries: [for (final e in es) e.key]);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// A job's pass written as an entry of its own, when it changed anything: never over the app's
+/// wait, nor over another entry.
+Future<void> _jobEntry(({CatchUpWait? wait, num? openAt}) base, CatchUpWait? wait, num? openAt, int now) async {
+  if (jsonEncode(base.wait?.toJson()) == jsonEncode(wait?.toJson()) && base.openAt == openAt) return;
+  try {
+    final p = await SharedPreferences.getInstance();
+    final key = '$kJobEntryPrefix${now.toString().padLeft(15, '0')}.${Random().nextInt(1 << 32).toRadixString(16).padLeft(8, '0')}';
+    await p.setString(key, jsonEncode(JobEntry(baseWait: base.wait, baseOpenAt: base.openAt, wait: wait, openAt: openAt).toJson()));
+  } catch (_) {}
+}
+
 /// What the scheduled job's pass did ([out], `leaves_job`'s answer): a notification per coin
-/// received, the wait for coins of the phrase carried on (catch_up.dart: the sync's refusals join
-/// it, what its catch-up restored and what the wallet now holds leave it, the attempt is counted),
-/// and when to wake: the library's time, and no later than the wait's next sync. The wait is kept
-/// where the app keeps it, so the app and the job go on with the same one.
+/// received, its part of the wait for coins of the phrase handed over as an entry (the app is the
+/// one writer of the wait), and when to wake.
+///
+/// While the app's upkeep runs on this wallet (it holds the wallet in this process, and its stamp
+/// is fresh), the app carries the wait: the job hands over only the coins its own sync refused and
+/// the library's next catch-up time its sync learned, announces none of the wait's coins, and
+/// wakes on the library's time, or once the app's stamp would go stale while a wait lasts.
+/// Otherwise the job carries the wait (catch_up.dart): its sync's refusals join it, what its
+/// catch-up restored and what the wallet now holds leave it (each announced), the attempt is
+/// counted, and it wakes no later than the wait's next sync.
 Future<Map<String, dynamic>> jobOutcome(Map<String, dynamic> out, {required MethodChannel host, int? nowMs}) async {
   final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
   final arrived = arrivals({'accepted': out['arrived']});
@@ -2684,27 +2785,32 @@ Future<Map<String, dynamic>> jobOutcome(Map<String, dynamic> out, {required Meth
   }
   final s = out['schedule'] as Map?;
   final libNow = s?['now'] as num?;
-  final kept = await _jobWait();
-  if (out['opened_for_the_job'] == false) {
-    // The app holds this wallet open in this process, and its upkeep carries the wait: the job
-    // only hands over the coins its own sync refused (the app merges them in before its next
-    // change), announces nothing of the wait's and wakes on the library's time (ambra#286).
-    final refused = phraseCoinsRefused((out['sync'] as Map?)?['mailbox']);
-    if (refused.isNotEmpty) await _jobKeep(catchUpWait(kept.wait, mailbox: (out['sync'] as Map)['mailbox'], now: now), kept.openAt);
+  final sync = out['sync'] as Map?;
+  final k = await readCatchUpKept(nowMs: now);
+  final base = (wait: k?.wait, openAt: k?.openAt);
+  final openAt = catchUpGate(base.openAt, sync, libNow);
+  int? aliveAt;
+  try {
+    aliveAt = (await SharedPreferences.getInstance()).getInt(kAppAliveKey);
+  } catch (_) {}
+  final appRuns = out['opened_for_the_job'] == false && aliveAt != null && now - aliveAt < kAppAliveMs;
+  if (appRuns) {
+    final w = catchUpWait(base.wait, mailbox: sync?['mailbox'], now: now);
+    await _jobEntry(base, w, openAt, now);
+    final stale = aliveAt + kAppAliveMs - now + 1000;
     return {
       'ok': true,
-      'wake_in': out['wake_in'],
+      'wake_in': jobWakeIn(out['wake_in'], w == null ? null : stale),
       'summary': 'arrived ${arrived.length}; next_sync_at ${s?['next_sync_at']}; now ${s?['now']}; the open app carries the wait'
-          '${refused.isEmpty ? '' : ' (${refused.length} coin(s) refused handed to it)'}',
+          '${w == null ? '' : ' (${w.pending.length} coin(s))'}',
     };
   }
-  final openAt = catchUpGate(kept.openAt, out['sync'], libNow);
-  final a = catchUpAfterSync(kept.wait, sync: out['sync'], now: now);
+  final a = catchUpAfterSync(base.wait, sync: sync, now: now);
   final h = catchUpHeld(a.wait, out['coins'], now);
   for (final c in [...a.arrived, ...h.arrived]) {
     await notifyArrived(c, channel: host);
   }
-  await _jobKeep(h.wait, openAt);
+  await _jobEntry(base, h.wait, openAt, now);
   final waitMs = catchUpSyncIn(h.wait, now: now, libNow: libNow, openAt: openAt);
   return {
     'ok': true,
@@ -2715,31 +2821,15 @@ Future<Map<String, dynamic>> jobOutcome(Map<String, dynamic> out, {required Meth
 }
 
 /// A pass of the scheduled job that failed (the node or the operator not answering): an attempt
-/// at the wait's catch-up all the same. The wake time it names while the wait lasts (seconds), so
-/// the job keeps the wait's cadence; null when there is no wait.
+/// at the wait's catch-up all the same, handed over as an entry. The wake time it names while the
+/// wait lasts (seconds), so the job keeps the wait's cadence; null when there is no wait.
 Future<int?> jobFailed({int? nowMs}) async {
   final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
-  final kept = await _jobWait();
-  final w = catchUpAttempt(catchUpWait(kept.wait, now: now), now);
-  await _jobKeep(w, kept.openAt);
-  return jobWakeIn(null, catchUpSyncIn(w, now: now, openAt: kept.openAt));
-}
-
-Future<({CatchUpWait? wait, num? openAt})> _jobWait() async {
-  try {
-    final p = await SharedPreferences.getInstance();
-    await p.reload();
-    final j = jsonDecode(p.getString(LeafService._kCatchUp) ?? 'null');
-    if (j is Map) return (wait: CatchUpWait.fromJson(j['wait']), openAt: j['openAt'] as num?);
-  } catch (_) {}
-  return (wait: null, openAt: null);
-}
-
-Future<void> _jobKeep(CatchUpWait? w, num? openAt) async {
-  try {
-    final p = await SharedPreferences.getInstance();
-    await p.setString(LeafService._kCatchUp, jsonEncode({'wait': w?.toJson(), 'openAt': openAt}));
-  } catch (_) {}
+  final k = await readCatchUpKept(nowMs: now);
+  final base = (wait: k?.wait, openAt: k?.openAt);
+  final w = catchUpAttempt(catchUpWait(base.wait, now: now), now);
+  await _jobEntry(base, w, base.openAt, now);
+  return jobWakeIn(null, catchUpSyncIn(w, now: now, openAt: base.openAt));
 }
 
 // ---------------------------------------------------------------------------

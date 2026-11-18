@@ -721,9 +721,16 @@ module that implements it.
   it shares with the app: its sync's refusals join the wait, the coins its catch-up
   restores or the wallet holds leave it (each with a notification), and a pass that
   fails counts as an attempt and wakes again at the wait's cadence instead of an hour
-  later (`jobFailed`). When the job finds the wallet open in the app, the app carries the
-  wait and the job only hands over the coins its own sync refused; the app merges the kept
-  wait by leaf id before every change, so neither writes over the other. The job keeps
+  later (`jobFailed`). The app is the one writer of the kept wait: the job writes each
+  pass as an entry of its own (the wait it read and what it made of it), which the app
+  merges in by leaf id before every change, writes into the wait, and only then removes,
+  so a pass the job writes meanwhile is never lost. While the app's upkeep runs on the
+  wallet (it holds the wallet in this process and stamps every pass, `kAppAliveKey`, the
+  stamp younger than twice its longest pass), the app carries the wait: the job only hands
+  over the coins its own sync refused and the library's next catch-up time, and looks again
+  once the stamp would go stale; an app whose engine ended without a word (Back on the home
+  screen of older Android, with the sync service keeping the process alive) stops stamping,
+  and the job carries the wait again. The job keeps
   running whatever the mode, so coins already held keep their refresh. When the leaf
   wallet opens and whenever the app comes back to the foreground it syncs once,
   whatever the schedule says (the schedule wakes a planned coin only at its plan's
