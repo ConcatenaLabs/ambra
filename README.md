@@ -206,7 +206,8 @@ module that implements it.
   round of its operator). Past a stated wait by two minutes the row says it is taking longer than
   usual. Such trades are followed every few seconds. When what is paid waits only for the
   operator's next round (coins just received and not yet settled, too many payments from a round,
-  or of a format the other side does not read), Review shows a ticket to accept now: You receive
+  of a format the other side does not read, or every coin of the asset in a round the wallet's own
+  upkeep started), Review shows a ticket to accept now: You receive
   "about" the price now, "You receive at least … after fees, or the trade comes back and nothing
   is traded.", and "Goes through within about N minutes" as the leaf library states it ("Goes
   through by itself once what you pay is ready" until it does). Only **Trade** gives those coins
@@ -434,14 +435,19 @@ module that implements it.
     While a code handed out in the
     last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
     the address, New address, the confidential address on request and the name under them.
-  - Payments that arrive at once, over channel leaves (`app/lib/src/data/leaf_service.dart`):
-    where the operator makes channel leaves of an asset, the wallet's own care
-    (`careArgs`, `channels: true`) opens one in each such asset from half of the wallet's
-    leaves of it, reads it and folds the credit it was paid. The receive code names the
+  - Default mode keeps its money in coins, which every trade, swap and payment in the tree can
+    spend: its care opens and folds no channel leaf (`careArgs`, `channels: false`), and each
+    live channel coin the wallet still holds is closed into a coin at the next round
+    (`closeChannels`, `channelsToClose`), as the web wallet's default-mode contract says.
+  - Payments that arrive at once, over channel leaves, in developer mode
+    (`app/lib/src/data/leaf_service.dart`): where the operator makes channel leaves of an
+    asset, the wallet's own care (`careArgs`, `channels: true`) opens one in each such asset
+    from half of the wallet's leaves of it, reads it and folds the credit it was paid. The
+    receive code names the
     wallet's payable channels (live, their round final) and is made again when they change,
     and the leaf library's `send` pays over a channel when the code it pays names one, with no
     round between. A payment the receiving channel cannot take is paid as any payment to a
-    receive code. In default mode the wallet reads its channels (`channel_sync`) every 300 ms
+    receive code. While it holds a channel the wallet reads its channels (`channel_sync`) every 300 ms
     while the app is in view and was used, opened, paid or showed a receive code within three
     minutes, else every five seconds, never while another leaf command runs or a person's
     payment is being reviewed (`holdReads`); a channel paid moves the asset's figure at once
@@ -529,8 +535,13 @@ module that implements it.
     out as many as the main wallet, so it reads every key the balance can show a coin at:
     it finds its on-chain coins by a gap past the last key holding an unspent coin, the
     main wallet by a gap past the last key with any history. A trade whose asset is held
-    but not payable yet says "Your <ticker> is not ready to trade yet. It will be in a few
-    minutes; nothing has moved." and asks for that board at once.
+    but not payable yet, on the chain before its board, says "Your <ticker> is not ready to
+    trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved." (at anchor
+    depth 0, "Your <ticker> is on its way: it is ready to trade in a minute or two. Nothing has
+    moved.") and asks for that board at once; one held by an order the person placed says
+    "Your <ticker> is held by an order you placed, and can be traded once it is filled or
+    cancelled. Nothing has moved."; one held in the tree by the wallet's own round is the
+    ticket above, settled first.
   - An asset held in the wallet's own Lightning channel (a wallet made before its assets
     lived with the operator) moves into the tree by itself (`tickAssets`,
     `app/lib/src/data/lightning_to_ark.dart`): the leaf wallet asks to receive it over

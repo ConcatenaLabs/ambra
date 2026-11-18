@@ -626,6 +626,7 @@ class _UserComposerState extends State<UserComposer> {
           _error = switch (q.why) {
             'no-funds' => UserWords.noFunds(p),
             'not-ready' => UserWords.notReady(p, q.soon),
+            'busy' => UserWords.busy(p),
             'redoing' => UserWords.redoing(p),
             'freeing' => UserWords.freeing(p, q.soon),
             'readying' => UserWords.readying(p, q.soon),

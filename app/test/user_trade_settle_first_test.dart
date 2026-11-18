@@ -128,8 +128,9 @@ class SettleStandIn {
     return {};
   }
 
-  UserTradeEngine engine(int Function() now) => UserTradeEngine(UserTradeDeps(
+  UserTradeEngine engine(int Function() now, {Future<BigInt> Function(String asset)? held}) => UserTradeEngine(UserTradeDeps(
         run: run,
+        held: held,
         fetchJson: fetchJson,
         makers: () => ['http://m'],
         relayBook: (_, _) async => [],
@@ -163,6 +164,39 @@ Future<Map<String, dynamic>> follow(UserTradeEngine eng, void Function() tick, {
 }
 
 void main() {
+  // The reliability run of 2026-11-18: twice Ambra mobile answered "Your USDX is on its way: it is
+  // ready to trade in a minute or two" and moved nothing, while every coin of the asset was in a
+  // round of the wallet's own (its refresh of coins received out of round). The web wallet answers
+  // that with a ticket that settles first (D96); so does this engine now.
+  test('every coin of the asset in a round of the wallet\'s own: a ticket that settles first, never a refusal', () async {
+    final s = SettleStandIn(deepAt: 'none');
+    s.coins[0]['state'] = 'given';
+    var t = 1000000;
+    Future<BigInt> held(String a) async => a == x ? BigInt.from(3000000) : BigInt.zero;
+    final q = await s.engine(() => t, held: held).quote(pay: x, receive: y, amount: BigInt.from(400000));
+    expect(q.ok, isTrue, reason: 'not "on its way": ${q.why}');
+    expect(q.ticket!.source, 'settling');
+    expect(q.ticket!.indicative, isTrue);
+    expect(s.settleAsks, isEmpty, reason: 'a price request gives nothing to a round');
+    // More than the balance shows is not waited for.
+    final s2 = SettleStandIn(deepAt: 'none');
+    s2.coins[0]['state'] = 'given';
+    final more = await s2.engine(() => t, held: held).quote(pay: x, receive: y, amount: BigInt.from(4000000));
+    expect(more.ok, isFalse);
+    expect(more.why, 'not-ready');
+  });
+
+  test('a coin held by an order the person placed is said as that, never "on its way"', () async {
+    final s = SettleStandIn(deepAt: 'none');
+    s.coins[0]['state'] = 'offered';
+    Future<BigInt> held(String a) async => a == x ? BigInt.from(3000000) : BigInt.zero;
+    final q = await s.engine(() => 0, held: held).quote(pay: x, receive: y, amount: BigInt.from(400000));
+    expect(q.why, 'busy');
+    expect(UserWords.busy('USDX'), 'Your USDX is held by an order you placed, and can be traded once it is filled or cancelled. Nothing has moved.');
+    expect(forbiddenIn(UserWords.busy('USDX')), isEmpty);
+    expect(UserWords.all(), contains(UserWords.busy('XT')));
+  });
+
   test('the words of settling first name no developer word, and promise no time until the wallet says one', () {
     for (final w in [UserWords.settling, UserWords.goesThrough(1), UserWords.goesThrough(6), UserWords.goesThroughLate, UserWords.atLeast('1 YT'), UserWords.returnedLate]) {
       expect(forbiddenIn(w), isEmpty, reason: w);

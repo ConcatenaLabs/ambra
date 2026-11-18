@@ -258,6 +258,8 @@ class UserWords {
   // still being moved in by the wallet): never "you have none".
   // [soon]: the operator calls a coin ready once its block is certified (anchor depth 0), so it is
   // ready in a minute or two.
+  // Held by an order the person placed: they can act on it.
+  static String busy(String pay) => 'Your $pay is held by an order you placed, and can be traded once it is filled or cancelled. Nothing has moved.';
   static String notReady(String pay, [bool soon = false]) => soon
       ? 'Your $pay is on its way: it is ready to trade in a minute or two. Nothing has moved.'
       : 'Your $pay is not ready to trade yet: it is once the next Bitcoin blocks settle it. Nothing has moved.';
@@ -382,6 +384,7 @@ class UserWords {
     enter,
     tooSmall,
     noFunds('XT'),
+    busy('XT'),
     notReady('XT'),
     notReady('XT', true),
     redoing('XT'),
@@ -834,7 +837,7 @@ class QuoteResult {
         choice = null;
   final Ticket? ticket;
   final Candidate? choice;
-  // not-listed | not-offered | no-funds | not-ready | redoing | freeing | readying | part-ready |
+  // not-listed | not-offered | no-funds | not-ready | busy | redoing | freeing | readying | part-ready |
   // btc-moving | too-small | no-firm-offer | wallet-busy | opening | btc-ahead | settle-first (only
   // inside the engine: [UserTradeEngine.quote] answers it with a ticket that settles first)
   final String? why;
@@ -1928,12 +1931,21 @@ class UserTradeEngine {
         try {
           d.prepare?.call(pay);
         } catch (_) {}
-        // Coins a Bitcoin reorganisation took back out of the chain, being redone: never a loss.
         if (pay != kUserBtc) {
+          var mine = const <Map>[];
           try {
-            final coins = (await _run('coins')) as List? ?? const [];
-            if (coins.any((c) => c is Map && c['asset'] == pay && c['redoing'] == true)) return QuoteResult.no('redoing');
+            mine = [for (final c in (await _run('coins')) as List? ?? const []) if (c is Map && c['asset'] == pay) c];
           } catch (_) {}
+          // Held by an order the person placed (a resting order's coin, an offer of theirs still
+          // open): true words, since the person can act on it (cancel the order).
+          if (mine.any((c) => c['order'] == true || c['state'] == 'offered')) return QuoteResult.no('busy');
+          // Coins a Bitcoin reorganisation took back out of the chain, being redone: never a loss.
+          if (mine.any((c) => c['redoing'] == true)) return QuoteResult.no('redoing');
+          // Everything else that holds it is the wallet's own doing (a refresh its upkeep runs, a
+          // payment under way, a coin not final yet): the trade waits for that round and goes, a
+          // ticket the person can accept now, never a refusal (the web wallet's settleFirst, D96).
+          // More than the balance shows is not waited for.
+          if (amount <= held) return QuoteResult.no('settle-first');
         }
         return QuoteResult.no('not-ready', soon: soonNow);
       }

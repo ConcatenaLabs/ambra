@@ -1707,10 +1707,12 @@ class LeafService extends ChangeNotifier {
     _caredThisRun = true;
     final at = DateTime.now();
     try {
-      lastCare = Map<String, dynamic>.from(await run('care', careArgs(await scanNext())) as Map);
+      final dev = DevMode.instance.on;
+      lastCare = Map<String, dynamic>.from(await run('care', careArgs(await scanNext(), channels: dev)) as Map);
       careError = null;
       // A channel opened or its credit folded: the channels and the code follow at once.
       if (careMovedChannels(lastCare)) await refresh();
+      if (!dev && await closeChannels()) await refresh();
     } catch (e) {
       careError = LeafRefusal.of(e);
     }
@@ -1721,6 +1723,27 @@ class LeafService extends ChangeNotifier {
     await readClaims(force: true);
     await _readsBetween();
     await watchBond();
+  }
+
+  /// Default mode keeps no channel: each live channel coin is given up in the next round for a
+  /// plain coin of the wallet's side, at the fee the library's quote shows, once (one already in
+  /// a participation is left alone). Answers whether any was given up. The web wallet's
+  /// closeChannels.
+  Future<bool> closeChannels() async {
+    if (!open || DevMode.instance.on) return false;
+    try {
+      final chans = await run('channels');
+      final coins = await run('coins');
+      final ids = channelsToClose(chans is List ? chans : const [], coins is List ? coins : const []);
+      if (ids.isEmpty) return false;
+      final q = await run('quote', {'leaves': ids}) as Map?;
+      await run('participate', {'leaves': ids, 'shown': q?['coins']});
+      debugPrint('[leaves] closing ${ids.length} channel(s) into coins at the next round');
+      return true;
+    } catch (e) {
+      debugPrint('[leaves] closing channels: $e');
+      return false;
+    }
   }
 
   /// Reads the library's `claims` (under the keys care scans) at most every [kClaimsEvery], or
@@ -1975,10 +1998,24 @@ const kReleaseTimeout =
 /// leaf of a round is planned once its first step could run within ten days, so it stays
 /// free to trade and pay out of round for most of its life.
 ///
-/// It also cares for the wallet's channels (`channels`): each read and its credit folded, and
-/// one opened in each asset the operator makes channels of, from half of the wallet's leaves of
-/// it, so a payment between two such wallets is final for the receiver at once.
-Map<String, dynamic> careArgs(int kitNextIndex) => {'channels': true, 'scan': kitNextIndex + 20};
+/// In developer mode it also cares for the wallet's channels (`channels`): each read and its
+/// credit folded, and one opened in each asset the operator makes channels of, from half of the
+/// wallet's leaves of it, so a payment between two such wallets is final for the receiver at once.
+/// Default mode ([channels] false) keeps its money in coins, which every trade, swap and payment in
+/// the tree can spend: care opens and folds no channel there, and the wallet closes each channel it
+/// still holds into a coin at the next round ([channelsToClose]), as the web wallet's contract says
+/// (its docs/DEFAULT_MODE.md).
+Map<String, dynamic> careArgs(int kitNextIndex, {bool channels = true}) => {'channels': channels, 'scan': kitNextIndex + 20};
+
+/// The channel coins default mode closes into plain coins at the next round: each live one that no
+/// participation holds yet ([coins] in another state). The web wallet's leaves.js channelsToClose.
+List<String> channelsToClose(List<dynamic> channels, [List<dynamic> coins = const []]) {
+  final held = {for (final c in coins) if (c is Map && c['state'] != 'live') '${c['leaf_id']}'};
+  return [
+    for (final c in channels)
+      if (c is Map && c['coin_state'] == 'live' && c['leaf_id'] != null && !held.contains('${c['leaf_id']}')) '${c['leaf_id']}'
+  ];
+}
 
 /// Whether a care answer opened a channel or folded one's credit ([careArgs]' `channels`).
 bool careMovedChannels(Map? care) {
@@ -2418,7 +2455,11 @@ Future<Map<String, dynamic>> leafBackgroundPass(MethodChannel host) async {
   final dir = await LeafService.dataDir();
   // Care rides along when it is due, on the clock the app keeps too.
   final now = DateTime.now();
-  final care = careDue(await LeafService.careClock(), now) ? careArgs(await LeafService.scanNext()) : null;
+  // The wallet's mode decides whether care keeps channels (developer mode) or none (default mode).
+  try {
+    await DevMode.instance.loadFor(m);
+  } catch (_) {/* default mode */}
+  final care = careDue(await LeafService.careClock(), now) ? careArgs(await LeafService.scanNext(), channels: DevMode.instance.on) : null;
   final out = jsonDecode(await leaves.leavesJob(
       dir: dir,
       mnemonic: m,

@@ -114,6 +114,23 @@ void main() {
         reason: 'the library\'s own planning reach, and the wallet\'s channels cared for');
   });
 
+  // The reliability run of 2026-11-18: Ambra mobile held channels in five assets in default mode,
+  // and a payment of 1 USDX found 1 USDX of live coins and waited 97 s for a round. Default mode
+  // keeps its money in coins (the web wallet's contract): no channel opened, each held one closed.
+  test('default mode keeps its money in coins: care opens no channel, and each live one is closed', () {
+    expect(careArgs(7, channels: false), {'channels': false, 'scan': 27});
+    expect(careArgs(7, channels: true), {'channels': true, 'scan': 27});
+    final chans = [
+      {'leaf_id': 'a', 'coin_state': 'live'},
+      {'leaf_id': 'b', 'coin_state': 'given'},
+      {'leaf_id': 'c', 'coin_state': 'live'},
+      {'coin_state': 'live'},
+    ];
+    expect(channelsToClose(chans), ['a', 'c']);
+    expect(channelsToClose(chans, [{'leaf_id': 'c', 'state': 'given'}]), ['a'], reason: 'one already in a round is left alone');
+    expect(channelsToClose(const []), isEmpty);
+  });
+
   test('a care answer is counted part by part, refusals named', () {
     final sum = careSummary({
       'claims': [
