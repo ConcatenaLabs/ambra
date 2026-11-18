@@ -267,11 +267,27 @@ void main() {
     // While the library places it: listed as placing.
     final o1 = ((await s.orders('o'))['orders'] as List).single as Map;
     expect(o1['state'], 'placing');
-    // The library's orders name an order of that amount: it is adopted as this site's.
-    l.ordersAnswer = [{'order': 'o9', 'state': 'waiting', 'amount': '$u'}];
+    // The library's orders name an order of that asset, amount and price: it is adopted as this
+    // site's. One of another asset and the same amount, listed first, is not.
+    String rev(String h) => [for (var i = h.length - 2; i >= 0; i -= 2) h.substring(i, i + 2)].join();
+    l.ordersAnswer = [
+      {'order': 'oOther', 'state': 'resting', 'amount': '$u', 'terms': {'asset_a': rev(q), 'asset_b': rev(b), 'rate_num': '9000', 'rate_den': '1'}},
+      {'order': 'o9', 'state': 'waiting', 'amount': '$u', 'terms': {'asset_a': rev(b), 'asset_b': rev(q), 'rate_num': '9000', 'rate_den': '1'}},
+    ];
     final o2 = ((await s.orders('o'))['orders'] as List).single as Map;
     expect([o2['order'], o2['state']], ['o9', 'placing']);
     hold.complete();
+  });
+
+  test('a placement is matched on its asset, amount and price, never on its amount alone', () {
+    String rev(String h) => [for (var i = h.length - 2; i >= 0; i -= 2) h.substring(i, i + 2)].join();
+    final rec = {'sell': b, 'sold': '5000', 'rate_num': '2', 'rate_den': '1'};
+    Map order(String sell, {String num = '2', String amount = '5000'}) => {'order': 'x', 'amount': amount, 'terms': {'asset_a': rev(sell), 'rate_num': num, 'rate_den': '1'}};
+    expect(samePlacement(order(b), rec), isTrue);
+    expect(samePlacement(order(q), rec), isFalse, reason: 'another asset of the same amount');
+    expect(samePlacement(order(b, num: '3'), rec), isFalse, reason: 'another price');
+    expect(samePlacement(order(b, amount: '5001'), rec), isFalse);
+    expect(samePlacement({'order': 'x', 'amount': '5000'}, rec), isFalse, reason: 'no terms: no claim');
   });
 
   test('a placement the library refuses is said plainly, never in its own words', () async {
