@@ -621,5 +621,13 @@ class ArkBtcService extends ChangeNotifier {
   }
 
   /// A new address of the ark: another wallet of the same ark pays it in seconds.
+  /// The ark wallet synced with its server (what was paid to it taken in), then read again: what a
+  /// screen that says BTC arrived on the ark waits for, so the figure it shows agrees.
+  Future<void> syncNow() async {
+    if (!open) return;
+    await ark.arkSync();
+    await refresh();
+  }
+
   Future<String> address() async => '${(jsonDecode(await ark.arkAddress()) as Map)['address']}';
 }

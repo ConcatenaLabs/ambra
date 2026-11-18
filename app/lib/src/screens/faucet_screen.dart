@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../rust/api.dart' as core;
 import '../data/api_client.dart';
+import '../data/ark_btc_service.dart';
 import '../data/config.dart';
 import '../data/default_words.dart';
 import '../data/dev_mode.dart';
@@ -110,10 +111,27 @@ class _FaucetScreenState extends State<FaucetScreen> {
     });
     try {
       if (asset == 'BTC') {
-        // BTC is paid on chain to the wallet's address, the same address on both chains.
-        final r = await ApiClient.faucet(addr, asset: asset, wallet: _wallet);
+        // BTC is paid on the Bitcoin ark when the wallet holds BTC there (in seconds), else on the
+        // chain to the wallet's address, the same address on both chains ([faucetBtcTo]).
+        String? ark;
+        if (ArkBtcService.instance.open) {
+          try {
+            ark = await ArkBtcService.instance.address();
+          } catch (e) {
+            debugPrint('[faucet] ark address: $e');
+          }
+        }
+        final r = await ApiClient.faucet(faucetBtcTo(addr, ark), asset: asset, wallet: _wallet);
         _paid(r.asset);
-        if (mounted) setState(() => _status = 'The faucet sent ${r.amount} BTC. It arrives after a Bitcoin block.');
+        if (r.ark) {
+          // Synced first, so the BTC figure agrees with the words.
+          try {
+            await ArkBtcService.instance.syncNow();
+          } catch (_) {}
+          if (mounted) setState(() => _status = DefaultWords.received(r.amount, 'BTC'));
+        } else if (mounted) {
+          setState(() => _status = 'The faucet sent ${r.amount} BTC. It arrives after a Bitcoin block.');
+        }
         return;
       }
       if (_userTree) {

@@ -109,6 +109,49 @@ String signWith(List<int> priv, List<int> digest) => hexOf(schnorrSign(priv, dig
   return (name: m.group(1)!.toLowerCase(), domain: m.group(2)!.toLowerCase());
 }
 
+/// The LNURL-pay URL [text] holds: an LNURL (LUD-01, bech32 with the human part `lnurl`, either
+/// case, `lightning:` in front or not), or LUD-17's `lnurlp://host/path`, read as `https://`. Null
+/// for anything else. A web wallet's receive code with an amount carries its name's LNURL as
+/// `lightning=`, and a payer may paste or scan that part alone.
+Uri? lnurlPayUrl(String text) {
+  final s = text.trim().replaceFirst(RegExp(r'^lightning:', caseSensitive: false), '');
+  if (RegExp(r'^lnurlp://', caseSensitive: false).hasMatch(s)) {
+    final u = Uri.tryParse('https://${s.substring('lnurlp://'.length)}');
+    return u == null || u.host.isEmpty ? null : u;
+  }
+  final url = lnurlDecode(s);
+  if (url == null) return null;
+  final u = Uri.tryParse(url);
+  return u == null || u.host.isEmpty ? null : u;
+}
+
+/// The LNURL-pay Send pays for what was typed, pasted or scanned: an LNURL ([lnurlPayUrl]), or a
+/// `bitcoin:` code whose one way to pay is its LNURL. Null when [input] names anything else, which
+/// Send pays as it always did (ambra#271: a bare LNURL was paid as a Bitcoin address).
+Uri? lnurlOfSendInput(String input) {
+  final u = lnurlPayUrl(input);
+  if (u != null) return u;
+  PayCode? c;
+  try {
+    c = PayCode.read(input);
+  } on FormatException catch (_) {}
+  if (c == null || c.lnurl == null || c.address != null || c.ark != null || c.sequentia != null || c.lightning != null) {
+    return null;
+  }
+  return Uri.tryParse(c.lnurl!);
+}
+
+/// The payment name an LNURL-pay URL stands for, `name@domain`, when it is LUD-16's own URL for one
+/// (`https://domain/.well-known/lnurlp/name`, nothing more): it is then paid as that name is, which
+/// at this wallet's service means its receive code, in any asset. Null for any other URL.
+String? lnurlName(Uri url) {
+  if (url.scheme != 'https' || url.hasQuery || url.hasFragment || url.hasPort) return null;
+  final p = url.pathSegments;
+  if (p.length != 3 || p[0] != '.well-known' || p[1] != 'lnurlp') return null;
+  final a = parseLnAddress('${p[2]}@${url.host}');
+  return a == null ? null : '${a.name}@${a.domain}';
+}
+
 /// What Receive's QR code holds for a name: `name@domain` in lower case and nothing else. Of the
 /// spellings a payer's wallet may scan it is the one the most read as a payment name: LUD-16 gives
 /// the name in lower case, `lightning:` in front of it is refused by some wallets' scanners (and in
@@ -170,12 +213,34 @@ class LnAddressTarget {
   final bool reused;
 }
 
+/// The most redirects a read of a name or an LNURL follows.
+const kMaxRedirects = 5;
+
+/// A GET of [url] answered in JSON. Redirects are followed by hand, at most [kMaxRedirects], and
+/// never from https to anything else: a client that followed them itself would take an http
+/// redirect, and whoever sits on the network could then answer with an invoice of their own.
 Future<Map<String, dynamic>> _getJson(http.Client c, Uri url, Duration timeout) async {
   http.Response r;
-  try {
-    r = await c.get(url, headers: {'accept': 'application/json'}).timeout(timeout);
-  } catch (_) {
-    throw const LnAddressError('The address could not be reached. Check your connection and try again.');
+  var at = url;
+  for (var hops = 0;; hops++) {
+    try {
+      final req = http.Request('GET', at)
+        ..followRedirects = false
+        ..headers['accept'] = 'application/json';
+      r = await http.Response.fromStream(await c.send(req)).timeout(timeout);
+    } catch (_) {
+      throw const LnAddressError('The address could not be reached. Check your connection and try again.');
+    }
+    if (!r.isRedirect && !(r.statusCode >= 300 && r.statusCode < 400 && r.headers['location'] != null)) break;
+    final to = r.headers['location'];
+    final next = to == null ? null : at.resolve(to);
+    if (next == null || hops + 1 > kMaxRedirects) {
+      throw const LnAddressError('The address could not be reached. Check your connection and try again.');
+    }
+    if (at.scheme == 'https' && next.scheme != 'https') {
+      throw const LnAddressError('The address sent the request on to an address that is not secure, so nothing was sent.');
+    }
+    at = next;
   }
   Object? j;
   try {
@@ -221,6 +286,7 @@ Future<LnAddressTarget> resolveLnAddress({
   Duration timeout = const Duration(seconds: 20),
   NamePins? pins,
   int Function()? nowS,
+  String? Function(String invoice)? descriptionHashOf,
 }) async {
   final a = parseLnAddress(text);
   if (a == null) throw const LnAddressError('not a payment name');
@@ -269,16 +335,46 @@ Future<LnAddressTarget> resolveLnAddress({
     final out = stale ? PayCode(address: pc.address, ark: pc.ark).build() : code;
     return LnAddressTarget(code: out, fresh: j['fresh'] == true && !reused, reused: reused);
   }
-  if (!btc) throw const LnAddressError('This address takes BTC only.');
+  return resolveLnurlPay(
+      url: Uri.parse(lnurlpUrl(Uri.encodeComponent(a.name), a.domain)),
+      btc: btc,
+      msat: msat,
+      decodeMsat: decodeMsat,
+      descriptionHashOf: descriptionHashOf,
+      client: c,
+      timeout: timeout);
+}
+
+/// The invoice an LNURL-pay at [url] (LUD-06) makes for exactly [msat]: BTC only. A payment name at
+/// another service is paid this way ([resolveLnAddress]), and so is an LNURL itself
+/// ([lnurlPayUrl]); [what] names it in the words shown. With [descriptionHashOf] (an invoice's
+/// description hash, hex, or null), an invoice that carries a description hash must commit to the
+/// service's `metadata`, as LUD-06 asks: the hash is the SHA-256 of the metadata as served, so it
+/// is the invoice the payer was shown a request for. One that carries none (a plain description,
+/// as every Sequentia name service's invoice is until it can commit, ambra#284) is paid as before:
+/// refusing it would refuse every such name (ambra#285).
+Future<LnAddressTarget> resolveLnurlPay({
+  required Uri url,
+  required bool btc,
+  BigInt? msat,
+  required BigInt Function(String invoice) decodeMsat,
+  String? Function(String invoice)? descriptionHashOf,
+  http.Client? client,
+  Duration timeout = const Duration(seconds: 20),
+  String what = 'address',
+}) async {
+  if (!btc) throw LnAddressError('This $what takes BTC only.');
   if (msat == null || msat <= BigInt.zero) throw const LnAddressError('Enter an amount.');
-  final p = await _getJson(c, Uri.parse(lnurlpUrl(Uri.encodeComponent(a.name), a.domain)), timeout);
-  if (p['tag'] != 'payRequest' || p['callback'] is! String) throw const LnAddressError('This address does not take payments.');
+  if (url.scheme != 'https') throw LnAddressError('This $what does not take payments.');
+  final c = client ?? http.Client();
+  final p = await _getJson(c, url, timeout);
+  if (p['tag'] != 'payRequest' || p['callback'] is! String) throw LnAddressError('This $what does not take payments.');
   final cb = Uri.tryParse(p['callback'] as String);
-  if (cb == null || cb.scheme != 'https') throw const LnAddressError('This address does not take payments.');
+  if (cb == null || cb.scheme != 'https') throw LnAddressError('This $what does not take payments.');
   final min = BigInt.tryParse('${p['minSendable'] ?? 1}') ?? BigInt.one;
   final max = BigInt.tryParse('${p['maxSendable'] ?? 0}') ?? BigInt.zero;
   if (msat < min || (max > BigInt.zero && msat > max)) {
-    throw LnAddressError('This address takes between ${_btc(min + BigInt.from(999))} and ${_btc(max)} BTC.');
+    throw LnAddressError('This $what takes between ${_btc(min + BigInt.from(999))} and ${_btc(max)} BTC.');
   }
   final r = await _getJson(c, cb.replace(queryParameters: {...cb.queryParameters, 'amount': '$msat'}), timeout);
   final pr = '${r['pr'] ?? ''}';
@@ -286,12 +382,22 @@ Future<LnAddressTarget> resolveLnAddress({
   try {
     got = decodeMsat(pr);
   } on FormatException catch (e) {
-    if (e.message.contains('not a Bitcoin')) throw const LnAddressError('The address answered with an invoice that is not for BTC.');
-    throw const LnAddressError('The address answered with an invoice that does not read.');
+    if (e.message.contains('not a Bitcoin')) throw LnAddressError('The $what answered with an invoice that is not for BTC.');
+    throw LnAddressError('The $what answered with an invoice that does not read.');
   } catch (_) {
-    throw const LnAddressError('The address answered with an invoice that does not read.');
+    throw LnAddressError('The $what answered with an invoice that does not read.');
   }
-  if (got != msat) throw const LnAddressError('The address answered with an invoice for another amount.');
+  if (got != msat) throw LnAddressError('The $what answered with an invoice for another amount.');
+  if (descriptionHashOf != null) {
+    final meta = p['metadata'];
+    String? h;
+    try {
+      h = descriptionHashOf(pr);
+    } catch (_) {}
+    if (h != null && (meta is! String || h.toLowerCase() != hexOf(sha256.convert(utf8.encode(meta)).bytes))) {
+      throw LnAddressError('The $what answered with an invoice for something other than this payment.');
+    }
+  }
   return LnAddressTarget(invoice: pr);
 }
 
