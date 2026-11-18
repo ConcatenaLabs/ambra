@@ -172,6 +172,26 @@ class _Pending {
   final int at;
 }
 
+/// The asset a library order sells, as the wallet names assets: its terms carry it (`asset_a`) in the
+/// library's own byte order, the reverse of the name. Null when the terms do not say.
+String? soldAssetOf(Map x) {
+  final t = x['terms'];
+  final h = t is Map ? t['asset_a'] : null;
+  if (h is! String || !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(h)) return null;
+  final s = h.toLowerCase();
+  return [for (var i = s.length - 2; i >= 0; i -= 2) s.substring(i, i + 2)].join();
+}
+
+/// Whether a library order is the one a placement record (`placing`) asked for: the same asset sold,
+/// the same amount, and, where both say it, the same price (the web wallet's `samePlacement`).
+bool samePlacement(Map x, Map rec) {
+  if ('${x['amount'] ?? x['holds'] ?? ''}' != '${rec['sold']}') return false;
+  if (soldAssetOf(x) != '${rec['sell'] ?? ''}'.toLowerCase()) return false;
+  final t = x['terms'] is Map ? x['terms'] as Map : const {};
+  if (rec['rate_num'] != null && t['rate_num'] != null && ('${t['rate_num']}' != '${rec['rate_num']}' || '${t['rate_den']}' != '${rec['rate_den']}')) return false;
+  return true;
+}
+
 class SiteOrders {
   SiteOrders(this.d);
   final SiteOrderDeps d;
@@ -506,13 +526,14 @@ class SiteOrders {
         d.log('[site orders] orders: $e');
       }
     }
-    // An order placed while its app closed: the library's order of the same amount sold, named by
-    // no other record, is it.
+    // An order placed while its app closed: the library's order of the same asset sold, amount and
+    // price, named by no other record, is it. An order of another asset (a placement of the same
+    // amount elsewhere) is never taken for it.
     if (placing.isNotEmpty && lib.isNotEmpty) {
       final known = {...(v['orders'] as Map).keys.map((k) => '$k')};
       for (final e in placing) {
         final rec = e.value as Map;
-        final o = lib.whereType<Map>().where((x) => !known.contains('${x['order']}') && '${x['amount'] ?? x['holds'] ?? ''}' == '${rec['sold']}').firstOrNull;
+        final o = lib.whereType<Map>().where((x) => !known.contains('${x['order']}') && samePlacement(x, rec)).firstOrNull;
         if (o == null) continue;
         known.add('${o['order']}');
         (v['orders'] as Map)['${o['order']}'] = rec;
