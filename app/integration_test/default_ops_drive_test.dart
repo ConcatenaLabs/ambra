@@ -153,8 +153,8 @@ void main() {
     t = DateTime.now();
     try {
       if (ArkBtcService.instance.held == BigInt.zero) {
-        final r = await ApiClient.faucet(info.address, asset: 'BTC', wallet: wallet);
-        note('faucet BTC: ${r.amount} sent on the chain');
+        final r = await ApiClient.faucet(faucetBtcTo(info.address, await ArkBtcService.instance.address()), asset: 'BTC', wallet: wallet);
+        note('faucet BTC: ${r.amount} sent ${r.ark ? 'on the Bitcoin ark' : 'on the chain'}');
       }
     } catch (e) {
       check('faucet BTC: $e', false);
@@ -208,7 +208,8 @@ void main() {
       await tester.tap(find.text('Review & send'));
       final inTree = find.byKey(const Key('send-code-confirm'));
       final onChain = find.byKey(const Key('send-review-send'));
-      final opened = await until(() => inTree.evaluate().isNotEmpty || onChain.evaluate().isNotEmpty, 90);
+      final out = find.byKey(const Key('send-offboard-confirm'));
+      final opened = await until(() => inTree.evaluate().isNotEmpty || onChain.evaluate().isNotEmpty || out.evaluate().isNotEmpty, 90);
       check('$what: the review opens in ${since(t0)} s', opened);
       if (!opened) return;
       check('$what: paid in seconds, not on the chain', inTree.evaluate().isNotEmpty);

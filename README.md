@@ -26,8 +26,9 @@ Protocol documentation lives in the node repo:
   offered on the same download page.
 - iOS is not released. The `app/ios/` scaffold exists but iOS bring-up has not happened
   (it needs a macOS + Xcode machine).
-- Free testnet funds: the in-app faucet (More tab) dispenses BTC (testnet4, on chain to
-  the wallet's address), tSEQ and the demo assets. In user mode the faucet pays the
+- Free testnet funds: the in-app faucet (More tab) dispenses BTC (testnet4: on the Bitcoin
+  ark in seconds when the wallet holds BTC there, at a receive code carrying its ark address,
+  `faucetBtcTo`; else on chain to the wallet's address), tSEQ and the demo assets. In user mode the faucet pays the
   wallet's receive code, and the wallet reads its mailbox for the coin at once, so it shows
   as received in seconds (the address if the faucet refuses the code, though never only
   because the faucet is busy); in developer mode, a wallet that joined an operator can ask to be paid as a
@@ -1052,12 +1053,16 @@ Rust core through flutter_rust_bridge on the host. They resolve the cdylib from
 
 On a device or emulator, `integration_test/default_ops_drive_test.dart` drives default mode's
 everyday operations against the live testnet: Receive's one card and the wallet's payment name,
-money in from the faucet (assets as instant payments, BTC on the chain), Send to a receive code
-through the Send screen, a trade each way between USDX and EURX and each way with BTC through the
+money in from the faucet (assets as instant payments, BTC on the Bitcoin ark), Send to a receive
+code through the Send screen, a trade each way between USDX and EURX and each way with BTC through the
 Swap tab's engine, and BTC out to an address. It logs each operation's stated wait and the time it
 took, and saves a screenshot of each screen through `test_driver/integration_test.dart`, since an
 emulator's own screen capture reads the app back as black. It prints the new wallet's recovery
 phrase once, so the run's coins can be recovered; keep that line out of anything shared.
+Three optional steps take a second wallet beside the drive (its header names the
+`--dart-define`s): Send pays it, Send pays a bare LNURL of a payment name, and the drive waits
+for a payment to its own name made at a code another store of its phrase left as the name's
+stock, saying how soon it showed.
 
 ```sh
 AMBRA_SHOTS=/tmp/shots flutter drive --driver=test_driver/integration_test.dart \
