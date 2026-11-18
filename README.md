@@ -432,7 +432,14 @@ module that implements it.
     without a connection. Each code is paid once; a new one shows when it is."; **Show name**
     goes back. An amount or Confidential gives the full code.
     While a code handed out in the
-    last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
+    last hour waits, the wallet reads for a payment every four seconds, and while any request it
+    handed out waits (the name's stocked codes are handed out up to a day after they are made),
+    every ten seconds; developer mode reads at every pass of its schedule. A payment to a code
+    another wallet of the phrase handed out (the phrase open in Ambra browser or the web wallet,
+    or a store this phone held before) is taken in by that read; one the operator does not serve
+    yet is kept and synced for once the leaf library's catch-up between the phrase's wallets is
+    open by its own clock, a minute apart at least, until the wallet holds it, for at most six
+    catch-ups or a day (`app/lib/src/data/catch_up.dart`, the web wallet's `catchUpWait`). Developer mode shows
     the address, New address, the confidential address on request and the name under them.
   - Payments that arrive at once, over channel leaves (`app/lib/src/data/leaf_service.dart`):
     where the operator makes channel leaves of an asset, the wallet's own care
@@ -473,8 +480,13 @@ module that implements it.
     "This name gave a receive code its wallet did not sign, so nothing was sent. Ask the
     recipient for their full code." or "This name now belongs to another wallet than the one you
     paid before, so nothing was sent. Ask the recipient for their full code."; a name at another domain in BTC only, at the invoice
-    that service makes, which must be for BTC and for exactly the amount. Anything that is not a
-    code or a name (an address, an invoice, an account id) takes the path it always took.
+    that service makes, which must be for BTC and for exactly the amount. An LNURL-pay
+    (`LNURL1…` in either case, with `lightning:` before it or not, LUD-17's `lnurlp://…`, or a
+    `bitcoin:` code whose one way to pay is its LNURL; `lnurlOfSendInput`) is paid the same way:
+    the URL a payment name stands for (`https://domain/.well-known/lnurlp/name`) as that name,
+    any other in BTC only, over Lightning, at the invoice it makes for exactly the amount. Anything
+    that is not a code, a name or an LNURL (an address, an invoice, an account id) takes the path
+    it always took.
     An address send the chain cannot cover is paid out of the leaves (the library's
     `offboard_quote`, then `offboard` on the quote shown): "Send <amt> <TICKER>?", "It
     arrives within <N> minutes. Keep this screen open meanwhile." (the most the whole way to

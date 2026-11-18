@@ -16,6 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../rust/api/leaves.dart' as leaves;
 import 'address_payments.dart';
 import 'btc_state.dart';
+import 'catch_up.dart';
 import 'config.dart';
 import 'default_words.dart';
 import 'dev_mode.dart';
@@ -1117,7 +1118,7 @@ class LeafService extends ChangeNotifier {
     _running++;
     final t0 = DateTime.now();
     try {
-      final out = jsonDecode(await leaves.leavesRun(command: command, argsJson: jsonEncode(args)));
+      final out = jsonDecode(await (debugLibrary ?? _library)(command, jsonEncode(args)));
       // A command over ten seconds says where its time went (the library's own costs), so a slow
       // phone can be read from its log.
       final ms = DateTime.now().difference(t0).inMilliseconds;
@@ -1126,8 +1127,12 @@ class LeafService extends ChangeNotifier {
         final t = jsonEncode({'cost': out['cost'], 'steps': r is Map ? r['cost_by_step'] : null});
         debugPrint('[leaves] slow $command $ms ms: ${t.length > 900 ? t.substring(0, 900) : t}');
       }
-      return (out as Map)['result'];
+      final result = (out as Map)['result'];
+      await _readForCatchUp(command, result);
+      return result;
     } catch (e) {
+      // Every sync is an attempt at the catch-up a wait holds, one that throws too.
+      if (command == 'sync') await _catchUpCounted();
       // A command refused after holding the library over ten seconds is named as one that
       // answered is: a refusal holds every command behind it just as long.
       final ms = DateTime.now().difference(t0).inMilliseconds;
@@ -1148,6 +1153,142 @@ class LeafService extends ChangeNotifier {
 
   /// How many of the library's commands run now: a channel read waits for none.
   int _running = 0;
+
+  static Future<String> _library(String command, String argsJson) => leaves.leavesRun(command: command, argsJson: argsJson);
+
+  /// The library [run] asks, in place of the native one: host tests answer as the library does.
+  @visibleForTesting
+  static Future<String> Function(String command, String argsJson)? debugLibrary;
+
+  // -------------------------------------------------------------------------
+  // A payment to a code another wallet of the phrase handed out (catch_up.dart)
+  // -------------------------------------------------------------------------
+
+  static const _kCatchUp = 'ambra.leaves.catchUp';
+
+  /// The coins of the phrase a mailbox read refused, waited for until the wallet holds them, and
+  /// when the library's catch-up is open next (its median time): kept, so an app opened again goes
+  /// on waiting, and one opened soon after a catch-up knows the library runs none yet.
+  CatchUpWait? catchUp;
+  num? _catchUpOpenAt;
+  bool _catchUpLoaded = false;
+
+  Future<void> _catchUpLoad() async {
+    if (_catchUpLoaded) return;
+    _catchUpLoaded = true;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final j = jsonDecode(p.getString(_kCatchUp) ?? 'null');
+      if (j is Map) {
+        catchUp ??= CatchUpWait.fromJson(j['wait']);
+        _catchUpOpenAt ??= j['openAt'] as num?;
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _catchUpKeep() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kCatchUp, jsonEncode({'wait': catchUp?.toJson(), 'openAt': _catchUpOpenAt}));
+    } catch (_) {}
+  }
+
+  int get _nowMs => DateTime.now().millisecondsSinceEpoch;
+
+  /// The library's median time now, from its last schedule read, counted on at one second a second.
+  num? _libNow() {
+    final n = schedule?['now'];
+    final at = _scheduleReadAt;
+    if (n is! num) return null;
+    return at == null ? n : n + DateTime.now().difference(at).inSeconds;
+  }
+
+  DateTime? _scheduleReadAt;
+
+  /// Every answer of the library, read once here for the wait: a mailbox read's refusals, a sync's
+  /// refusals, catch-up and gate, and the coins the wallet lists.
+  Future<void> _readForCatchUp(String command, Object? result) async {
+    if (command != 'mailbox' && command != 'sync' && command != 'coins' && command != 'schedule') return;
+    await _catchUpLoad();
+    final now = _nowMs;
+    switch (command) {
+      case 'schedule':
+        if (result is Map) _scheduleReadAt = DateTime.now();
+        return;
+      case 'mailbox':
+        final before = catchUp?.pending.length ?? 0;
+        _setCatchUp(catchUpWait(catchUp, mailbox: result, now: now));
+        if ((catchUp?.pending.length ?? 0) > before) {
+          final ms = catchUpSyncIn(catchUp, now: now, libNow: _libNow(), openAt: _catchUpOpenAt) ?? 0;
+          debugPrint('[leaves] a payment to a code another wallet of the phrase handed out: '
+              'the catch-up that takes it in runs in about ${(ms / 1000).round()} s');
+          _askEarlier(Duration(milliseconds: ms));
+        }
+        return;
+      case 'sync':
+        final openAt = catchUpGate(_catchUpOpenAt, result, _libNow());
+        if (openAt != _catchUpOpenAt) {
+          _catchUpOpenAt = openAt;
+          unawaited(_catchUpKeep());
+        }
+        final a = catchUpAfterSync(catchUp, sync: result, now: now);
+        _setCatchUp(a.wait);
+        _caughtIn(a.arrived);
+        return;
+      case 'coins':
+        if (catchUp == null) return;
+        final h = catchUpHeld(catchUp, result, now);
+        _setCatchUp(h.wait);
+        _caughtIn(h.arrived);
+        return;
+    }
+  }
+
+  /// A sync or a schedule read that threw: an attempt all the same, so the wait's cadence holds
+  /// while the node does not answer.
+  Future<void> _catchUpCounted() async {
+    await _catchUpLoad();
+    _setCatchUp(catchUpAttempt(catchUp, _nowMs));
+  }
+
+  void _setCatchUp(CatchUpWait? w) {
+    final was = catchUp;
+    catchUp = w;
+    if (was != w) unawaited(_catchUpKeep());
+    if (was != null && w == null && was.pending.isNotEmpty) {
+      debugPrint('[leaves] the wait for the catch-up ends with ${was.pending.length} coin(s) not found after '
+          '${was.tries} catch-up(s); the library\'s own catch-ups and daily sync still look for them');
+    }
+  }
+
+  /// The coins of the wait the wallet now holds: each shown as an arrival, as a mailbox's coin is.
+  void _caughtIn(List<CaughtIn> arrived) {
+    if (arrived.isEmpty) return;
+    for (final a in arrived) {
+      arrivedCount++;
+      _noteArrived(a);
+      unawaited(notifyArrived(a, channel: _channel));
+    }
+    debugPrint('[leaves] ${arrived.length} coin(s) paid to another wallet\'s code taken in by the catch-up');
+    // What the catch-up took in shows in the figures at once.
+    unawaited(() async {
+      try {
+        balance = await run('balance') as Map<String, dynamic>?;
+      } catch (_) {}
+      notifyListeners();
+    }());
+  }
+
+  /// The next pass no later than [d] from now: a pass under way plans its own next one when it ends.
+  void _askEarlier(Duration d) {
+    if (!open || _ticking) return;
+    final at = _nextPassAt;
+    final want = DateTime.now().add(d < const Duration(seconds: 1) ? const Duration(seconds: 1) : d);
+    if (_timer?.isActive == true && at != null && !at.isAfter(want)) return;
+    _plan(want.difference(DateTime.now()));
+  }
+
+  DateTime? _nextPassAt;
 
   // -------------------------------------------------------------------------
   // A payment another service made to the receive code: taken in at once
@@ -1671,8 +1812,8 @@ class LeafService extends ChangeNotifier {
 
   /// A sync now: what the library does on its own (the mailbox, refreshes, every
   /// coin's way home), and a notification per coin received.
-  Future<Map<String, dynamic>> syncNow({String by = 'user'}) async {
-    final r = await run('sync') as Map<String, dynamic>;
+  Future<Map<String, dynamic>> syncNow({String by = 'user', Map<String, dynamic> args = const {}}) async {
+    final r = await run('sync', args) as Map<String, dynamic>;
     noteUnreachable(unreachableOf(r, 'sync'));
     _heldFor = null;
     lastSync = DateTime.now();
@@ -1846,7 +1987,12 @@ class LeafService extends ChangeNotifier {
       await p.remove(_kCareAt);
       await p.remove(_kScanNext);
       await p.remove(_kClaims);
+      await p.remove(_kCatchUp);
     } catch (_) {}
+    instance
+      ..catchUp = null
+      .._catchUpOpenAt = null
+      .._catchUpLoaded = false;
   }
 
   /// The assets the operator serves supervised.
@@ -1878,10 +2024,18 @@ class LeafService extends ChangeNotifier {
   }
   @visibleForTesting
   void stopPassesForTest() => _timer?.cancel();
+  /// No mailbox read yet, as at a start.
+  @visibleForTesting
+  void resetReadsForTest() {
+    _mailReadAt = null;
+    _mailReadEnd = null;
+    _mailCostMs = 0;
+  }
 
   void _plan(Duration d) {
     _timer?.cancel();
     if (!open) return;
+    _nextPassAt = DateTime.now().add(d);
     _timer = Timer(d, () => _tick());
   }
 
@@ -1895,14 +2049,24 @@ class LeafService extends ChangeNotifier {
     }
     _ticking = true;
     var wait = tick;
+    final tickStarted = _nowMs;
     try {
       final s = await run('schedule') as Map<String, dynamic>?;
       schedule = s;
       final d = syncDecision(s, _heldFor, inFlight(coins, participations));
       _heldFor = d.held;
+      // A payment to a code another wallet of the phrase handed out, which only the catch-up takes
+      // in, once the library's catch-up is open by its own clock (the schedule's `now`): a sync
+      // without the watchtowers' step, which nobody waits on (catch_up.dart).
+      await _catchUpLoad();
+      _setCatchUp(catchUpWait(catchUp, now: _nowMs));
+      final forCatchUp = !d.sync && catchUpSyncIn(catchUp, now: _nowMs, libNow: s?['now'] as num?, openAt: _catchUpOpenAt) == 0;
       if (d.sync) {
         await syncNow(by: d.why!);
-      } else if (freshRequestWaits(s, DateTime.now()) && _mailDue(DateTime.now())) {
+      } else if (forCatchUp) {
+        debugPrint('[leaves] sync for the catch-up: ${catchUp?.pending.length} coin(s) of the phrase waited for');
+        await syncNow(by: 'catch-up', args: const {'deposits': false});
+      } else if (requestWaits(s) && _mailDue(DateTime.now())) {
         final mb = await _mailboxRead();
         for (final a in arrivals(mb)) {
           arrivedCount++;
@@ -1916,11 +2080,20 @@ class LeafService extends ChangeNotifier {
       await readClaims();
       lastError = null;
       wait = nextAsk(schedule, inFlight(coins, participations));
-      // User mode: a receive code handed out lately is read for every few seconds, so a
-      // payment to it shows at once.
+      // User mode: a receive code handed out lately is read for every few seconds, and while any
+      // request the wallet handed out waits (the payment name's stocked codes are handed out up
+      // to a day after they are made) every [mailboxEvery], so a payment to it shows at once.
       if (!DevMode.instance.on && freshRequestWaits(s, DateTime.now()) && wait > fastAsk) wait = fastAsk;
+      if (!DevMode.instance.on && requestWaits(s) && wait > mailboxEvery) wait = mailboxEvery;
+      // The wait for coins of the phrase syncs once the library's catch-up is open again.
+      final forWait = catchUpSyncIn(catchUp, now: _nowMs, libNow: _libNow(), openAt: _catchUpOpenAt);
+      if (forWait != null && Duration(milliseconds: forWait) < wait) {
+        wait = Duration(milliseconds: forWait < 1000 ? 1000 : forWait);
+      }
     } catch (e) {
       lastError = LeafRefusal.of(e);
+      // A schedule read that threw is an attempt too (a sync that threw counted itself in `run`).
+      if (catchUp != null && (catchUp!.attemptAt ?? 0) < tickStarted) await _catchUpCounted();
     }
     _ticking = false;
     notifyListeners();

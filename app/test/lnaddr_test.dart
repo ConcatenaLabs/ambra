@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:ambra/src/data/default_words.dart';
 import 'package:ambra/src/data/lnaddr.dart';
 import 'package:ambra/src/data/name_key.dart';
+import 'package:ambra/src/data/pay_code.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -202,6 +203,59 @@ void main() {
         final a = parseLnAddress(t);
         expect('${a?.name}@${a?.domain}', 'alice@sequentiatestnet.com', reason: t);
       }
+    });
+  });
+
+  // ambra#271: Send read a bare LNURL as a Bitcoin address and opened the on-chain confirmation.
+  group('an LNURL in Send', () {
+    const url = 'https://sequentiatestnet.com/.well-known/lnurlp/alice';
+    final lnurl = lnurlEncode(url).toUpperCase();
+    BigInt decode(String pr) {
+      if (!pr.startsWith('lntb')) throw const FormatException('the invoice is not a Bitcoin invoice');
+      return BigInt.parse(pr.substring(4, pr.indexOf('n', 4))) * BigInt.from(100);
+    }
+
+    test('a bare LNURL, either case, lightning: in front or not, and LUD-17\'s lnurlp://', () {
+      for (final t in [lnurl, lnurl.toLowerCase(), 'lightning:$lnurl', 'LIGHTNING:$lnurl', ' $lnurl\n', 'lnurlp://sequentiatestnet.com/.well-known/lnurlp/alice']) {
+        expect(lnurlOfSendInput(t)?.toString(), url, reason: t);
+      }
+    });
+
+    test('a code whose one way to pay is its LNURL; not one with another way, nor anything else', () {
+      expect(lnurlOfSendInput('bitcoin:?lightning=$lnurl&amount=0.00001')?.toString(), url);
+      expect(lnurlOfSendInput('bitcoin:tb1qxyz?lightning=$lnurl'), isNull);
+      for (final t in ['tb1qxyz', 'alice@sequentiatestnet.com', 'lntb210n1x', 'lnbc1', '']) {
+        expect(lnurlOfSendInput(t), isNull, reason: t);
+      }
+    });
+
+    test('LUD-16\'s URL of a name is that name; any other URL is not', () {
+      expect(lnurlName(Uri.parse(url)), 'alice@sequentiatestnet.com');
+      expect(lnurlName(Uri.parse('https://Other.Example/.well-known/lnurlp/Bob')), 'bob@other.example');
+      for (final u in ['https://x.io/lnurlp/alice', 'https://x.io/.well-known/lnurlp/alice?amount=1', 'http://x.io/.well-known/lnurlp/alice',
+          'https://x.io:8443/.well-known/lnurlp/alice', 'https://x.io/.well-known/lnurlp/a/b']) {
+        expect(lnurlName(Uri.parse(u)), isNull, reason: u);
+      }
+    });
+
+    test('any other LNURL-pay: BTC only, an invoice of exactly the amount, in a code\'s words', () async {
+      String pr = 'lntb210n1x';
+      final c = MockClient((r) async {
+        if (r.url.path == '/pay/42') {
+          return http.Response(jsonEncode({'tag': 'payRequest', 'callback': 'https://shop.example/cb?x=1', 'minSendable': 1000, 'maxSendable': 100000000}), 200);
+        }
+        expect(r.url.queryParameters['amount'], '21000');
+        return http.Response(jsonEncode({'pr': pr}), 200);
+      });
+      final u = lnurlOfSendInput(lnurlEncode('https://shop.example/pay/42'))!;
+      expect(lnurlName(u), isNull);
+      Future<LnAddressTarget> pay({bool btc = true, Uri? at}) =>
+          resolveLnurlPay(url: at ?? u, btc: btc, msat: BigInt.from(21000), decodeMsat: decode, client: c, what: 'code');
+      expect((await pay()).invoice, 'lntb210n1x');
+      await expectLater(pay(btc: false), throwsA(predicate((e) => '$e' == 'This code takes BTC only.')));
+      await expectLater(pay(at: Uri.parse('http://shop.example/pay/42')), throwsA(predicate((e) => '$e' == 'This code does not take payments.')));
+      pr = 'lntb999n1x';
+      await expectLater(pay(), throwsA(predicate((e) => '$e' == 'The code answered with an invoice for another amount.')));
     });
   });
 

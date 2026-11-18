@@ -54,7 +54,7 @@ void main() {
 
   test('the mailbox is read no oftener than twice what the last read took, on every path', () {
     expect(src, contains('_mailCostMs * 2 > base.inMilliseconds ? Duration(milliseconds: _mailCostMs * 2) : base'));
-    expect(src, contains("freshRequestWaits(s, DateTime.now()) && _mailDue(DateTime.now())"));
+    expect(src, contains("requestWaits(s) && _mailDue(DateTime.now())"));
     expect(RegExp(r"await run\('mailbox'\)").allMatches(src).length, lessThanOrEqualTo(2), reason: 'reads go through _mailboxRead (and takeIn)');
   });
 }

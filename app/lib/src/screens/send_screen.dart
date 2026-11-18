@@ -32,7 +32,7 @@ import '../widgets/ln_cards.dart';
 import '../widgets/widgets.dart';
 import 'scan_screen.dart';
 import '../data/payment_name_service.dart';
-import '../data/lnaddr.dart' show parseLnAddress, resolveLnAddress, LnAddressError;
+import '../data/lnaddr.dart' show parseLnAddress, resolveLnAddress, resolveLnurlPay, lnurlOfSendInput, lnurlPayUrl, lnurlName, LnAddressError;
 import '../data/confidential_pay.dart';
 import '../data/on_chain_need.dart';
 import '../data/address_payments.dart';
@@ -443,6 +443,11 @@ class _SendTabState extends State<SendTab> {
     } on FormatException catch (e) {
       return _snack(e.message);
     }
+    // An LNURL-pay, kept as it is: Review pays it (ambra#271).
+    if (lnurlPayUrl(raw) != null) {
+      setState(() => _addr.text = raw.trim());
+      return;
+    }
     // A payment name, in any spelling a QR code carries it (bare, lightning:, BIP353's ₿).
     final name = parseLnAddress(raw);
     if (name != null) {
@@ -472,6 +477,33 @@ class _SendTabState extends State<SendTab> {
     // against the name's key and the key this wallet paid it at before; another service's in BTC, at
     // the invoice it makes for the amount.
     var input = _addr.text;
+    // An LNURL-pay (ambra#271): LUD-16's URL of a payment name is paid as that name; any other is
+    // paid in BTC over Lightning, at the invoice it makes for the amount.
+    final lnurl = lnurlOfSendInput(input);
+    if (lnurl != null) {
+      final name = lnurlName(lnurl);
+      if (name != null) {
+        debugPrint('[ambra-send] an LNURL-pay, paid as the name $name');
+        input = name;
+      } else {
+        try {
+          final sats = _isBtc ? parseAtoms(_amount.text, 8) : null;
+          final t = await resolveLnurlPay(
+            url: lnurl,
+            btc: _isBtc,
+            msat: sats == null ? null : sats * BigInt.from(1000),
+            decodeMsat: (pr) => decodeBtcInvoice(pr)['msat'] as BigInt,
+            what: 'code',
+          );
+          if (!mounted) return;
+          debugPrint('[ambra-send] an LNURL-pay at ${lnurl.host}, paid at its invoice');
+          _route = t.invoice;
+          input = t.invoice!;
+        } on LnAddressError catch (e) {
+          return _snack(e.message);
+        }
+      }
+    }
     if (parseLnAddress(input) != null) {
       try {
         final sats = _isBtc ? parseAtoms(_amount.text, 8) : null;
