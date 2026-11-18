@@ -721,7 +721,9 @@ module that implements it.
   it shares with the app: its sync's refusals join the wait, the coins its catch-up
   restores or the wallet holds leave it (each with a notification), and a pass that
   fails counts as an attempt and wakes again at the wait's cadence instead of an hour
-  later (`jobFailed`). The job keeps
+  later (`jobFailed`). When the job finds the wallet open in the app, the app carries the
+  wait and the job only hands over the coins its own sync refused; the app merges the kept
+  wait by leaf id before every change, so neither writes over the other. The job keeps
   running whatever the mode, so coins already held keep their refresh. When the leaf
   wallet opens and whenever the app comes back to the foreground it syncs once,
   whatever the schedule says (the schedule wakes a planned coin only at its plan's
