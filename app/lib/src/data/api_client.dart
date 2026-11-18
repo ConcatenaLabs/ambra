@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import '../rust/api.dart' as core;
 import 'config.dart';
+import 'pay_code.dart' show PayCode;
 
 /// A faucet answer that is not a payout: its own words, and whether it says the wallet already
 /// has the asset (then no other route is tried).
@@ -28,10 +29,12 @@ class FaucetRefused implements Exception {
 }
 
 class FaucetResult {
-  FaucetResult(this.amount, this.asset, this.txid, {this.leafAsset});
+  FaucetResult(this.amount, this.asset, this.txid, {this.leafAsset, this.ark = false});
   final String amount;
   final String asset;
   final String txid;
+  /// BTC paid on the Bitcoin ark (in seconds), not on the chain.
+  final bool ark;
   /// A payment to a receive request: the asset id of the coin the faucet paid.
   final String? leafAsset;
 }
@@ -121,6 +124,13 @@ class EnclaveAddressInfo {
   final String userPubkey;
 }
 
+/// Where the faucet pays a BTC request: a receive code with the wallet's Bitcoin ark address when
+/// it has one, which the faucet pays on the ark in seconds, else the chain address (after a Bitcoin
+/// block). The web wallet's `requestFaucetBtc`. On the chain the faucet pays its smallest tier, which
+/// can be the ark's least board: less the board's fee it could never be moved into the ark, where
+/// trades and payments in seconds take BTC from.
+String faucetBtcTo(String address, String? ark) => ark == null || ark.isEmpty ? address : PayCode(address: address, ark: ark).build();
+
 /// Thin HTTP client for the box sidecars (faucet now; registry/prices next).
 class ApiClient {
   ApiClient._();
@@ -139,7 +149,7 @@ class ApiClient {
         .timeout(const Duration(seconds: 30));
     final j = jsonDecode(r.body) as Map<String, dynamic>;
     if (r.statusCode != 200) throw FaucetRefused.of(r.statusCode, j);
-    return FaucetResult('${j['amount']}', '${j['asset']}', '${j['txid']}');
+    return FaucetResult('${j['amount']}', '${j['asset']}', '${j['txid']}', ark: j['ark'] == true);
   }
 
   /// The faucet labels of the assets [wallet] has already received from the faucet, or null

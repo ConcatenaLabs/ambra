@@ -19,6 +19,7 @@ import 'package:ambra/src/data/config.dart';
 import 'package:ambra/src/data/dev_mode.dart';
 import 'package:ambra/src/data/faucet_wallet.dart';
 import 'package:ambra/src/data/leaf_service.dart';
+import 'package:ambra/src/data/pay_code.dart' show lnurlEncode;
 import 'package:ambra/src/data/payment_name_service.dart';
 import 'package:ambra/src/data/user_trade.dart';
 import 'package:ambra/src/data/wallet_repository.dart';
@@ -34,6 +35,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
 const on = bool.fromEnvironment('AMBRA_OPS_DRIVE');
+// Optional steps against a second wallet the operator of the drive runs beside it (a leaf store in
+// Node, sequentia-web-wallet's tooling/leaf-node.mjs, or any wallet of the operator's):
+//   AMBRA_DRIVE_PAYER_CODE  a receive code of that wallet: Send pays it 5 USDX, for its payments back
+//   AMBRA_DRIVE_LNURL_NAME  a payment name at the node's domain: Send pays its bare LNURL 1 USDX (ambra#271)
+//   AMBRA_DRIVE_OTHER_STORE the drive prints `[ops drive] other-store ready: <name>` and waits for a
+//                           payment to its name, which the operator makes to a code another store of
+//                           the phrase left as the name's stock, and says how soon it showed (ambra#270)
+const payerCode = String.fromEnvironment('AMBRA_DRIVE_PAYER_CODE');
+const lnurlName = String.fromEnvironment('AMBRA_DRIVE_LNURL_NAME');
+const otherStore = bool.fromEnvironment('AMBRA_DRIVE_OTHER_STORE');
 void note(String s) => print('[ops drive] $s'); // ignore: avoid_print
 
 String hexOf(String ticker) {
@@ -142,8 +153,8 @@ void main() {
     t = DateTime.now();
     try {
       if (ArkBtcService.instance.held == BigInt.zero) {
-        final r = await ApiClient.faucet(info.address, asset: 'BTC', wallet: wallet);
-        note('faucet BTC: ${r.amount} sent on the chain');
+        final r = await ApiClient.faucet(faucetBtcTo(info.address, await ArkBtcService.instance.address()), asset: 'BTC', wallet: wallet);
+        note('faucet BTC: ${r.amount} sent ${r.ark ? 'on the Bitcoin ark' : 'on the chain'}');
       }
     } catch (e) {
       check('faucet BTC: $e', false);
@@ -180,6 +191,56 @@ void main() {
       final sent = await until(() => find.textContaining('Sent 1 USDX').evaluate().isNotEmpty, 120);
       check('Send 1 USDX to a receive code: ${since(t)} s', sent);
       await shot('ops-6-sent');
+    }
+
+    // ---- Send to what a person pastes: [to], [ticker], [amount]; the review it opens is pressed.
+    Future<void> sendTo(String what, String to, String ticker, String amount) async {
+      await show(const SendTab(isActive: true));
+      await until(() => find.byType(TextField).evaluate().length >= 2, 120);
+      await tester.tap(find.byKey(const Key('send-asset-picker')));
+      await until(() => false, 2);
+      if (find.text(ticker).evaluate().isNotEmpty) await tester.tap(find.text(ticker).last);
+      await until(() => false, 2);
+      await tester.enterText(find.byType(TextField).at(0), to);
+      await tester.enterText(find.byType(TextField).at(1), amount);
+      await tester.ensureVisible(find.text('Review & send'));
+      final t0 = DateTime.now();
+      await tester.tap(find.text('Review & send'));
+      final inTree = find.byKey(const Key('send-code-confirm'));
+      final onChain = find.byKey(const Key('send-review-send'));
+      final out = find.byKey(const Key('send-offboard-confirm'));
+      final opened = await until(() => inTree.evaluate().isNotEmpty || onChain.evaluate().isNotEmpty || out.evaluate().isNotEmpty, 90);
+      check('$what: the review opens in ${since(t0)} s', opened);
+      if (!opened) return;
+      check('$what: paid in seconds, not on the chain', inTree.evaluate().isNotEmpty);
+      await shot('ops-${what.replaceAll(RegExp(r'[^a-z0-9]+'), '-')}');
+      if (inTree.evaluate().isEmpty) return;
+      final t1 = DateTime.now();
+      await tester.tap(inTree);
+      check('$what: sent in ${since(t1)} s', await until(() => find.textContaining('Sent $amount $ticker').evaluate().isNotEmpty, 120));
+    }
+
+    if (payerCode.isNotEmpty) await sendTo('5 USDX to the other wallet', payerCode, 'USDX', '5');
+    if (lnurlName.isNotEmpty) {
+      final lnurl = lnurlEncode('https://sequentiatestnet.com/.well-known/lnurlp/$lnurlName').toUpperCase();
+      note('a bare LNURL: ${lnurl.substring(0, 16)}…');
+      await sendTo('1 USDX to a bare LNURL', lnurl, 'USDX', '1');
+    }
+    if (otherStore) {
+      final named = await until(() => PaymentNameService.instance.named != null, 1200, step: const Duration(seconds: 2));
+      check('a payment name to be paid at', named);
+      if (named) {
+        final before = l.arrivedCount;
+        final held = l.leafAtoms()[usdx] ?? BigInt.zero;
+        await show(const BalanceTab(isActive: true));
+        note('other-store ready: ${PaymentNameService.instance.named}');
+        final t0 = DateTime.now();
+        final came = await until(() => l.arrivedCount > before || (l.leafAtoms()[usdx] ?? BigInt.zero) > held, 900,
+            step: const Duration(milliseconds: 250));
+        check('a payment to the name at another store\'s code shown ${since(t0)} s after the marker', came);
+        note('other-store arrival: catch-up wait ${l.catchUp?.toJson()}');
+        await shot('ops-other-store-arrived');
+      }
     }
 
     // ---- Trades through the Swap tab's engine.

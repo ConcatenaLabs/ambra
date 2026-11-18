@@ -228,9 +228,11 @@ impl LeafWallet {
     /// What the scheduled job does: a `sync`, then `care` when `care` names
     /// its arguments (the app decides when it is due), then what arrived and
     /// when to wake. The answer is `{"arrived": [{leaf_id, asset, value,
-    /// kind}…], "schedule", "wake_in", "sync", "care"}`, `wake_in` in seconds
-    /// or `null`, `care` the library's answer, its refusal, or `null` when it
-    /// did not run. A refused `care` does not fail the pass.
+    /// kind}…], "schedule", "wake_in", "sync", "care", "coins"}`, `wake_in`
+    /// in seconds or `null`, `care` the library's answer, its refusal, or
+    /// `null` when it did not run, `coins` the library's `coins` after the
+    /// pass (the app's wait for coins paid to another store's code ends on
+    /// those it holds). A refused `care` does not fail the pass.
     pub fn background_sync(&mut self, care: Option<&Value>) -> Result<Value, Value> {
         let sync = self.run("sync", &json!({}))?;
         let arrived = arrivals(&sync["result"]["mailbox"]);
@@ -244,7 +246,7 @@ impl LeafWallet {
         let schedule = self.run("schedule", &json!({}))?["result"].take();
         let coins = self.run("coins", &json!({}))?["result"].take();
         let wake = wake_in(&schedule, &coins);
-        Ok(json!({"arrived": arrived, "schedule": schedule, "wake_in": wake, "sync": sync["result"], "care": cared}))
+        Ok(json!({"arrived": arrived, "schedule": schedule, "wake_in": wake, "sync": sync["result"], "care": cared, "coins": coins}))
     }
 }
 

@@ -26,8 +26,9 @@ Protocol documentation lives in the node repo:
   offered on the same download page.
 - iOS is not released. The `app/ios/` scaffold exists but iOS bring-up has not happened
   (it needs a macOS + Xcode machine).
-- Free testnet funds: the in-app faucet (More tab) dispenses BTC (testnet4, on chain to
-  the wallet's address), tSEQ and the demo assets. In user mode the faucet pays the
+- Free testnet funds: the in-app faucet (More tab) dispenses BTC (testnet4: on the Bitcoin
+  ark in seconds, at a receive code carrying the ark address, `faucetBtcTo`, said to have
+  arrived once the ark wallet has synced; else on chain to the wallet's address), tSEQ and the demo assets. In user mode the faucet pays the
   wallet's receive code, and the wallet reads its mailbox for the coin at once, so it shows
   as received in seconds (the address if the faucet refuses the code, though never only
   because the faucet is busy); in developer mode, a wallet that joined an operator can ask to be paid as a
@@ -432,7 +433,19 @@ module that implements it.
     without a connection. Each code is paid once; a new one shows when it is."; **Show name**
     goes back. An amount or Confidential gives the full code.
     While a code handed out in the
-    last hour waits, the wallet reads for a payment every four seconds. Developer mode shows
+    last hour waits, the wallet reads for a payment every four seconds, and, while the app is in
+    view, while any request it handed out waits (the name's stocked codes are handed out up to a
+    day after they are made), every ten seconds; developer mode reads at every pass of its
+    schedule while the app is in view. Out of view the passes keep the library's pace. A payment
+    to a code another wallet of the phrase handed out (the phrase open in Ambra browser or the web
+    wallet, or a store this phone held before) is taken in by that read; one the operator does not
+    serve yet is kept and synced for once the leaf library's catch-up between the phrase's wallets
+    is open by its own clock, a minute apart at least and ten minutes apart after ten attempts
+    that ran no catch-up (the node or the operator not answering, or the catch-up answering with
+    an error), until the wallet holds it, for at most six catch-ups or a day
+    (`app/lib/src/data/catch_up.dart`, the web wallet's `catchUpWait`). Such a sync leaves out
+    the watchtowers' step and makes the deposits right after it. The scheduled job carries the
+    same wait while the app is closed (below). Developer mode shows
     the address, New address, the confidential address on request and the name under them.
   - Payments that arrive at once, over channel leaves (`app/lib/src/data/leaf_service.dart`):
     where the operator makes channel leaves of an asset, the wallet's own care
@@ -473,8 +486,16 @@ module that implements it.
     "This name gave a receive code its wallet did not sign, so nothing was sent. Ask the
     recipient for their full code." or "This name now belongs to another wallet than the one you
     paid before, so nothing was sent. Ask the recipient for their full code."; a name at another domain in BTC only, at the invoice
-    that service makes, which must be for BTC and for exactly the amount. Anything that is not a
-    code or a name (an address, an invoice, an account id) takes the path it always took.
+    that service makes, which must be for BTC and for exactly the amount. An LNURL-pay
+    (`LNURL1…` in either case, with `lightning:` before it or not, LUD-17's `lnurlp://…`, or a
+    `bitcoin:` code whose one way to pay is its LNURL; `lnurlOfSendInput`) is paid the same way:
+    the URL a payment name stands for (`https://domain/.well-known/lnurlp/name`) as that name,
+    any other in BTC only, over Lightning, at the invoice it makes for exactly the amount. An invoice
+    that carries a description hash must commit to the metadata the service served (LUD-06); one
+    with a plain description, as the Sequentia name services make, is paid as it is. The
+    service's answers are read over https only: a redirect from https to anything else
+    stops the payment. Anything that is not a code, a name or an LNURL (an address, an invoice, an account id) takes the path
+    it always took.
     An address send the chain cannot cover is paid out of the leaves (the library's
     `offboard_quote`, then `offboard` on the quote shown): "Send <amt> <TICKER>?", "It
     arrives within <N> minutes. Keep this screen open meanwhile." (the most the whole way to
@@ -695,7 +716,21 @@ module that implements it.
   scheduled job (`LeafSyncWorker.kt`, WorkManager) runs the Dart entry point
   `leafSyncJob` in an engine with no UI: it syncs, raises a notification for each
   payment received, and wakes again at the schedule's `next_sync_at`, at most a day
-  ahead while a coin is off the chain or a receive request is open. The job keeps
+  ahead while a coin is off the chain or a receive request is open, and no later than
+  the next sync of the wait for a payment to another wallet's code (`jobOutcome`), which
+  it shares with the app: its sync's refusals join the wait, the coins its catch-up
+  restores or the wallet holds leave it (each with a notification), and a pass that
+  fails counts as an attempt and wakes again at the wait's cadence instead of an hour
+  later (`jobFailed`). The app is the one writer of the kept wait: the job writes each
+  pass as an entry of its own (the wait it read and what it made of it), which the app
+  merges in by leaf id before every change, writes into the wait, and only then removes,
+  so a pass the job writes meanwhile is never lost. While the app's upkeep runs on the
+  wallet (it holds the wallet in this process and stamps every pass, `kAppAliveKey`, the
+  stamp younger than twice its longest pass), the app carries the wait: the job only hands
+  over the coins its own sync refused and the library's next catch-up time, and looks again
+  once the stamp would go stale; an app whose engine ended without a word (Back on the home
+  screen of older Android, with the sync service keeping the process alive) stops stamping,
+  and the job carries the wait again. The job keeps
   running whatever the mode, so coins already held keep their refresh. When the leaf
   wallet opens and whenever the app comes back to the foreground it syncs once,
   whatever the schedule says (the schedule wakes a planned coin only at its plan's
@@ -1040,12 +1075,16 @@ Rust core through flutter_rust_bridge on the host. They resolve the cdylib from
 
 On a device or emulator, `integration_test/default_ops_drive_test.dart` drives default mode's
 everyday operations against the live testnet: Receive's one card and the wallet's payment name,
-money in from the faucet (assets as instant payments, BTC on the chain), Send to a receive code
-through the Send screen, a trade each way between USDX and EURX and each way with BTC through the
+money in from the faucet (assets as instant payments, BTC on the Bitcoin ark), Send to a receive
+code through the Send screen, a trade each way between USDX and EURX and each way with BTC through the
 Swap tab's engine, and BTC out to an address. It logs each operation's stated wait and the time it
 took, and saves a screenshot of each screen through `test_driver/integration_test.dart`, since an
 emulator's own screen capture reads the app back as black. It prints the new wallet's recovery
 phrase once, so the run's coins can be recovered; keep that line out of anything shared.
+Three optional steps take a second wallet beside the drive (its header names the
+`--dart-define`s): Send pays it, Send pays a bare LNURL of a payment name, and the drive waits
+for a payment to its own name made at a code another store of its phrase left as the name's
+stock, saying how soon it showed.
 
 ```sh
 AMBRA_SHOTS=/tmp/shots flutter drive --driver=test_driver/integration_test.dart \

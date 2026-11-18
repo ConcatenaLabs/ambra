@@ -69,7 +69,12 @@ Future<void> leafSyncJob() async {
     await RustLib.init();
     out = await leafBackgroundPass(host);
   } catch (e) {
-    out = {'ok': false, 'wake_in': null, 'summary': LeafRefusal.of(e).message};
+    // While coins of the phrase are waited for, the next pass keeps the wait's cadence.
+    int? wake;
+    try {
+      wake = await jobFailed();
+    } catch (_) {}
+    out = {'ok': false, 'wake_in': wake, 'summary': LeafRefusal.of(e).message};
   }
   await host.invokeMethod('done', out);
 }

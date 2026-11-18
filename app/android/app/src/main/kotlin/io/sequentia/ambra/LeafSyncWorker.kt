@@ -65,6 +65,11 @@ class LeafSyncWorker(context: Context, params: WorkerParameters) : Worker(contex
         main.post { engine?.destroy() }
         val n = next
         when {
+            answered && !finished && n != null -> {
+                // The pass failed while a payment to another wallet of the phrase is waited
+                // for: the next pass keeps that wait's cadence, never later than an hour.
+                LeafJobs.schedule(applicationContext, minOf(n, RETRY), fromJob = true)
+            }
             !answered || !finished -> {
                 // No answer, or the pass failed (no network, operator down): try again
                 // in an hour, still within the daily rule.
