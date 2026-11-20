@@ -97,7 +97,7 @@ void main() {
         base: base,
         domain: domain,
         key: () => (priv: key.priv, pub: key.pub),
-        invoice: (msat) async => throw StateError('none'),
+        invoice: (msat, metadata) async => throw StateError('none'),
         code: () async => 'BITCOIN:TB1QXYZ',
         limits: () => lim ? (min: BigInt.one, max: BigInt.from(1000)) : null,
         load: () async => store['name'] as String?,

@@ -71,6 +71,13 @@ pub fn ark_invoice(sats: u64, description: Option<String>) -> Result<String> {
     text(ark_btc::invoice(sats, description))
 }
 
+/// An invoice of `sats` paid into the ark that commits to `description_hash`
+/// (64 hex characters: the SHA-256 of a payment name's LNURL-pay metadata), and
+/// is refused unless it does: `{invoice, payment_hash, expires_at}`.
+pub fn ark_invoice_committed(sats: u64, description_hash: String) -> Result<String> {
+    text(ark_btc::invoice_committed(sats, &description_hash))
+}
+
 /// The funding address of a new board, its key index and expiry height.
 pub fn ark_board_address() -> Result<String> {
     text(ark_btc::board_address())

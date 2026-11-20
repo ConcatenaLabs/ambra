@@ -82,7 +82,7 @@ void main() {
       base: base,
       domain: domain,
       key: () => (priv: k.priv, pub: k.pub),
-      invoice: (_) async => throw StateError('no'),
+      invoice: (_, _) async => throw StateError('no'),
       code: () async => throw StateError('no'),
       limits: () => null,
       load: () async => kept,

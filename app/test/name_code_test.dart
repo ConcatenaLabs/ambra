@@ -196,7 +196,7 @@ void main() {
       base: base,
       domain: domain,
       key: () => (priv: key.priv, pub: key.pub),
-      invoice: (m) async => throw StateError('no'),
+      invoice: (m, meta) async => throw StateError('no'),
       code: () async => throw StateError('the stock makes codes'),
       limits: () => (min: BigInt.from(1000), max: BigInt.from(50000)),
       load: () async => null,

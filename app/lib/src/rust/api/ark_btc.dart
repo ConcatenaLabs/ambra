@@ -63,6 +63,17 @@ Future<String> arkInvoice({required BigInt sats, String? description}) =>
       description: description,
     );
 
+/// An invoice of `sats` paid into the ark that commits to `description_hash`
+/// (64 hex characters: the SHA-256 of a payment name's LNURL-pay metadata), and
+/// is refused unless it does: `{invoice, payment_hash, expires_at}`.
+Future<String> arkInvoiceCommitted({
+  required BigInt sats,
+  required String descriptionHash,
+}) => RustLib.instance.api.crateApiArkBtcArkInvoiceCommitted(
+  sats: sats,
+  descriptionHash: descriptionHash,
+);
+
 /// The funding address of a new board, its key index and expiry height.
 Future<String> arkBoardAddress() =>
     RustLib.instance.api.crateApiArkBtcArkBoardAddress();

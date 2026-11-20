@@ -392,7 +392,9 @@ module that implements it.
     BIP340 key of the phrase (`m/1017'/16'/0'`, `name_key.dart`), the same key the web wallet
     holds it with, so the phrase shows it again in either wallet. While the app runs it answers
     the service (the web wallet's `tooling/lsp/lnaddr.mjs`) with an invoice of the Bitcoin ark
-    for the amount a Lightning payer chose, and keeps a stock of ten receive codes topped up
+    for the amount a Lightning payer chose, which commits to the LNURL-pay metadata the service
+    served that payer (its `h` is the SHA-256 of exactly that string, as LUD-06 asks, so a payer
+    that checks it pays the name; the ark's answer without that hash is refused), and keeps a stock of ten receive codes topped up
     there (`name_stock.dart`, the web wallet's `name-stock.js`): each a full code at an address
     of its own inside the twenty New code cycles through, so a restore finds every payment, each
     signed by the name's key over the name, the domain and the code. The service hands each out
@@ -500,8 +502,9 @@ module that implements it.
     `bitcoin:` code whose one way to pay is its LNURL; `lnurlOfSendInput`) is paid the same way:
     the URL a payment name stands for (`https://domain/.well-known/lnurlp/name`) as that name,
     any other in BTC only, over Lightning, at the invoice it makes for exactly the amount. An invoice
-    that carries a description hash must commit to the metadata the service served (LUD-06); one
-    with a plain description, as the Sequentia name services make, is paid as it is. The
+    that carries a description hash must commit to the metadata the service served (LUD-06),
+    otherwise "The address answered with an invoice for something other than this payment."; one
+    with a plain description and no hash is paid as it is, as LUD-06 asks of payers. The
     service's answers are read over https only: a redirect from https to anything else
     stops the payment. Anything that is not a code, a name or an LNURL (an address, an invoice, an account id) takes the path
     it always took.
