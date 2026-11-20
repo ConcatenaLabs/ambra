@@ -21,13 +21,18 @@ bool verifies(String pub, List<int> digest, Object? sig) => schnorrVerify(unhex(
 void main() {
   final key = nameKey(phrase);
 
-  LnAddress mount(MockClient c, {List<String>? log, Future<String> Function(BigInt)? invoice, String? kept}) {
+  final metas = <String>[];
+  LnAddress mount(MockClient c, {List<String>? log, Future<String> Function(BigInt, String)? invoice, String? kept}) {
     String? stored = kept;
     return LnAddress(
       base: base,
       domain: domain,
       key: () => (priv: key.priv, pub: key.pub),
-      invoice: invoice ?? (msat) async => 'lntb${msat}n1x',
+      invoice: invoice ??
+          (msat, metadata) async {
+            metas.add(metadata);
+            return 'lntb${msat}n1x';
+          },
       code: () async => 'BITCOIN:TB1QXYZ',
       limits: () => (min: BigInt.from(1000), max: BigInt.from(50000)),
       load: () async => stored,
@@ -87,7 +92,7 @@ void main() {
         expect(b['max_sat'], '50000');
         if (waits == 1) {
           return http.Response(jsonEncode({'ok': true, 'requests': [
-            {'id': 'r1', 'kind': 'invoice', 'msat': '21000'},
+            {'id': 'r1', 'kind': 'invoice', 'msat': '21000', 'metadata': lnurlMetadata('alice', domain)},
             {'id': 'r2', 'kind': 'code'},
           ]}), 200);
         }
@@ -107,10 +112,52 @@ void main() {
     a.stop();
     final inv = answers.firstWhere((x) => x['id'] == 'r1');
     expect(inv['pr'], 'lntb21000n1x');
+    // The invoice was asked to commit to the metadata the service served, byte for byte the string
+    // lnaddr.js makes (JSON with no spaces).
+    expect(metas, ['[["text/plain","Payment to alice@$domain"],["text/identifier","alice@$domain"]]']);
     expect(verifies(key.pub, signedDigest('invoice', domain, 'alice', ['r1', 'lntb21000n1x']), inv['sig']), isTrue);
     final code = answers.firstWhere((x) => x['id'] == 'r2');
     expect(code['code'], 'BITCOIN:TB1QXYZ');
     expect(verifies(key.pub, signedDigest('code', domain, 'alice', ['r2', 'BITCOIN:TB1QXYZ']), code['sig']), isTrue);
+  });
+
+  test('a request naming another name\'s metadata is refused, signed, and no invoice is made', () async {
+    final answers = <Map>[];
+    final done = Completer<void>();
+    var waits = 0, made = 0;
+    final c = MockClient((r) async {
+      final b = jsonDecode(r.body) as Map;
+      if (r.url.path.endsWith('/wait')) {
+        if (++waits == 1) {
+          return http.Response(jsonEncode({'ok': true, 'requests': [
+            {'id': 'r7', 'kind': 'invoice', 'msat': '5000', 'metadata': lnurlMetadata('mallory', domain)},
+          ]}), 200);
+        }
+        await done.future;
+        return http.Response('{"ok":true,"requests":[]}', 200);
+      }
+      answers.add(b);
+      if (!done.isCompleted) done.complete();
+      return http.Response('{"ok":true}', 200);
+    });
+    final a = mount(c, kept: 'alice', invoice: (_, _) async {
+      made++;
+      return 'lntb5000n1x';
+    });
+    await a.recover();
+    a.start();
+    await done.future.timeout(const Duration(seconds: 5));
+    a.stop();
+    expect(made, 0);
+    expect(answers.single['refused'], isTrue);
+    expect(verifies(key.pub, signedDigest('refuse', domain, 'alice', ['r7']), answers.single['sig']), isTrue);
+  });
+
+  test('a name\'s metadata hash is sha256 of the served string\'s UTF-8 bytes', () {
+    final meta = lnurlMetadata('alice', domain);
+    expect(metadataHash('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+    expect(metadataHash(meta), hexOf(sha256.convert(utf8.encode(meta)).bytes));
+    expect(metadataHash(const JsonEncoder.withIndent(' ').convert(jsonDecode(meta))) == metadataHash(meta), isFalse);
   });
 
   test('a request the wallet cannot answer is refused, signed', () async {
@@ -128,7 +175,7 @@ void main() {
       if (!done.isCompleted) done.complete();
       return http.Response('{"ok":true}', 200);
     });
-    final a = mount(c, kept: 'alice', invoice: (_) async => throw StateError('the ark is closed'));
+    final a = mount(c, kept: 'alice', invoice: (_, _) async => throw StateError('the ark is closed'));
     await a.recover();
     a.start();
     await done.future.timeout(const Duration(seconds: 5));
@@ -321,9 +368,9 @@ void main() {
       await expectLater(pay(withHash, metadata: null), throwsA(predicate((e) => '$e' == refused)));
     });
 
-    // ambra#285: the Sequentia name services' invoices carry a plain description and no hash yet
-    // (ambra#284); refusing them refused every name paid by LNURL.
-    test('one with a plain description and no hash is paid, as the name services make them', () async {
+    // LUD-06 no longer asks payers to check the hash, and many invoices carry none: refusing them would
+    // refuse every name whose service or wallet does not commit (ambra#285).
+    test('one with a plain description and no hash is paid', () async {
       expect((await pay(inv0)).invoice, inv0);
     });
 

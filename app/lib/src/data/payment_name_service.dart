@@ -101,7 +101,10 @@ class PaymentNameService extends ChangeNotifier {
       base: Backend.lsp,
       domain: domain,
       key: () => _key,
-      invoice: (msat) => ArkBtcService.instance.invoice(msat ~/ BigInt.from(1000)),
+      // The invoice commits to the LNURL-pay metadata the payer was served, so a payer that
+      // checks the description hash pays the name.
+      invoice: (msat, metadata) =>
+          ArkBtcService.instance.invoice(msat ~/ BigInt.from(1000), descriptionHash: metadataHash(metadata)),
       code: () async => throw StateError('the stock makes codes'),
       stockCode: _stockCode,
       nextUnused: () => nextUnused(),

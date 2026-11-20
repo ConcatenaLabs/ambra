@@ -571,8 +571,14 @@ class ArkBtcService extends ChangeNotifier {
   /// An invoice of [sats] paid into the ark. While it runs the wallet looks for its payment
   /// every [watchEvery] and claims it at once ([received] then names it); a newer invoice
   /// takes the watch over.
-  Future<String> invoice(BigInt sats) async {
-    final out = jsonDecode(await ark.arkInvoice(sats: sats)) as Map;
+  ///
+  /// With [descriptionHash] (64 hex characters) the invoice commits to that hash in place of a
+  /// memo: a payment name's, the SHA-256 of the LNURL-pay metadata its payer was served.
+  /// The wallet refuses an invoice without exactly that hash, so no other is ever handed on.
+  Future<String> invoice(BigInt sats, {String? descriptionHash}) async {
+    final out = jsonDecode(descriptionHash == null
+        ? await ark.arkInvoice(sats: sats)
+        : await ark.arkInvoiceCommitted(sats: sats, descriptionHash: descriptionHash)) as Map;
     final hash = '${out['payment_hash']}';
     final until = ((out['expires_at'] as num?)?.toInt() ?? 0) * 1000;
     _watching = hash;

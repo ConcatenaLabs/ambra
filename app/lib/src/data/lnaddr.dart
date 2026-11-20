@@ -100,6 +100,17 @@ List<int> signedDigest(String action, String domain, String name, [List<Object?>
 
 String signWith(List<int> priv, List<int> digest) => hexOf(schnorrSign(priv, digest));
 
+/// The LUD-06 metadata of a name: what the payer's wallet shows, as the raw string the payRequest
+/// carries. The service's string (lnaddr.js `lnurlMetadata`) byte for byte: JSON with no spaces.
+String lnurlMetadata(String name, String domain) => jsonEncode([
+      ['text/plain', 'Payment to $name@$domain'],
+      ['text/identifier', '$name@$domain'],
+    ]);
+
+/// The SHA-256 of a metadata string, as lowercase hex: what an invoice for it commits to in its `h`
+/// field, which payers that check an LNURL-pay invoice's description hash compare. Over the UTF-8 bytes of exactly the string served, never of a re-serialisation.
+String metadataHash(String metadata) => hexOf(sha256.convert(utf8.encode(metadata)).bytes);
+
 /// `name@domain` as LUD-16 writes it, or null for anything else. The user part of LUD-16 also
 /// takes `.` and `+`; another service's names are read with them. `lightning:` in front (either
 /// case) and BIP353's `₿name@domain` are read too.
@@ -349,10 +360,10 @@ Future<LnAddressTarget> resolveLnAddress({
 /// another service is paid this way ([resolveLnAddress]), and so is an LNURL itself
 /// ([lnurlPayUrl]); [what] names it in the words shown. With [descriptionHashOf] (an invoice's
 /// description hash, hex, or null), an invoice that carries a description hash must commit to the
-/// service's `metadata`, as LUD-06 asks: the hash is the SHA-256 of the metadata as served, so it
-/// is the invoice the payer was shown a request for. One that carries none (a plain description,
-/// as every Sequentia name service's invoice is until it can commit, ambra#284) is paid as before:
-/// refusing it would refuse every such name (ambra#285).
+/// service's `metadata`, as LUD-06 first asked of payers (its current text drops the check): the
+/// hash is the SHA-256 of the metadata as served, so it is the invoice the payer was shown a request
+/// for. One that carries none (a plain description) is paid: names on services that do not commit,
+/// and invoices of wallets made before names committed to their metadata, carry one.
 Future<LnAddressTarget> resolveLnurlPay({
   required Uri url,
   required bool btc,
@@ -406,7 +417,9 @@ Future<LnAddressTarget> resolveLnurlPay({
 ///   [base]     the service's root (the node's `/lsp`)
 ///   [domain]   the names' domain
 ///   [key]      the name key, or null while the wallet is locked
-///   [invoice]  a Bitcoin invoice of exactly the msat asked (the Bitcoin ark's)
+///   [invoice]  a Bitcoin invoice of exactly the msat asked (the Bitcoin ark's) that commits to
+///              [metadataHash] of the metadata given: the LNURL-pay metadata the service served the
+///              payer, which is [lnurlMetadata] of the name, the same string byte for byte
 ///   [code]     a receive code of the wallet's own, new for the payer
 ///   [limits]   the sats the wallet takes now, or null while it can't take any
 ///   [load]/[save] the name, per wallet
@@ -469,7 +482,7 @@ class LnAddress {
   final String base;
   final String domain;
   final ({List<int> priv, String pub})? Function() key;
-  final Future<String> Function(BigInt msat) invoice;
+  final Future<String> Function(BigInt msat, String metadata) invoice;
   final Future<String> Function() code;
   final ({BigInt min, BigInt max})? Function() limits;
   final Future<String?> Function() load;
@@ -879,7 +892,10 @@ class LnAddress {
     Map<String, Object?> body;
     try {
       if (req['kind'] == 'invoice') {
-        final pr = await invoice(BigInt.parse('${req['msat']}'));
+        // The metadata the payer was served: the name's own, never another string the service names.
+        final metadata = lnurlMetadata(n, domain);
+        if (req['metadata'] != null && req['metadata'] != metadata) throw StateError('the request names metadata of another name');
+        final pr = await invoice(BigInt.parse('${req['msat']}'), metadata);
         body = {'name': n, 'id': id, 'pr': pr, 'sig': signWith(k.priv, signedDigest('invoice', domain, n, [id, pr]))};
       } else if (req['kind'] == 'code') {
         String c;

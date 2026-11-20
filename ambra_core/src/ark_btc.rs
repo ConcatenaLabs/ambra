@@ -438,6 +438,28 @@ pub fn invoice(sats_amount: u64, description: Option<String>) -> Result<Value, V
     }))
 }
 
+/// An invoice of `sats` paid into the ark that commits to `description_hash`
+/// (64 hex characters) in its `h` field instead of carrying a memo: a payment
+/// name's, whose payer checks it against the LNURL-pay metadata it was served
+/// (if it checks the description hash). The wallet refuses an invoice without exactly that hash, which a
+/// server that cannot make one answers with. The answer is as [`invoice`]'s.
+pub fn invoice_committed(sats_amount: u64, description_hash: &str) -> Result<Value, Value> {
+    use bitcoin::hex::FromHex;
+    let bytes = <[u8; 32]>::from_hex(description_hash.trim())
+        .map_err(|_| refusal("a description hash is 64 hex characters"))?;
+    let hash = <bitcoin::hashes::sha256::Hash as bitcoin::hashes::Hash>::from_byte_array(bytes);
+    let w = wallet()?;
+    let inv = runtime()
+        .block_on(w.bolt11_invoice_with_description_hash(Amount::from_sat(sats_amount), hash, None))
+        .map_err(err)?;
+    let expires_at = inv.duration_since_epoch().as_secs() + inv.expiry_time().as_secs();
+    Ok(json!({
+        "invoice": inv.to_string(),
+        "payment_hash": PaymentHash::from(&inv).to_string(),
+        "expires_at": expires_at,
+    }))
+}
+
 // The calls below are the ones the trade composer makes of a Bitcoin Lightning
 // wallet, answered by the ark. They are the native twins of the commands of
 // the same names in arca's `bark-wasm/src/command.rs`, which the web wallet's
@@ -644,6 +666,16 @@ mod tests {
         assert_eq!(kind_of("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"), "onchain");
         assert_eq!(kind_of("hello"), "none");
         assert_eq!(kind_of(""), "none");
+    }
+
+    /// A description hash that is not 64 hex characters is refused before the
+    /// wallet is asked for anything.
+    #[test]
+    fn committed_invoice_needs_a_hash() {
+        for bad in ["", "abcd", &"ab".repeat(31), &"zz".repeat(32), &"ab".repeat(33)] {
+            let e = invoice_committed(21_000, bad).unwrap_err();
+            assert_eq!(e["error"]["message"], "a description hash is 64 hex characters", "{bad}");
+        }
     }
 
     /// Against a live ark: `ARK_SMOKE_SERVER`, `ARK_SMOKE_ESPLORA`, and a fresh
