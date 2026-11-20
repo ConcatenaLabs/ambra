@@ -573,7 +573,7 @@ class ArkBtcService extends ChangeNotifier {
   /// takes the watch over.
   ///
   /// With [descriptionHash] (64 hex characters) the invoice commits to that hash in place of a
-  /// memo: a payment name's, the SHA-256 of the LNURL-pay metadata its payer was served (LUD-06).
+  /// memo: a payment name's, the SHA-256 of the LNURL-pay metadata its payer was served.
   /// The wallet refuses an invoice without exactly that hash, so no other is ever handed on.
   Future<String> invoice(BigInt sats, {String? descriptionHash}) async {
     final out = jsonDecode(descriptionHash == null

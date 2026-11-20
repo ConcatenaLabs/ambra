@@ -441,7 +441,7 @@ pub fn invoice(sats_amount: u64, description: Option<String>) -> Result<Value, V
 /// An invoice of `sats` paid into the ark that commits to `description_hash`
 /// (64 hex characters) in its `h` field instead of carrying a memo: a payment
 /// name's, whose payer checks it against the LNURL-pay metadata it was served
-/// (LUD-06). The wallet refuses an invoice without exactly that hash, which a
+/// (if it checks the description hash). The wallet refuses an invoice without exactly that hash, which a
 /// server that cannot make one answers with. The answer is as [`invoice`]'s.
 pub fn invoice_committed(sats_amount: u64, description_hash: &str) -> Result<Value, Value> {
     use bitcoin::hex::FromHex;

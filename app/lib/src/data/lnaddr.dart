@@ -108,7 +108,7 @@ String lnurlMetadata(String name, String domain) => jsonEncode([
     ]);
 
 /// The SHA-256 of a metadata string, as lowercase hex: what an invoice for it commits to in its `h`
-/// field (LUD-06). Over the UTF-8 bytes of exactly the string served, never of a re-serialisation.
+/// field, which payers that check an LNURL-pay invoice's description hash compare. Over the UTF-8 bytes of exactly the string served, never of a re-serialisation.
 String metadataHash(String metadata) => hexOf(sha256.convert(utf8.encode(metadata)).bytes);
 
 /// `name@domain` as LUD-16 writes it, or null for anything else. The user part of LUD-16 also
@@ -360,10 +360,10 @@ Future<LnAddressTarget> resolveLnAddress({
 /// another service is paid this way ([resolveLnAddress]), and so is an LNURL itself
 /// ([lnurlPayUrl]); [what] names it in the words shown. With [descriptionHashOf] (an invoice's
 /// description hash, hex, or null), an invoice that carries a description hash must commit to the
-/// service's `metadata`, as LUD-06 asks: the hash is the SHA-256 of the metadata as served, so it
-/// is the invoice the payer was shown a request for. One that carries none (a plain description)
-/// is paid, as LUD-06 asks of payers today: names on services that do not commit, and invoices of
-/// wallets made before names committed to their metadata, carry one.
+/// service's `metadata`, as LUD-06 first asked of payers (its current text drops the check): the
+/// hash is the SHA-256 of the metadata as served, so it is the invoice the payer was shown a request
+/// for. One that carries none (a plain description) is paid: names on services that do not commit,
+/// and invoices of wallets made before names committed to their metadata, carry one.
 Future<LnAddressTarget> resolveLnurlPay({
   required Uri url,
   required bool btc,

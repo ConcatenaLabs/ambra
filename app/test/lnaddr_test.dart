@@ -368,7 +368,7 @@ void main() {
       await expectLater(pay(withHash, metadata: null), throwsA(predicate((e) => '$e' == refused)));
     });
 
-    // LUD-06 asks payers to take an invoice with a plain description and no hash: refusing it would
+    // LUD-06 no longer asks payers to check the hash, and many invoices carry none: refusing them would
     // refuse every name whose service or wallet does not commit (ambra#285).
     test('one with a plain description and no hash is paid', () async {
       expect((await pay(inv0)).invoice, inv0);
