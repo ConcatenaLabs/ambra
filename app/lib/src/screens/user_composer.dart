@@ -860,17 +860,6 @@ class _UserComposerState extends State<UserComposer> {
     return ListView(key: const ValueKey('userComposer'), padding: const EdgeInsets.fromLTRB(20, 20, 20, 24), children: [
       Text(UserWords.title, style: Theme.of(context).textTheme.headlineSmall),
       const SizedBox(height: 12),
-      if (dir != null && widget.relay != null) ...[
-        MarketView(
-            key: const ValueKey('ucMarketView'),
-            base: dir.base,
-            quote: dir.quote,
-            ticker: widget.ticker,
-            precision: widget.precision,
-            relay: widget.relay!,
-            get: widget.marketGet),
-        const SizedBox(height: 16),
-      ],
       Text(UserWords.pay, style: Theme.of(context).textTheme.labelLarge),
       Row(children: [
         _chooser('ucPay', pays, _pay, (v) {
@@ -996,6 +985,20 @@ class _UserComposerState extends State<UserComposer> {
                 }),
               ),
           ],
+      ],
+      // The chosen pair's market (its chart, price, book and recent trades) goes last, as in the web
+      // wallet's user-composer.js: the assets are chosen first, then the market of the pair they make,
+      // and a trade just sent is seen under the button rather than below the chart.
+      if (dir != null && widget.relay != null) ...[
+        const SizedBox(height: 24),
+        MarketView(
+            key: const ValueKey('ucMarketView'),
+            base: dir.base,
+            quote: dir.quote,
+            ticker: widget.ticker,
+            precision: widget.precision,
+            relay: widget.relay!,
+            get: widget.marketGet),
       ],
     ]);
   }

@@ -10,6 +10,7 @@ import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
 import '../widgets/asset_sheet.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 enum RescueMode { bump, replace, cpfp }
 
@@ -195,7 +196,7 @@ class _RescueFeeSheetState extends State<_RescueFeeSheet> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = '$e';
+          _error = _pretty(e);
           _loading = false;
         });
       }
@@ -394,7 +395,7 @@ class _RescueReplaceSheetState extends State<_RescueReplaceSheet> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = '$e';
+          _error = _pretty(e);
           _loading = false;
         });
       }
@@ -557,5 +558,5 @@ String _pretty(Object e) {
   if (low.contains('insufficient')) {
     return 'Not enough funds for the higher fee. Try a smaller fee, or pay it in another accepted asset.';
   }
-  return s.length > 200 ? '${s.substring(0, 200)}…' : s;
+  return prettyErr(s);
 }

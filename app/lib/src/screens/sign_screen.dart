@@ -9,6 +9,7 @@ import '../data/wallet_repository.dart';
 import '../rust/api.dart' as core;
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// A neutral, two-mode OpenAMP TAGGED sign card. It signs a wallet-link/login
 /// challenge (`openamp-challenge-v1`) or a document hash (`openamp-document-v1`)
@@ -126,7 +127,7 @@ class _SignScreenState extends State<SignScreen> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = plainErr(e);
       });
     }
   }
@@ -165,7 +166,7 @@ class _SignScreenState extends State<SignScreen> {
       setState(() {
         _sending = false;
         _sendOk = false;
-        _sendMsg = 'Send failed: ${e.toString().replaceFirst('Exception: ', '')}';
+        _sendMsg = 'Send failed: ${plainErr(e)}';
       });
     }
   }
@@ -335,14 +336,14 @@ class _ClassicSignCardState extends State<ClassicSignCard> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = plainErr(e);
       });
     }
   }
 
   void _copy(String text, String msg) {
     Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context).showSnackBar(ambraSnack(msg));
   }
 
   @override
@@ -468,14 +469,14 @@ class _StakerSignCardState extends State<StakerSignCard> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = plainErr(e);
       });
     }
   }
 
   void _copy(String text, String msg) {
     Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context).showSnackBar(ambraSnack(msg));
   }
 
   @override

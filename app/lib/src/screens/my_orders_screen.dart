@@ -13,6 +13,7 @@ import '../data/wallet_repository.dart';
 import '../rust/api.dart' as core;
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// The maker's own resting COVENANT orders (funded on-chain, posted to the relay),
 /// with a reclaim path.
@@ -83,7 +84,7 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
         _snack('Delisted from the relay. The locked funds are reclaimable after block ${rec.expiryLocktime}.');
       }
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) setState(() => _error = prettyErr(e));
     } finally {
       if (mounted) setState(() => _busyKey = null);
     }
@@ -142,7 +143,7 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
           : 'Order reclaimed · ${txid.substring(0, txid.length < 16 ? txid.length : 16)}…');
       await _load();
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) setState(() => _error = prettyErr(e));
     } finally {
       if (mounted) setState(() => _busyKey = null);
     }

@@ -56,6 +56,7 @@ import '../data/subswap_service.dart';
 import 'submarine_swap_screen.dart';
 import 'xchain_swap_screen.dart';
 import 'user_composer.dart';
+import '../data/pretty_error.dart';
 
 /// Estimated vByte size of a same-chain settlement tx, used to turn the optional
 /// per-vB fee rate into a fee amount. Errs generous; the fee is shown for review.
@@ -2727,7 +2728,7 @@ class _SwapTabState extends State<SwapTab> with WidgetsBindingObserver {
   /// A leg set to Leaf (developer mode; refused with the reason when the rail cannot be used yet).
   void _setLeaf(bool usable, String? why, {required bool pay}) {
     if (!usable) {
-      if (why != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(why)));
+      if (why != null) ScaffoldMessenger.of(context).showSnackBar(ambraSnack(why));
       return;
     }
     setState(() => pay ? _payRail = SettleRail.leaf : _recvRail = SettleRail.leaf);
@@ -4645,7 +4646,7 @@ class _MarketWalkReviewSheetState extends State<_MarketWalkReviewSheet> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }
@@ -4765,7 +4766,7 @@ class _PostReviewSheetState extends State<_PostReviewSheet> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }
@@ -4942,7 +4943,7 @@ class _LimitReviewSheetState extends State<_LimitReviewSheet> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }
@@ -5064,7 +5065,7 @@ class _PeggedPostReviewSheetState extends State<_PeggedPostReviewSheet> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }
@@ -5184,8 +5185,7 @@ class _PeggedTakeReviewSheetState extends State<_PeggedTakeReviewSheet> {
         } catch (_) {
           // Non-fatal: the fill already settled. Leave a note; the SBTC is redeemable.
           if (mounted) {
-            ScaffoldMessenger.of(context)
-                .showSnackBar(ambraSnack('Filled. You received SBTC (redeemable to BTC); auto-redeem will retry.'));
+            showAmbraToast(context, 'Filled. You received SBTC (redeemable to BTC); auto-redeem will retry.');
           }
         }
       }
@@ -5194,7 +5194,7 @@ class _PeggedTakeReviewSheetState extends State<_PeggedTakeReviewSheet> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }
@@ -5326,7 +5326,7 @@ class _ConfPostReviewSheetState extends State<_ConfPostReviewSheet> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }
@@ -5469,7 +5469,7 @@ class _LnTakeReviewSheetState extends State<_LnTakeReviewSheet> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }
@@ -5593,7 +5593,7 @@ class _XrSellReviewSheetState extends State<_XrSellReviewSheet> {
           setState(() {
             _busy = false;
             _status = '';
-            _error = '${e.toString().replaceFirst('Exception: ', '')}\n'
+            _error = '${prettyErr(e)}\n'
                 'If anything was locked, the swap resumes from the banner on the Swap tab.';
           });
         }
@@ -5702,7 +5702,7 @@ class _XrRecordSheetState extends State<_XrRecordSheet> {
         setState(() {
           _busy = false;
           _status = '';
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
       _checkRefund();
@@ -5808,7 +5808,7 @@ class _BridgeRunSheetState extends State<_BridgeRunSheet> {
         setState(() {
           _busy = false;
           _status = '';
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }
@@ -5892,7 +5892,7 @@ class _BridgeRecordSheetState extends State<_BridgeRecordSheet> {
         setState(() {
           _busy = false;
           _status = '';
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }

@@ -630,7 +630,7 @@ class _TxRowView extends StatelessWidget {
         final rescuedTxid = await showTxDetail(context, tx);
         if (rescuedTxid != null && context.mounted) {
           ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text('Rescue broadcast · ${rescuedTxid.substring(0, 16)}…')));
+              .showSnackBar(ambraSnack('Rescue broadcast · ${rescuedTxid.substring(0, 16)}…'));
           onRescued();
         }
       },
@@ -769,8 +769,7 @@ class _TxDetailSheet extends StatelessWidget {
     } catch (_) {/* no browser / blocked — fall through to copy */}
     if (context.mounted) {
       Clipboard.setData(ClipboardData(text: url.toString()));
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Couldn\'t open a browser; explorer link copied')));
+      showAmbraToast(context, 'Couldn\'t open a browser; explorer link copied');
     }
   }
 
@@ -819,8 +818,7 @@ class _TxDetailSheet extends StatelessWidget {
               icon: Icons.copy,
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: tx.txid));
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(const SnackBar(content: Text('Transaction id copied')));
+                showAmbraToast(context, 'Transaction id copied');
               },
             ),
             // Developer mode offers the rescues; default mode speeds up by itself.

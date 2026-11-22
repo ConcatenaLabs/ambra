@@ -13,6 +13,7 @@ import '../data/leaf_service.dart';
 import '../data/wallet_repository.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 class FaucetScreen extends StatefulWidget {
   const FaucetScreen({super.key});
@@ -190,7 +191,7 @@ class _FaucetScreenState extends State<FaucetScreen> {
         setState(() {
           _error = true;
           // The faucet's own refusal is a sentence a person can act on.
-          _status = e is FaucetRefused ? e.message : 'Faucet error: $e';
+          _status = e is FaucetRefused ? e.message : prettyErr(e);
           if (e is FaucetRefused && e.alreadyPaid) _claimed = {..._claimed, faucetLabel(asset)};
         });
       }

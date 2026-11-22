@@ -245,10 +245,13 @@ class AmbraField extends StatelessWidget {
 /// SnackBar renders dark-on-dark and anchors to the very bottom (over buttons /
 /// behind the keyboard); this floats above with a panel background and light text.
 ///
-/// It leaves after its duration even with an action: Flutter keeps a snackbar that
-/// has an action until it is tapped unless told otherwise, and every later message
-/// queues behind it, unseen.
+/// It stays as long as it takes to read, as the web wallet's toast does: 9 seconds for a short
+/// line, and a sentence longer than [kSnackLongChars] a second more for every 15 characters past
+/// it, at most 30, with an OK that closes it sooner. The web wallet keeps such a toast until OK;
+/// here it still leaves on its own, because Flutter shows one snackbar at a time and every later
+/// message would queue behind one that never left, unseen.
 SnackBar ambraSnack(String message, {SnackBarAction? action}) {
+  final long = message.length > kSnackLongChars;
   return SnackBar(
     content: Text(message, style: const TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w600)),
     backgroundColor: AmbraColors.panel,
@@ -258,10 +261,68 @@ SnackBar ambraSnack(String message, {SnackBarAction? action}) {
       borderRadius: BorderRadius.circular(14),
       side: const BorderSide(color: AmbraColors.line),
     ),
-    action: action,
+    // Tapping an action closes the snackbar, so OK needs nothing of its own.
+    action: action ?? (long ? SnackBarAction(label: 'OK', textColor: AmbraColors.amber, onPressed: () {}) : null),
     persist: false,
-    duration: Duration(seconds: action == null ? 4 : 6),
+    duration: snackDuration(message),
   );
+}
+
+/// The length past which the web wallet keeps a toast until OK (index.html `toast`).
+const kSnackLongChars = 90;
+
+/// How long a snackbar of [message] stays: see [ambraSnack].
+Duration snackDuration(String message) {
+  final past = message.length - kSnackLongChars;
+  if (past <= 0) return const Duration(seconds: 9);
+  return Duration(seconds: (9 + (past / 15).ceil()).clamp(9, 30));
+}
+
+/// A message drawn over everything, for a sheet or a dialog that is open: a snackbar goes to the
+/// screen's Scaffold, under the sheet, where nobody sees it. Same look and time as [ambraSnack];
+/// a tap closes it. The web wallet's toast is drawn the same way, over the page.
+void showAmbraToast(BuildContext context, String message) {
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
+  if (overlay == null) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(ambraSnack(message));
+    return;
+  }
+  late final OverlayEntry entry;
+  var gone = false;
+  void close() {
+    if (gone) return;
+    gone = true;
+    entry.remove();
+  }
+  entry = OverlayEntry(
+    builder: (ctx) => Positioned(
+      left: 16,
+      right: 16,
+      bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom,
+      child: SafeArea(
+        top: false,
+        child: Material(
+          key: const Key('ambra-toast'),
+          color: AmbraColors.panel,
+          elevation: 6,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: const BorderSide(color: AmbraColors.line),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: close,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Text(message, style: const TextStyle(color: AmbraColors.txt, fontWeight: FontWeight.w600)),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  overlay.insert(entry);
+  Future<void>.delayed(snackDuration(message), close);
 }
 
 /// 3-column numbered word grid for the recovery phrase.

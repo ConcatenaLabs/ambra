@@ -50,7 +50,7 @@ class _RestrictedAssetDetail extends StatelessWidget {
     } catch (_) {/* fall through to copy */}
     if (context.mounted) {
       Clipboard.setData(ClipboardData(text: url.toString()));
-      ScaffoldMessenger.of(context).showSnackBar(ambraSnack('Explorer link copied'));
+      showAmbraToast(context, 'Explorer link copied');
     }
   }
 

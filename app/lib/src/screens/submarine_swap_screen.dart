@@ -7,6 +7,7 @@ import '../data/subswap_service.dart';
 import '../data/trade_slots.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// The peer-to-peer SUBMARINE swap wizard — the mobile twin of the web wallet's reviewSubmarineP2P +
 /// startSubswapP2P (swap.js/subswap.js). A rail crossing on the BTC leg settled DIRECTLY with an
@@ -158,7 +159,7 @@ class _SubmarineSwapScreenState extends State<SubmarineSwapScreen> {
       if (mounted) {
         setState(() {
           _phase = 'error';
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }
@@ -182,7 +183,7 @@ class _SubmarineSwapScreenState extends State<SubmarineSwapScreen> {
       if (!mounted) return;
       setState(() {
         _phase = 'error';
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = prettyErr(e);
       });
     }
   }

@@ -36,6 +36,7 @@ import '../data/lnaddr.dart' show parseLnAddress, resolveLnAddress, resolveLnurl
 import '../data/confidential_pay.dart';
 import '../data/on_chain_need.dart';
 import '../data/address_payments.dart';
+import '../data/pretty_error.dart';
 
 class SendTab extends StatefulWidget {
   const SendTab({super.key, this.isActive = false});
@@ -1876,5 +1877,6 @@ String _pretty(Object e) {
   if (s.toLowerCase().contains('insufficient') || s.contains('InsufficientFunds')) {
     return 'Not enough funds to cover the amount plus the network fee. Try a smaller amount.';
   }
-  return s.length > 200 ? '${s.substring(0, 200)}…' : s;
+  final p = plainErr(s);
+  return p.length > 200 ? '${p.substring(0, 200)}…' : p;
 }
