@@ -131,7 +131,7 @@ class _StakeScreenState extends State<StakeScreen> {
     } catch (_) {}
   }
 
-  void _snack(String s) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
+  void _snack(String s) => ScaffoldMessenger.of(context).showSnackBar(ambraSnack(s));
 
   /// The tSEQ the wallet holds on the chain now.
   Future<BigInt> _onChainTseq() async {
@@ -420,7 +420,7 @@ class _StakesSectionState extends State<StakesSection> {
   }
 
   void _snack(String s) {
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(ambraSnack(s));
   }
 
   Future<void> _load() async {
@@ -656,7 +656,7 @@ class _PoolSectionState extends State<_PoolSection> {
   }
 
   void _snack(String s) {
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(ambraSnack(s));
   }
 
   Future<void> _load() async {

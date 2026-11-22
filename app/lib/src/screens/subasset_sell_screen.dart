@@ -10,6 +10,7 @@ import '../data/lsp_client.dart';
 import '../data/subasset_sell_service.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// Sub-asset SELL wizard: pay a Sequentia asset over Lightning, receive Bitcoin (testnet4) via an
 /// on-chain HTLC the wallet CLAIMS with the maker-revealed preimage.
@@ -139,7 +140,7 @@ class _SubassetSellScreenState extends State<SubassetSellScreen> {
     try {
       await body();
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) setState(() => _error = prettyErr(e));
     } finally {
       if (mounted) {
         setState(() {

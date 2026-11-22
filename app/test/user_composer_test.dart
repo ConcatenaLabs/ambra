@@ -1,6 +1,7 @@
 // Default mode's Swap tab (screens/user_composer.dart) drawn with a stand-in maker and relay:
 // both pickers open the searchable chooser, You pay and You receive are tethered both ways, Max
-// fills what is held, and the pair's market shows above You pay.
+// fills what is held, and the pair's market shows last, under the button and the trades, as in the
+// web wallet's user-composer.js.
 import 'package:ambra/src/data/user_trade.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ambra/src/screens/user_composer.dart';
@@ -82,6 +83,9 @@ void main() {
     // The market: the pair, the recent trade.
     expect(find.text('XT / YT'), findsOneWidget);
     expect(find.text('Recent trades'), findsOneWidget);
+    // The assets first, then the market of the pair they make: the chart is under Review.
+    expect(tester.getTopLeft(find.byKey(const ValueKey('ucMarketView'))).dy,
+        greaterThan(tester.getBottomLeft(find.byKey(const ValueKey('ucReview'))).dy));
 
     // You pay 40 XT -> You receive 30 YT, by itself.
     await tester.enterText(find.byKey(const ValueKey('ucAmount')), '40');

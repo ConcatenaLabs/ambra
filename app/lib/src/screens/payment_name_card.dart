@@ -6,6 +6,7 @@ import '../data/lnaddr.dart';
 import '../data/payment_name_service.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// "Your payment name": a name of the wallet's own at the node's domain, which another wallet pays
 /// in an amount it chooses, a Lightning wallet included. Default mode keeps it in Settings (the More
@@ -61,7 +62,7 @@ class _PaymentNameCardState extends State<PaymentNameCard> {
       await PaymentNameService.instance.register(want);
       _editing = false;
     } catch (e) {
-      _status = '$e';
+      _status = plainErr(e);
       _err = true;
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -79,7 +80,7 @@ class _PaymentNameCardState extends State<PaymentNameCard> {
       await PaymentNameService.instance.claimWordName();
       _editing = false;
     } catch (e) {
-      _status = '$e';
+      _status = plainErr(e);
       _err = true;
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -105,7 +106,7 @@ class _PaymentNameCardState extends State<PaymentNameCard> {
     try {
       await PaymentNameService.instance.release();
     } catch (e) {
-      _status = '$e';
+      _status = plainErr(e);
       _err = true;
     } finally {
       if (mounted) setState(() => _busy = false);

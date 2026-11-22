@@ -1,3 +1,5 @@
+import 'pretty_error.dart';
+
 /// Format an atom amount (integer string) to a human decimal string at the
 /// given asset precision, with thousands separators and trimmed trailing zeros.
 String formatAtoms(String atoms, int precision) {
@@ -39,7 +41,8 @@ String friendlyError(Object e, {bool pullToRefresh = true}) {
         ? "Couldn't reach the network. Check your connection and pull down to retry."
         : "Couldn't reach the network. Check your connection and try again.";
   }
-  final s = e.toString().replaceFirst('Exception: ', '').replaceFirst(RegExp(r'AnyhowException\(?'), '');
+  // Anything else as the web wallet's plainErr says it: a shortfall or a node's refusal in words.
+  final s = plainErr(e);
   return s.length > 160 ? '${s.substring(0, 160)}…' : s;
 }
 

@@ -7,6 +7,7 @@ import '../data/format.dart';
 import '../data/trade_receipts.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// A MULTI-OFFER cross-market BUY (gap 11): the planned sweep across the resting BTC->asset offers,
 /// best price first, executed ONE LEG AT A TIME through the proven single-offer lift path
@@ -74,7 +75,7 @@ class _CrossWalkScreenState extends State<CrossWalkScreen> {
       _status = '';
       if (!result.complete) {
         final e = result.error;
-        _error = (e == null ? 'The leg failed.' : e.toString().replaceFirst('Exception: ', ''));
+        _error = (e == null ? 'The leg failed.' : prettyErr(e));
       }
     });
   }

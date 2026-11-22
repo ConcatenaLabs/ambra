@@ -87,7 +87,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
   core.FeeAsset? _feeAssetParam(String hex) => feeAssetParam(hex, feeRateFor(_feeRates, hex)!);
 
   String _feeTicker(String hex) => SeqAssets.labelFor(hex).ticker;
-  void _snack(String s) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
+  void _snack(String s) => ScaffoldMessenger.of(context).showSnackBar(ambraSnack(s));
 
   Future<bool> _confirm({required String title, required String body, bool danger = false}) async {
     final r = await showDialog<bool>(

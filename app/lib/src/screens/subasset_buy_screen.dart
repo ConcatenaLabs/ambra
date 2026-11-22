@@ -11,6 +11,7 @@ import '../data/lsp_client.dart';
 import '../data/subasset_buy_service.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// A small BTC miner-fee headroom (sats) reserved on top of the locked amount in the affordability
 /// pre-check: funding the BTC HTLC also pays an on-chain fee, so a near-max buy that ignored it would
@@ -143,7 +144,7 @@ class _SubassetBuyScreenState extends State<SubassetBuyScreen> {
     try {
       await body();
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) setState(() => _error = prettyErr(e));
     } finally {
       if (mounted) {
         setState(() {

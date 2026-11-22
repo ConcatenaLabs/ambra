@@ -370,9 +370,7 @@ class _SecuritySetupScreenState extends State<SecuritySetupScreen> {
       if (await repo.canEnforceLock()) {
         enabled = true;
       } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text(
-                'No device screen lock found. Set a PIN, pattern, or biometrics, then enable the app lock in More.')));
+        ScaffoldMessenger.of(context).showSnackBar(ambraSnack('No device screen lock found. Set a PIN, pattern, or biometrics, then enable the app lock in More.'));
       }
     }
     await repo.persistNewWallet(widget.mnemonic);

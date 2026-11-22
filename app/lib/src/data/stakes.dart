@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../rust/api.dart' as core;
 import 'config.dart';
+import 'pretty_error.dart';
 
 /// The Sequence token this wallet holds at its staking key (m/2/0): each bonded stake
 /// under either lock a Sequentia wallet bonds with (the height lock of the web wallet
@@ -62,7 +63,7 @@ class StakeHoldings extends ChangeNotifier {
     } catch (e) {
       // The last reading stays: an explorer that is briefly away must not make the
       // stake disappear from the balance.
-      _error = '$e';
+      _error = plainErr(e);
     }
     notifyListeners();
   }

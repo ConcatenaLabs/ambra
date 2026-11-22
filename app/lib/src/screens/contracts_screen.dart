@@ -10,6 +10,7 @@ import '../data/wallet_repository.dart';
 import '../rust/api/contracts.dart' as core;
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// Prepares a spend: the ask (`{templateHash, instance, request | drip, fund?}`) in,
 /// the engine's summary out, as JSON.
@@ -74,7 +75,7 @@ class _ContractsScreenState extends State<ContractsScreen> {
       final s = jsonDecode(await _prepare(_ask.text.trim())) as Map<String, dynamic>;
       setState(() => _summary = s);
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() => _error = prettyErr(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -88,7 +89,7 @@ class _ContractsScreenState extends State<ContractsScreen> {
       final txid = await _sign(shown['digest'] as String);
       setState(() { _txid = txid; _summary = null; });
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() => _error = prettyErr(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

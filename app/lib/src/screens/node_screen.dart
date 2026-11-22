@@ -97,7 +97,7 @@ class _NodeScreenState extends State<NodeScreen> {
     if (!mounted) return;
     Navigator.of(context).pop();
     ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Node updated. Pull to refresh your balance.')));
+        .showSnackBar(ambraSnack('Node updated. Pull to refresh your balance.'));
   }
 
   Future<void> _reset() async {

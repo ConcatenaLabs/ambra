@@ -7,6 +7,7 @@ import '../data/seqob_client.dart' show CrossOffer;
 import '../data/trade_receipts.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// A cross (BTC<->asset) lift over the relay order-book courier — buy a Sequentia asset with Bitcoin
 /// against a resting cross offer. Non-custodial: fetch a LIVE quote from the maker over the E2E courier,
@@ -77,7 +78,7 @@ class _CrossLiftScreenState extends State<CrossLiftScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
           _loading = false;
         });
       }
@@ -112,7 +113,7 @@ class _CrossLiftScreenState extends State<CrossLiftScreen> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
           _quote = null; // the session is closed after a failed lift
         });
       }

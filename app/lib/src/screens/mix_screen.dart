@@ -9,6 +9,7 @@ import '../data/config.dart';
 import '../data/format.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// Mix — one round of a seqcj CoinJoin.
 ///
@@ -55,7 +56,7 @@ class _MixScreenState extends State<MixScreen> {
       if (!mounted) return;
       setState(() {
         _lanes = const [];
-        _error = 'Could not reach the mixing coordinator: $e';
+        _error = 'Could not reach the mixing coordinator. ${prettyErr(e)}';
       });
     }
   }
@@ -109,7 +110,7 @@ class _MixScreenState extends State<MixScreen> {
       setState(() {
         _busy = false;
         _phase = null;
-        _error = '$e'.replaceFirst('Bad state: ', '');
+        _error = prettyErr(e);
       });
     }
   }

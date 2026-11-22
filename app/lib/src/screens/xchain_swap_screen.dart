@@ -10,6 +10,7 @@ import '../data/xchain_swap_service.dart';
 import '../rust/api.dart' as core;
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// RESUME + REFUND surface for an in-flight cross-chain swap (BTC locked, Sequentia asset
 /// incoming). Lifts are STARTED by the order-book courier (CrossLiftScreen); this screen is
@@ -106,7 +107,7 @@ class _XchainSwapScreenState extends State<XchainSwapScreen> {
     try {
       await body();
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) setState(() => _error = prettyErr(e));
     } finally {
       if (mounted) {
         setState(() {

@@ -8,6 +8,7 @@ import '../data/lsp_client.dart';
 import '../data/wallet_cache.dart';
 import '../theme/theme.dart';
 import 'widgets.dart';
+import '../data/pretty_error.dart';
 
 /// The general (non-DEX) Lightning pay/receive cards — the mobile twins of the web wallet's
 /// "Pay a Lightning invoice" / "Receive over Lightning" cards (index.html initLnSendReceive). They
@@ -449,4 +450,4 @@ class LnPayScreen extends StatelessWidget {
   }
 }
 
-String _pretty(Object e) => e.toString().replaceFirst('Exception: ', '');
+String _pretty(Object e) => prettyErr(e);

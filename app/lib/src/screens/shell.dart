@@ -19,6 +19,7 @@ import '../data/fee_asset_rule.dart';
 import '../data/address_payments.dart';
 import '../data/format.dart';
 import '../data/home_coins.dart';
+import '../data/pretty_error.dart';
 import '../data/hidden_assets.dart';
 import '../data/lightning_to_ark.dart';
 import '../data/pay_code.dart';
@@ -1377,7 +1378,7 @@ class _BtcExitDialogState extends State<_BtcExitDialog> {
     ArkBtcService.instance.exitEstimate().then((e) {
       if (mounted) setState(() { _est = e; _busy = false; });
     }, onError: (Object e) {
-      if (mounted) setState(() { _said = 'The exit could not be priced: $e'; _busy = false; });
+      if (mounted) setState(() { _said = 'The exit could not be priced. ${prettyErr(e)}'; _busy = false; });
     });
   }
 
@@ -1420,7 +1421,7 @@ class _BtcExitDialogState extends State<_BtcExitDialog> {
                       _said = 'Exit started for ${(r['started'] as List).length} coin(s): ${_b(r['amount'])} BTC to ${e!['address']}, '
                           'about ${_b(r['cost'])} BTC in fees. It moves on by itself while the app runs.';
                     } catch (err) {
-                      _said = '$err';
+                      _said = prettyErr(err);
                       _busy = false;
                     }
                     if (mounted) setState(() {});
@@ -1807,7 +1808,7 @@ String _moveError(Object e, String ticker) {
     return 'Not enough $ticker to cover the amount plus the on-chain network fee. Move a slightly '
         'smaller amount so a little $ticker is left for the fee.';
   }
-  return msg;
+  return prettyErr(msg);
 }
 
 /// Modal: cooperatively close the user's OWN channel for a leg and pay its balance on-chain to a
@@ -1873,7 +1874,7 @@ class _CloseSheetState extends State<_CloseSheet> {
       }
       widget.onChanged?.call();
     } catch (e) {
-      if (mounted) setState(() => _error = 'Failed: ${e.toString().replaceFirst('Exception: ', '')}');
+      if (mounted) setState(() => _error = 'Failed: ${prettyErr(e)}');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -2139,7 +2140,7 @@ class _AccountKeyCardState extends State<AccountKeyCard> {
             icon: Icons.copy,
             onPressed: () {
               Clipboard.setData(ClipboardData(text: value));
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Account key copied')));
+              ScaffoldMessenger.of(context).showSnackBar(ambraSnack('Account key copied'));
             },
           ),
           // Some importers take ONE descriptor and only ever want the receive branch. Copying
@@ -2153,7 +2154,7 @@ class _AccountKeyCardState extends State<AccountKeyCard> {
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: value.split('\n').first));
                 ScaffoldMessenger.of(context)
-                    .showSnackBar(const SnackBar(content: Text('Receive descriptor copied')));
+                    .showSnackBar(ambraSnack('Receive descriptor copied'));
               },
             ),
           ],
@@ -2741,7 +2742,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = plainErr(e));
     }
   }
 
@@ -2780,7 +2781,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
 
   void _copy(String text, String msg) {
     Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context).showSnackBar(ambraSnack(msg));
   }
 
   Widget _qr(Key key, Widget picture) => Center(
@@ -3231,8 +3232,7 @@ class MoreTab extends StatelessWidget {
       // Only enable if the device can actually enforce it (has a screen lock).
       if (!await repo.canEnforceLock()) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Set up a screen lock (PIN, pattern, or biometrics) on your device first.')));
+          ScaffoldMessenger.of(context).showSnackBar(ambraSnack('Set up a screen lock (PIN, pattern, or biometrics) on your device first.'));
         }
         return;
       }
@@ -3240,7 +3240,7 @@ class MoreTab extends StatelessWidget {
       if (!await repo.authenticate(reason: 'Confirm to enable the app lock')) return;
       await repo.setLockEnabled(true);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('App lock enabled.')));
+        ScaffoldMessenger.of(context).showSnackBar(ambraSnack('App lock enabled.'));
       }
     } else {
       // Disabling the lock must require auth too, or anyone holding the unlocked

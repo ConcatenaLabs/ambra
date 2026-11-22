@@ -6,6 +6,7 @@ import '../data/ln_take_service.dart';
 import '../data/lsp_client.dart';
 import '../theme/theme.dart';
 import '../widgets/widgets.dart';
+import '../data/pretty_error.dart';
 
 /// The "Instant (Lightning)" swap rail: a pure-LN BTC<->asset trade through the
 /// hosted-SeqLN LSP (keys stay on this device, non-custodial). Distinct from the
@@ -171,7 +172,7 @@ class _LightningSwapScreenState extends State<LightningSwapScreen> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.toString().replaceFirst('Exception: ', '');
+          _error = prettyErr(e);
         });
       }
     }
