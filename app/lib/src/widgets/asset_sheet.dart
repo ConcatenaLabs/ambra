@@ -95,9 +95,17 @@ class _AssetSheetState extends State<_AssetSheet> {
       return ListTile(
         key: ValueKey('asset-row-${it.hex}'),
         title: Text(it.ticker, style: AmbraText.body),
-        subtitle: it.name != null && it.name!.isNotEmpty
-            ? Text(it.name!, style: AmbraText.sub)
-            : (it.pasted ? const Text('Unregistered asset · by its id', style: AmbraText.sub) : null),
+        subtitle: () {
+          final name = it.name != null && it.name!.isNotEmpty
+              ? it.name!
+              : (it.pasted ? 'Unregistered asset · by its id' : null);
+          final note = it.note != null && it.note!.isNotEmpty ? it.note : null;
+          if (name == null && note == null) return null;
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            if (name != null) Text(name, style: AmbraText.sub),
+            if (note != null) Text(note, key: ValueKey('asset-row-note-${it.hex}'), style: AmbraText.sub.copyWith(fontStyle: FontStyle.italic)),
+          ]);
+        }(),
         trailing: bal == null && it.value == null
             ? null
             : Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [

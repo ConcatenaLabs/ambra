@@ -14,6 +14,7 @@
 library;
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -21,6 +22,97 @@ import 'btc_lightning.dart';
 import 'user_trade_btc.dart';
 
 const String kUserBtc = 'BTC';
+
+/// How long after the engine starts the wallet's Bitcoin side is taken for still starting
+/// ([UserTradeEngine.offered], [UserTradeEngine.estimate]). The web wallet's BTC_START_MS.
+const int kBtcStartMs = 120000;
+
+/// What [UserTradeEngine.offered] answers: the assets offered for what is paid, and whether the
+/// list is not known yet ([pending]: the wallet's Bitcoin side still starting, so what only it could
+/// take is left out for now, and nobody should be told there is no market for it).
+/// The words of the library's refusal [e], whatever carries them.
+String refusalMessage(Object? e) {
+  if (e == null) return '';
+  try {
+    final m = (e as dynamic).message;
+    if (m is String) return m;
+  } catch (_) {}
+  return '$e';
+}
+
+BigInt? _digits(Object? v) => v != null && RegExp(r'^\d+$').hasMatch('$v') ? BigInt.parse('$v') : null;
+
+/// What a payment the library refused for want of funds is short by, in atoms of the asset paid:
+/// what it takes with its margins less what the wallet holds, or the operator's smallest leaf when
+/// the change would fall below it (paying that much less leaves change of at least that). Zero
+/// otherwise. The web wallet's `shortBy`.
+BigInt shortBy(String message) {
+  final s = RegExp(r'holds (\d+) of asset \S+ in live coins, and paying \d+ takes (\d+)').firstMatch(message);
+  if (s != null) {
+    final held = BigInt.parse(s.group(1)!), takes = BigInt.parse(s.group(2)!);
+    return takes > held ? takes - held : BigInt.zero;
+  }
+  final d = RegExp(r"change would be below the operator's smallest leaf in asset \S+ \((\d+) atoms\)").firstMatch(message);
+  return d != null ? BigInt.parse(d.group(1)!) : BigInt.zero;
+}
+
+/// The most the wallet can pay now of what a payment of [paying] atoms was refused for, by the
+/// library's words: [paying] less what it is short ([shortBy]). Zero when nothing can go, null for
+/// any other refusal. The web wallet's `ownShortMost`.
+BigInt? ownShortMost(String message, [BigInt? paying]) {
+  final short = shortBy(message);
+  if (short <= BigInt.zero) return null;
+  final m = RegExp(r'paying (\d+) takes').firstMatch(message);
+  final p = m != null ? BigInt.parse(m.group(1)!) : (paying ?? BigInt.zero);
+  if (p <= BigInt.zero) return null;
+  return p > short ? p - short : BigInt.zero;
+}
+
+/// The same from the refusal itself: the library's own figure (`most`) when it carries one, else
+/// from its words. The web wallet's `refusalMost`.
+BigInt? refusalMost(Object e, [BigInt? paying]) => _digits(refusalFields(e)['most']) ?? ownShortMost(refusalMessage(e), paying);
+
+/// The exact amount that pays with nothing left over, by the library's refusal (its `all`): above
+/// `most`, and the amounts between the two leave change too small to keep, so it is offered only as
+/// "all of it" (Max), never as "up to". The web wallet's `refusalAll`.
+BigInt? refusalAll(Object e) => _digits(refusalFields(e)['all']);
+
+/// What the margins of the coins a payment takes come to, by the library's refusal of it for want
+/// of them ("paying P takes T with the margins": T less P). The web wallet's `refusalMargins`.
+BigInt? refusalMargins(Object e) {
+  final m = RegExp(r'paying (\d+) takes (\d+)').firstMatch(refusalMessage(e));
+  if (m == null) return null;
+  final p = BigInt.parse(m.group(1)!), t = BigInt.parse(m.group(2)!);
+  return t >= p ? t - p : null;
+}
+
+/// What the wallet holds in live coins, by the library's refusal of a payment short of its margins:
+/// its own figure (`live`), else from its words. The web wallet's `refusalLive`.
+BigInt? refusalLive(Object e) {
+  final f = _digits(refusalFields(e)['live']);
+  if (f != null) return f;
+  final h = RegExp(r'holds (\d+) of asset \S+ in live coins').firstMatch(refusalMessage(e));
+  return h != null ? BigInt.parse(h.group(1)!) : null;
+}
+
+/// The give asked of a maker for its want to be [want] at the entry's rate: the most whose want
+/// (ceil(give × rate_num / rate_den), as the maker prices it) is not above [want]. The web wallet's
+/// `giveFor`.
+BigInt giveFor(BookEntry entry, BigInt want) => (want * entry.rateDen) ~/ entry.rateNum;
+
+class OfferedAssets with ListMixin<String> {
+  OfferedAssets(this._list, {this.pending = false});
+  final List<String> _list;
+  final bool pending;
+  @override
+  int get length => _list.length;
+  @override
+  set length(int n) => _list.length = n;
+  @override
+  String operator [](int i) => _list[i];
+  @override
+  void operator []=(int i, String v) => _list[i] = v;
+}
 
 /// How long the wallet waits for a maker to complete a swap it accepted before it cancels it.
 const int kMakerCompleteMs = 120000;
@@ -249,8 +341,17 @@ class UserWords {
   static const included = 'included above';
   static const noFees = 'No fees';
   static String upTo(String x) => 'Up to $x can be traded now.';
+  // After Max, what this trade cannot take of the asset paid (one trade takes so many coins, or no
+  // offer pays exactly the rest): it stays, the person's to trade or send after.
+  static String stays(String x) => '$x stays in your wallet, to trade or send after this one.';
+  // The wallet itself cannot pay this much with the fees: what can be traded now.
+  static String ownShort(String most) => 'You can trade up to $most now: the fees of this trade come out of what you hold. Nothing has moved.';
   static String notOffered(String get, String pay) => 'Not offered right now: nobody offers $get for $pay in one step.';
   static String notListed(String get, String pay) => '$get for $pay is not offered.';
+  // Said as soon as an asset nobody offers for what is paid is chosen, before an amount is typed;
+  // and beside it in the receive picker.
+  static String noMarket(String get, String pay) => 'There is no market for $get with $pay right now.';
+  static const noMarketRow = 'No market right now';
   static const enter = 'Enter how much you pay.';
   static const tooSmall = 'That amount is too small to trade.';
   static String noFunds(String pay) => 'You have no $pay to trade.';
@@ -333,6 +434,8 @@ class UserWords {
   // A trade whose coins settle in the operator's next round: the wait the wallet gives a round of
   // this operator ([settleMinutesOf]), stated when the settle starts.
   static String receivedWithin(int n) => 'Received, settling (within about $n min)';
+  // Past the wait stated, not yet late: the round is about to finish.
+  static const receivedDue = 'Received, settling (about to finish)';
   static const receivedSlow = 'Received, and yours to use. Settling with the network is taking longer than usual.';
   static String minutes(String word, int n) => '$word ($n min)';
   static const returned = 'Returned: nothing traded.';
@@ -377,8 +480,12 @@ class UserWords {
     included,
     noFees,
     upTo('X'),
+    stays('X'),
+    ownShort('X'),
     notOffered('YT', 'XT'),
     notListed('YT', 'XT'),
+    noMarket('YT', 'XT'),
+    noMarketRow,
     enter,
     tooSmall,
     noFunds('XT'),
@@ -418,6 +525,7 @@ class UserWords {
     btcOnItsWay,
     received,
     receivedWithin(6),
+    receivedDue,
     receivedSlow,
     minutes(sent, 3),
     returned,
@@ -485,21 +593,28 @@ String? tradeStateWord(Map r, int nowMs) {
   if (st == 'repricing') return UserWords.sent;
   final m = since(r['sentAt']);
   final held = heldAlready(r);
-  final settling = held && ((r['settleState'] as List?) ?? const []).any((x) => x != null && x != 'released');
+  final states = (r['settleState'] as List?) ?? const [];
+  // A round the library no longer lists (null, as the settle step records it) is still waited on, so
+  // it counts as settling; a trade's rounds are through only when every one is released.
+  final settling = held && states.any((x) => x != 'released');
   // Settling in a round: the wait stated, and past it by [kSettleLateMs] that it takes longer. A
   // minutes count since the trade was sent would read as a promise it is not.
   final settleMin = ms(r['settleMin']);
   if (settling && settleMin != null && settleMin > 0) {
-    final lateAt = (ms(r['settleSince']) ?? ms(r['sentAt']) ?? ms(r['at']) ?? nowMs) + settleMin * 60000 + kSettleLateMs;
-    return nowMs > lateAt ? UserWords.receivedSlow : UserWords.receivedWithin(settleMin);
+    final doneBy = (ms(r['settleSince']) ?? ms(r['sentAt']) ?? ms(r['at']) ?? nowMs) + settleMin * 60000;
+    if (nowMs > doneBy + kSettleLateMs) return UserWords.receivedSlow;
+    // Past the stated wait and not yet late: "within about 6 min" is no longer true.
+    return nowMs > doneBy ? UserWords.receivedDue : UserWords.receivedWithin(settleMin);
   }
-  if (held && r['settle'] != null && settleMin == null) return UserWords.received;
-  // Received, its settling still waiting with the network after [kSlowSettleMin] minutes: said so,
-  // the coins being the wallet's all along.
-  final String word;
+  // Received, with no wait stated: its round has not started, or it began settling before the wait
+  // was recorded. No count of minutes (it would read as a promise); after [kSlowSettleMin] since it
+  // was sent, that it takes longer, unless every round is already through.
   if (held) {
-    word = m >= kSlowSettleMin && settling ? UserWords.receivedSlow : UserWords.received;
-  } else if (r['source'] == 'btc-gateway' && r['dir'] == 'sell') {
+    final through = states.isNotEmpty && states.every((x) => x == 'released');
+    return m >= kSlowSettleMin && !through ? UserWords.receivedSlow : UserWords.received;
+  }
+  final String word;
+  if (r['source'] == 'btc-gateway' && r['dir'] == 'sell') {
     word = UserWords.btcOnItsWay;
   } else if (r['source'] == 'btc-gateway' && r['dir'] != 'sell') {
     word = r['preimage'] != null && r['posted'] == true ? UserWords.btcCollecting : UserWords.btcPaying;
@@ -828,16 +943,24 @@ class Ticket {
 }
 
 class QuoteResult {
-  QuoteResult.ok(this.ticket, this.choice, {this.moving = false}) : why = null, soon = false, ready = null, again = false, coins = const [], wait = null;
-  QuoteResult.no(this.why, {this.soon = false, this.ready, this.moving = false, this.again = false, this.coins = const [], this.wait})
+  QuoteResult.ok(this.ticket, this.choice, {this.moving = false})
+      : why = null, soon = false, ready = null, again = false, coins = const [], wait = null, most = null, all = null;
+  QuoteResult.no(this.why,
+      {this.soon = false, this.ready, this.moving = false, this.again = false, this.coins = const [], this.wait, this.most, this.all})
       : ticket = null,
         choice = null;
   final Ticket? ticket;
   final Candidate? choice;
   // not-listed | not-offered | no-funds | not-ready | busy | redoing | freeing | readying | part-ready |
-  // btc-moving | too-small | no-firm-offer | wallet-busy | opening | btc-ahead | settle-first (only
-  // inside the engine: [UserTradeEngine.quote] answers it with a ticket that settles first)
+  // btc-moving | too-small | no-firm-offer | wallet-busy | opening | btc-ahead | own-short |
+  // settle-first (only inside the engine: [UserTradeEngine.quote] answers it with a ticket that
+  // settles first)
   final String? why;
+  /// own-short: the most the wallet can pay now with the fees ([most], below which every amount
+  /// goes), and what emptying the coins pays in all, the margins in ([all], when it is more): what
+  /// Max asks for then.
+  final BigInt? most;
+  final BigInt? all;
   /// part-ready: what can be paid now.
   final BigInt? ready;
   /// BTC: more of what the wallet holds at its address is being moved where trades pay from.
@@ -1004,7 +1127,11 @@ class UserTradeEngine {
     }
   }
 
+  /// When the engine started: the wallet's Bitcoin side is taken for starting for [kBtcStartMs] after.
+  late final int _startedAt;
+
   UserTradeEngine(this.d) {
+    _startedAt = d.now();
     _btcT = BtcTrades(
       run: _run,
       btc: () => d.btc?.call(),
@@ -1435,7 +1562,33 @@ class UserTradeEngine {
       } else {
         made = null;
       }
-      for (var i = 0; i < 4; i++) {
+      // Asked for at least all the coins it takes, margins in, the trade empties them: the swap pays
+      // exactly what they keep past their margins ([aim], the library's `all`), never sized down to
+      // leave change. Learnt from the library's refusal (its `all`) or from terms it read (what they
+      // give plus their change). When no give of the maker's answers that exactly, the trade goes as
+      // it would have ([back]), and what stays is the ticket's to name. The web wallet's aim.
+      BigInt? aim, back;
+      var aimed = 0, tries = 4;
+      BigInt? aimAt(BigInt? all, BigInt? margins) {
+        if (all == null || margins == null || all <= BigInt.zero || all + margins > limit || aimed > 0) return null;
+        final g = giveFor(e, all);
+        return g >= e.minReceive && g <= e.maxReceive && g > BigInt.zero ? all : null;
+      }
+
+      void startAim(BigInt all, BigInt fallback) {
+        back = fallback;
+        aim = all;
+        aimed = 1;
+        tries += 3;
+        give = giveFor(e, all);
+      }
+
+      void dropAim() {
+        aim = null;
+        give = back ?? give;
+      }
+
+      for (var i = 0; i < tries; i++) {
         Map<String, dynamic> o;
         if (i == 0 && made != null) {
           o = made;
@@ -1461,12 +1614,59 @@ class UserTradeEngine {
             return null;
           }
         }
+        // Aiming at the exact amount: a maker's want off it by its rounding (or its ladder) is asked
+        // again with the give moved by the difference, twice at most; then the trade goes as it would.
+        final want = o['want'] == null ? null : _big(o['want']);
+        if (aim != null && want != null && want != aim) {
+          await _releaseNow(e.maker, '${o['swap']}');
+          final diff = aim! - want;
+          if (aimed >= 3) {
+            d.log('[user trade] no give of this maker pays exactly $aim');
+            dropAim();
+          } else {
+            aimed++;
+            if (diff > BigInt.zero) {
+              final step = (diff * e.rateDen) ~/ e.rateNum;
+              give += step > BigInt.zero ? step : BigInt.one;
+            } else {
+              final step = _ceilDiv(-diff * e.rateDen, e.rateNum);
+              give -= step > BigInt.zero ? step : BigInt.one;
+            }
+            if (give < e.minReceive || give <= BigInt.zero || give > e.maxReceive) dropAim();
+          }
+          if (give < e.minReceive || give <= BigInt.zero) return null;
+          continue;
+        }
         Map t;
         try {
           t = (await _run('swap_read', {'offer': o['offer']})) as Map;
         } catch (err) {
           d.log('[user trade] swap_read: $err');
           _noteLiveShort(err);
+          // The amount asked takes all the coins it can and more: the swap pays what they keep (`all`).
+          final all = aimAt(refusalAll(err), refusalMargins(err) ?? _ownMargins);
+          if (all != null) {
+            await _releaseNow(e.maker, '${o['swap']}');
+            final most = refusalMost(err);
+            startAim(all, most != null && most > BigInt.zero ? giveFor(e, most) : give - BigInt.one);
+            continue;
+          }
+          if (aim != null) {
+            await _releaseNow(e.maker, '${o['swap']}');
+            dropAim();
+            if (give < e.minReceive || give <= BigInt.zero) return null;
+            continue;
+          }
+          // Paying that much would take all the wallet holds, with the margins its transactions leave
+          // for their fees, or leave change below the operator's smallest leaf: asked again for less,
+          // by what is missing.
+          final over = shortBy(refusalMessage(err));
+          if (over > BigInt.zero && i < tries - 1) {
+            await _releaseNow(e.maker, '${o['swap']}');
+            give = give - _ceilDiv(over * e.rateDen, e.rateNum) - BigInt.one;
+            if (give < e.minReceive) return null;
+            continue;
+          }
           release(e.maker, '${o['swap']}');
           return null;
         }
@@ -1475,6 +1675,15 @@ class UserTradeEngine {
           return null;
         }
         final spend = _big((t['gives'] as Map)['value']) + _big((t['pays'] as Map)['margins']);
+        // Terms that leave change while what was asked covers the coins they take whole: the swap
+        // pays them all instead (what it gives plus its change), with nothing left behind.
+        final kept = _big((t['change'] as Map?)?['value']);
+        final whole = kept > BigInt.zero ? aimAt(_big((t['gives'] as Map)['value']) + kept, _big((t['pays'] as Map)['margins'])) : null;
+        if (whole != null) {
+          await _releaseNow(e.maker, '${o['swap']}');
+          startAim(whole, give);
+          continue;
+        }
         if (spend > limit) {
           await _releaseNow(e.maker, '${o['swap']}');
           give = give - _ceilDiv((spend - limit) * e.rateDen, e.rateNum) - BigInt.one;
@@ -1524,24 +1733,35 @@ class UserTradeEngine {
 
   /// What can be received for [pay] in one step now: each admitted pair's asset that some source
   /// in the book offers, whatever the wallet holds. BTC counts only with the wallet's Bitcoin
-  /// Lightning (the desk pays it there). The web wallet's `offered`.
-  Future<List<String>> offered(String pay) async {
+  /// Lightning (the desk pays it there). While that Lightning is not up yet (a wallet just opened)
+  /// and an offer needs it, the list is [OfferedAssets.pending]: what it leaves out may be offered in
+  /// a moment. The web wallet's `offered`.
+  Future<OfferedAssets> offered(String pay) async {
     final ad = await d.admitted();
     final chain = (ad.pairs?['chains'] as Map?)?[ad.genesis];
     final pairs = [
       for (final p in ((chain is Map ? chain['pairs'] : null) as List?) ?? const [])
         if (p is Map && p['pay'] == pay && p['receive'] != pay && ((p['sources'] as List?) ?? const []).isNotEmpty) p,
     ];
+    var pending = false;
     final found = await Future.wait(pairs.map((p) async {
       try {
-        final es = await _entries(pay, '${p['receive']}', [for (final s in p['sources'] as List) '$s']);
-        return es.any((e) => e.source != 'btc-gateway' || _btc != null) ? '${p['receive']}' : null;
+        final sources = [for (final s in p['sources'] as List) '$s'];
+        final es = await _entries(pay, '${p['receive']}', sources);
+        if (es.any((e) => e.source != 'btc-gateway' || _btc != null)) return '${p['receive']}';
+        if (_btcStarting(sources)) pending = true;
+        return null;
       } catch (_) {
         return null;
       }
     }));
-    return {for (final f in found) ?f}.toList();
+    return OfferedAssets({for (final f in found) ?f}.toList(), pending: pending);
   }
+
+  /// Whether [sources] need the wallet's Bitcoin side and it is still starting: the engine started
+  /// less than [kBtcStartMs] ago and that side is not up. Past it, a side that never came up is no
+  /// longer waited for.
+  bool _btcStarting(List<String> sources) => _btc == null && sources.contains('btc-gateway') && d.now() - _startedAt < kBtcStartMs;
 
   final _estimates = <String, ({int at, List<BookEntry> es})>{};
 
@@ -1557,7 +1777,8 @@ class UserTradeEngine {
     final ad = await d.admitted();
     final sources = admittedSources(ad.pairs, ad.genesis, pay, receive);
     if (sources.isEmpty) return const Estimate.no('not-listed');
-    final key = '$pay>$receive';
+    // Entries read before the wallet's Bitcoin side was up lack what only it can take: kept apart.
+    final key = '$pay>$receive${_btc == null ? '|no-btc' : ''}';
     var c = _estimates[key];
     if (c == null || d.now() - c.at > 8000) {
       List<BookEntry> es;
@@ -1570,7 +1791,9 @@ class UserTradeEngine {
       _estimates[key] = c;
     }
     final es = c.es.where((e) => (e.source != 'btc-gateway' || _btc != null) && e.maxReceive > BigInt.zero).toList();
-    if (es.isEmpty) return Estimate.no('not-offered', again: offeredAgain(pay, receive));
+    // Offers only the wallet's Bitcoin side can take, while it is still starting (a wallet just
+    // opened): not "not offered", but a price that takes a moment, asked again by itself.
+    if (es.isEmpty) return Estimate.no('not-offered', again: offeredAgain(pay, receive) || _btcStarting(sources));
     ({BigInt receive, BigInt pay})? most;
     for (final e in es) {
       if (most == null || e.maxReceive > most.receive) most = (receive: e.maxReceive, pay: _ceilDiv(e.maxReceive * e.rateNum, e.rateDen));
@@ -1618,7 +1841,22 @@ class UserTradeEngine {
   /// does not read), with the coins it named and the longest wait it gave: the trade settles them
   /// first, and goes.
   ({List<String> coins, Map<String, dynamic>? wait})? _settleSeen;
+
+  /// The wallet's own shortfall a source's check met in this quote: the most it could pay
+  /// ([_ownMost]), what it holds in live coins by the refusal ([_ownLive]), the margins its words
+  /// name ([_ownMargins]), and what emptying the coins pays in all, the margins in ([_ownAll]): the
+  /// person's figure is all-in everywhere. The web wallet's `ownMost`, `ownLive`, `ownAll`, `ownMargins`.
+  BigInt? _ownMost, _ownLive, _ownAll, _ownMargins;
+
   void _noteLiveShort(Object err) {
+    final most = refusalMost(err);
+    if (most != null && (_ownMost == null || most > _ownMost!)) _ownMost = most;
+    final m = refusalMargins(err);
+    if (m != null) _ownMargins = m;
+    final all = refusalAll(err);
+    if (all != null && _ownMargins != null && (_ownAll == null || all + _ownMargins! > _ownAll!)) _ownAll = all + _ownMargins!;
+    final live = refusalLive(err);
+    if (live != null) _ownLive = live;
     if ('$err'.contains(' in live coins')) _liveShort = true;
     if (refusalKind(err) == 'settle_first') {
       final f = refusalFields(err);
@@ -1895,6 +2133,10 @@ class UserTradeEngine {
     _tooOldFrom = null;
     _liveShort = false;
     _settleSeen = null;
+    _ownMost = null;
+    _ownLive = null;
+    _ownAll = null;
+    _ownMargins = null;
     if (amount <= BigInt.zero) return QuoteResult.no('too-small');
     final ad = await d.admitted();
     final sources = admittedSources(ad.pairs, ad.genesis, pay, receive);
@@ -2029,9 +2271,19 @@ class UserTradeEngine {
     // the asset not live now (just received, being settled): settled first, then priced again and
     // traded, never "nobody could confirm".
     final settleSeen = _settleSeen;
-    if (best == null && (settleSeen != null || _liveShort) && pay != kUserBtc) {
-      return QuoteResult.no('settle-first', coins: settleSeen?.coins ?? const [], wait: settleSeen?.wait);
+    if (best == null && settleSeen != null && pay != kUserBtc) {
+      return QuoteResult.no('settle-first', coins: settleSeen.coins, wait: settleSeen.wait);
     }
+    // Nobody gave firm terms because the wallet itself cannot pay this much with the fees, and the
+    // balance shows nothing more of it on its way: what can be traded now, never "nobody could
+    // confirm" nor "try again". Coins it holds that are not live now are being made ready instead:
+    // the refusal's live figure is short of what it holds. The web wallet's `own-short`.
+    final ownMost = _ownMost, ownAll = _ownAll;
+    if (best == null && ownMost != null && pay != kUserBtc && (_ownLive == null || _ownLive! >= have)) {
+      final shown = await _heldNow(pay);
+      if (shown <= have) return QuoteResult.no('own-short', most: ownMost, all: ownAll != null && ownAll > ownMost ? ownAll : null);
+    }
+    if (best == null && _liveShort && pay != kUserBtc) return QuoteResult.no('settle-first');
     if (best == null) {
       return QuoteResult.no(es.isEmpty ? 'not-offered' : (ind.isNotEmpty ? 'no-firm-offer' : 'too-small'), again: es.isEmpty && offeredAgain(pay, receive));
     }

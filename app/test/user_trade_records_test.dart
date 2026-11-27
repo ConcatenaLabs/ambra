@@ -109,10 +109,48 @@ void main() {
     };
     expect(tradeStateWord(rec, t0 + 60000), UserWords.receivedWithin(6));
     expect(UserWords.receivedWithin(6), 'Received, settling (within about 6 min)');
-    expect(tradeStateWord(rec, t0 + 6 * 60000 + kSettleLateMs), UserWords.receivedWithin(6));
+    expect(tradeStateWord(rec, t0 + 6 * 60000), UserWords.receivedWithin(6), reason: 'at the stated wait');
+    // Past the stated wait and not yet late: "within about 6 min" is no longer true (web #821).
+    expect(tradeStateWord(rec, t0 + 7 * 60000), UserWords.receivedDue);
+    expect(tradeStateWord(rec, t0 + 6 * 60000 + kSettleLateMs), UserWords.receivedDue);
     expect(tradeStateWord(rec, t0 + 6 * 60000 + kSettleLateMs + 1), UserWords.receivedSlow);
-    // A settle started before the wait was recorded: no count of minutes, which reads as a promise.
-    expect(tradeStateWord({...rec}..remove('settleMin'), t0 + 3 * 60000), UserWords.received);
+    expect(forbiddenIn(UserWords.receivedDue), isEmpty);
+    // A settle started before the wait was recorded: no count of minutes, which reads as a promise,
+    // and still that it takes longer after kSlowSettleMin (web #819).
+    final old = {...rec}..remove('settleMin');
+    expect(tradeStateWord(old, t0 + 3 * 60000), UserWords.received);
+    expect(tradeStateWord(old, t0 + kSlowSettleMin * 60000 + 1), UserWords.receivedSlow);
+  });
+
+  test('before its round starts a received trade counts no minutes, and says it takes longer in time (web #820)', () {
+    const t0 = 1000000;
+    final r = {'source': 'leaf-maker', 'swapState': 'done', 'state': 'sent', 'at': t0, 'sentAt': t0};
+    expect(tradeStateWord(r, t0 + 3 * 60000), UserWords.received);
+    expect(tradeStateWord(r, t0 + 9 * 60000), UserWords.received);
+    expect(tradeStateWord(r, t0 + kSlowSettleMin * 60000 + 1), UserWords.receivedSlow);
+  });
+
+  test('a round the library no longer lists still counts as settling, with or without a stated wait', () {
+    const t0 = 1000000;
+    for (final st in [
+      [null],
+      ['released', null]
+    ]) {
+      final old = {
+        'source': 'leaf-maker',
+        'swapState': 'done',
+        'state': 'sent',
+        'at': t0,
+        'sentAt': t0,
+        'settle': {'participations': ['p']},
+        'settleState': st,
+      };
+      expect(tradeStateWord(old, t0 + kSlowSettleMin * 60000 + 1), UserWords.receivedSlow, reason: 'no wait stated, $st');
+      final r = {...old, 'settleMin': 6, 'settleSince': t0};
+      expect(tradeStateWord(r, t0 + 3 * 60000), UserWords.receivedWithin(6), reason: 'stated wait, $st');
+      expect(tradeStateWord(r, t0 + 7 * 60000), UserWords.receivedDue, reason: 'past the wait, $st');
+      expect(tradeStateWord(r, t0 + 6 * 60000 + kSettleLateMs + 1), UserWords.receivedSlow, reason: 'late, $st');
+    }
   });
 
   test('the wallet\'s figure for a round: 6 minutes on the testnet, longer for a deeper anchor', () {

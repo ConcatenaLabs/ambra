@@ -652,8 +652,9 @@ void main() {
     // Paying the BTC, then paid and handed on: what was bought is collected even if the app closes.
     expect(tradeStateWord({'state': 'sent', 'source': 'btc-gateway', 'dir': 'buy', 'sentAt': t}, t), UserWords.btcPaying);
     expect(tradeStateWord({'state': 'sent', 'source': 'btc-gateway', 'dir': 'buy', 'preimage': p, 'posted': true, 'sentAt': t}, t), UserWords.btcCollecting);
+    // Received: no count of minutes, which would read as a promise (web #820).
     expect(tradeStateWord({'state': 'sent', 'source': 'btc-gateway', 'dir': 'buy', 'preimage': p, 'receiveState': 'received', 'sentAt': t - 120000}, t),
-        '${UserWords.received} (2 min)');
+        UserWords.received);
     expect(tradeStateWord({'state': 'sent', 'source': 'leaf-maker', 'sentAt': t}, t), UserWords.sent);
     expect(tradeStateWord({'state': 'returned', 'feesPaid': [{'asset': x, 'atoms': '1'}]}, t), isNull);
     expect(tradeStateWord({'state': 'settled'}, t), UserWords.settled);

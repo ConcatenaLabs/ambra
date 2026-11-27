@@ -247,16 +247,25 @@ class SiteOrders {
     } catch (_) {}
   }
 
+  /// The words for a refusal, as the web wallet's site-orders.js `refusal` says them. A reason this
+  /// list does not know is never told as the amount's fault.
   String _refusal(QuoteResult q, String pay, String get) => switch (q.why) {
         'not-listed' => UserWords.notListed(_tick(get), _tick(pay)),
-        'not-offered' => UserWords.notOffered(_tick(get), _tick(pay)),
+        'not-offered' => q.again ? UserWords.offeredAgain(_tick(get), _tick(pay)) : UserWords.notOffered(_tick(get), _tick(pay)),
         'no-funds' => UserWords.noFunds(_tick(pay)),
         'not-ready' => UserWords.notReady(_tick(pay), q.soon),
-        'busy' => UserWords.busy(_tick(pay)),
-        'part-ready' => UserWords.moreThanHeld(_fmt(pay, q.ready)),
         'redoing' => UserWords.redoing(_tick(pay)),
+        'busy' => UserWords.busy(_tick(pay)),
         'freeing' => UserWords.freeing(_tick(pay), q.soon),
-        _ => UserWords.tooSmall,
+        'readying' => UserWords.readying(_tick(pay), q.soon),
+        // More than the wallet holds, nothing of it on its way: the whole of it, named.
+        'part-ready' => UserWords.moreThanHeld(_fmt(pay, q.ready)),
+        'too-small' => UserWords.tooSmall,
+        'own-short' => UserWords.ownShort(_fmt(pay, q.most)),
+        'no-firm-offer' => UserWords.noFirmOffer,
+        'wallet-busy' => UserWords.walletBusy,
+        'btc-ahead' => UserWords.btcAhead,
+        _ => UserWords.failed,
       };
 
   /// One trade of the engine for the order: a sale pays its amount; a purchase pays what the book
