@@ -380,8 +380,9 @@ void main() {
     final rec = {'source': 'leaf-maker', 'state': 'sent', 'sentAt': 0, 'swapState': 'done'};
     // One word for a received trade on every surface, with no promise of a time (#167).
     expect(tradeStateWord(rec, 30000), UserWords.received);
-    expect(tradeStateWord(rec, 3 * 60000), '${UserWords.received} (3 min)');
-    expect(tradeStateWord({...rec, 'settleState': ['pending']}, 12 * 60000), '${UserWords.receivedSlow} (12 min)');
+    // No count of minutes for a received trade (web #820): it would read as a promise.
+    expect(tradeStateWord(rec, 3 * 60000), UserWords.received);
+    expect(tradeStateWord({...rec, 'settleState': ['pending']}, 12 * 60000), UserWords.receivedSlow);
     for (final w in UserWords.all()) {
       expect(w, isNot(contains('minute or two) ')), reason: w);
       expect(w.contains('Settled after') || w.contains('Settled in'), isFalse, reason: w);

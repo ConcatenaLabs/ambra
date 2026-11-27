@@ -32,6 +32,7 @@ class AssetPickerItem {
     this.offered = false,
     this.tradable = false,
     this.value,
+    this.note,
   });
   final String hex;
   final String ticker;
@@ -47,6 +48,9 @@ class AssetPickerItem {
 
   /// The row's value in the reference currency, in words ("≈ \$12.40"), under its balance.
   final String? value;
+
+  /// A dim line under the name ("No market right now"), as the web wallet's picker row `note`.
+  final String? note;
 }
 
 /// The chooser's words: the same in every wallet (the web wallet's `PICKER_WORDS`,

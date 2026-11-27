@@ -244,6 +244,24 @@ void main() {
         throwsA(isA<SiteRefusal>().having((x) => x.message, 'm', SiteWords.priceNotMet)));
   });
 
+  // ambra#267: each refusal is said in the web wallet's site-orders.js words, and one this list does
+  // not know is never told as the amount's fault.
+  test('a site hears each refusal in the Trade tab\'s words', () async {
+    for (final (r, words) in [
+      (QuoteResult.no('btc-ahead'), UserWords.btcAhead),
+      (QuoteResult.no('not-offered', again: true), UserWords.offeredAgain('USDX', 'GOLD')),
+      (QuoteResult.no('own-short', most: u * BigInt.from(4)), UserWords.ownShort('4 GOLD')),
+      (QuoteResult.no('wallet-busy'), UserWords.walletBusy),
+      (QuoteResult.no('no-firm-offer'), UserWords.noFirmOffer),
+      (QuoteResult.no('something-new'), UserWords.failed),
+    ]) {
+      final e = FakeEngine()..answer = (_, _) => r;
+      final s = make(e, FakeLeaves());
+      await expectLater(s.quote({'type': 'market', 'base': b, 'quote': q, 'side': 'sell', 'amount': '5'}, 'o'),
+          throwsA(isA<SiteRefusal>().having((x) => x.message, 'm', words)), reason: '${r.why}');
+    }
+  });
+
   test('an order is recorded before the library is asked: one whose app closed mid-placement is still the site\'s', () async {
     final e = FakeEngine(), l = FakeLeaves();
     final placing = Completer<void>();

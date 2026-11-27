@@ -290,6 +290,12 @@ class UserComposer extends StatefulWidget {
 const int kReadyRetryMs = 20000;
 const int kReadyTries = 90;
 
+/// While the book's offers are not known yet (the wallet's Bitcoin side still starting), they are
+/// asked again this often, this many times at most: two minutes. The web wallet's
+/// OFFERS_PENDING_MS and OFFERS_PENDING_TRIES.
+const int kOffersPendingMs = 5000;
+const int kOffersPendingTries = 24;
+
 /// How long Confirm waits for the trade's step before the screen is free again: after it, the trade
 /// goes on in Open as "Sending…", and the person can leave and come back.
 const Duration kConfirmShownFor = Duration(milliseconds: 1500);
@@ -314,12 +320,28 @@ class _UserComposerState extends State<UserComposer> {
   String? _note, _error;
   List<Map<String, dynamic>> _trades = [];
   List<String> _admitted = [];
-  ({String pay, List<String> list, int at})? _offered;
+  /// The book's offers for what is paid. `failed`: they could not be read, or are not known yet
+  /// (the wallet's Bitcoin side still starting), so nothing is said about a market from them.
+  ({String pay, List<String> list, int at, bool failed})? _offered;
   bool _offeredLoading = false;
-  Timer? _timer, _estTimer, _refresh, _readyTimer;
+  int _offeredTries = 0;
+  Timer? _timer, _estTimer, _refresh, _readyTimer, _offeredTimer;
   int _estSeq = 0, _readyTries = 0;
   /// BTC is being moved for the ticket shown, beyond what it pays now.
   bool _moving = false;
+  /// Max asked for all of [_maxOf], the fees in (the person's figure is all-in): cleared by anything
+  /// typed or chosen. [_maxAgain]: the exact amount that empties the coins was priced once already.
+  /// [_stays]: what one trade could not take, named on the ticket. The web wallet's S.maxed,
+  /// S.maxOf, S.maxAgain and S.stays.
+  bool _maxed = false, _maxAgain = false;
+  BigInt? _maxOf;
+  BigInt _stays = BigInt.zero;
+
+  /// The ticket and the candidate shown, for a test to read what the screen draws from.
+  @visibleForTesting
+  Ticket? get ticketForTest => _ticket;
+  @visibleForTesting
+  Candidate? get choiceForTest => _choice;
   /// Restored from [UserComposer.draftKey]: until it is, nothing is kept over what was there.
   bool _restored = false;
 
@@ -439,6 +461,7 @@ class _UserComposerState extends State<UserComposer> {
     _timer?.cancel();
     _estTimer?.cancel();
     _refresh?.cancel();
+    _offeredTimer?.cancel();
     _amount.dispose();
     _receive.dispose();
     _amountFocus.dispose();
@@ -464,22 +487,46 @@ class _UserComposerState extends State<UserComposer> {
     if (_offered != null && _offered!.pay == pay && DateTime.now().millisecondsSinceEpoch - _offered!.at < 60000) return;
     _offeredLoading = true;
     List<String> list = const [];
+    var failed = false, pending = false;
     try {
-      list = await widget.engine.offered(pay);
+      final o = await widget.engine.offered(pay);
+      list = o;
+      pending = o.pending;
     } catch (e) {
+      failed = true;
       debugPrint('[user composer] offers: $e');
     }
     _offeredLoading = false;
     if (!mounted) return;
-    setState(() => _offered = (pay: pay, list: list, at: DateTime.now().millisecondsSinceEpoch));
+    // A list not known yet (the wallet's Bitcoin side still starting) is asked again shortly, for
+    // two minutes at most: a wallet whose Bitcoin side never starts is not asked forever.
+    _offeredTries = pending ? _offeredTries + 1 : 0;
+    setState(() => _offered = (pay: pay, list: list, at: pending ? 0 : DateTime.now().millisecondsSinceEpoch, failed: failed || pending));
+    _offeredTimer?.cancel();
+    if (pending && pay == _pay && _offeredTries < kOffersPendingTries) {
+      _offeredTimer = Timer(const Duration(milliseconds: kOffersPendingMs), () {
+        if (mounted) _loadOffered();
+      });
+    }
     if (pay != _pay) {
       _loadOffered();
-    } else if (!_getChosen && _ticket == null && !_busy) {
-      final was = _get;
-      setState(() => _get = _defaultGet(_getList()));
-      if (_get != was) _schedule(0);
+    } else if (_ticket == null && !_busy) {
+      if (!_getChosen) setState(() => _get = _defaultGet(_getList()));
+      // The offers just read may say there is no market for what is chosen: said now.
+      _schedule(0);
     }
   }
+
+  /// Whether the book is known to offer nothing for [h] paid with what is paid now: only once the
+  /// offers for it were read (and not when reading them failed or they are not known yet). No
+  /// request of its own: the offers are read anyway. The web wallet's `noMarket`.
+  bool _noMarket(String? h) {
+    final o = _offered;
+    if (h == null || h == _pay || o == null || o.pay != _pay || _offeredLoading || o.failed) return false;
+    return !o.list.contains(h);
+  }
+
+  String? _marketNote() => _noMarket(_get) ? UserWords.noMarket(widget.ticker(_get!), widget.ticker(_pay!)) : null;
 
   void _reset() {
     _ticket = null;
@@ -487,6 +534,7 @@ class _UserComposerState extends State<UserComposer> {
     _note = null;
     _error = null;
     _moving = false;
+    _stays = BigInt.zero;
   }
 
   /// ⇅: the two sides change places, each amount riding with its asset (the web wallet's flip):
@@ -504,6 +552,7 @@ class _UserComposerState extends State<UserComposer> {
       _get = p;
       _payChosen = true;
       _getChosen = true;
+      _maxed = false;
       _amount.text = r;
       _receive.text = a;
       _fixed = _fixed == 'pay' ? 'receive' : 'pay';
@@ -546,10 +595,13 @@ class _UserComposerState extends State<UserComposer> {
     final otherFocus = typedPay ? _receiveFocus : _amountFocus;
     if (atoms == null || atoms <= BigInt.zero) {
       if (!otherFocus.hasFocus) other.text = '';
-      setState(() => _note = null);
+      setState(() => _note = _marketNote());
       return;
     }
     final seq = ++_estSeq;
+    // No market for the pair: said at once, while the book's own answer is asked.
+    final market = _marketNote();
+    if (market != null) setState(() => _note = market);
     final e = await widget.engine.estimate(pay: pay, receive: get, payAtoms: typedPay ? atoms : null, receiveAtoms: typedPay ? null : atoms);
     if (!mounted || seq != _estSeq || _ticket != null || pay != _pay || get != _get) return;
     setState(() {
@@ -596,6 +648,7 @@ class _UserComposerState extends State<UserComposer> {
     });
     final t0 = DateTime.now();
     var again = false, againSoon = false;
+    BigInt? allOf;
     try {
       // The engine answers within its own deadline; this guards a wait on anything else.
       var late = false;
@@ -621,9 +674,22 @@ class _UserComposerState extends State<UserComposer> {
           _choice = q.choice;
           _moving = q.moving;
           _readyTries = 0;
+          // After Max: the amount is what the trade pays in all, and what it could not take stays,
+          // named on the ticket.
+          final paid = q.ticket!.amountIn;
+          if (_maxed && _fixed == 'pay' && _maxOf != null && q.ticket!.payAsset == pay && paid < _maxOf!) {
+            _stays = _maxOf! - paid;
+            _amount.text = formatAtoms('$paid', widget.precision(pay));
+          }
+        } else if (q.why == 'own-short' && q.all != null && _maxed && !_maxAgain && _fixed == 'pay' && q.all! < atoms) {
+          // Max asked for all of it and no trade takes that much: what emptying the coins pays in all
+          // (the engine's `all`, the fees in) is priced, once.
+          _maxAgain = true;
+          allOf = q.all;
         } else {
           final p = widget.ticker(pay), g = widget.ticker(get);
           _error = switch (q.why) {
+            'own-short' => UserWords.ownShort(_amt(pay, q.most ?? BigInt.zero)),
             'no-funds' => UserWords.noFunds(p),
             'not-ready' => UserWords.notReady(p, q.soon),
             'busy' => UserWords.busy(p),
@@ -663,6 +729,11 @@ class _UserComposerState extends State<UserComposer> {
     }
     if (again && mounted) _readyAgain();
     if (againSoon && mounted) _readyAgain(kOfferedAgainEveryMs);
+    final all = allOf;
+    if (all != null && mounted) {
+      _amount.text = formatAtoms('$all', widget.precision(pay));
+      return _review();
+    }
   }
 
   /// Trade: the step is taken in the background. If it is not done within [kConfirmShownFor], the
@@ -783,6 +854,7 @@ class _UserComposerState extends State<UserComposer> {
                     offered: offered.contains(h),
                     tradable: tradable.contains(h),
                     value: widget.held(h) > BigInt.zero ? widget.refValue?.call(h, widget.held(h)) : null,
+                    note: key == 'ucGet' && _noMarket(h) ? UserWords.noMarketRow : null,
                   ),
               ];
               final picked = await showAssetSheet(context,
@@ -812,6 +884,7 @@ class _UserComposerState extends State<UserComposer> {
             prefixText: _fixed != side && _ticket == null && c.text.trim().isNotEmpty ? '${UserWords.about} ' : null),
         onChanged: (_) {
           _fixed = side;
+          _maxed = false;
           setState(() {
             _error = null;
             if (_ticket != null) _reset();
@@ -867,6 +940,7 @@ class _UserComposerState extends State<UserComposer> {
             _wantPay = null;
             _wantGet = null;
             _pay = v;
+            _maxed = false;
             _payChosen = true;
             _getChosen = false;
             _get = null;
@@ -886,8 +960,13 @@ class _UserComposerState extends State<UserComposer> {
               onPressed: _busy || widget.held(_pay!) <= BigInt.zero
                   ? null
                   : () {
+                      // Max asks for all of it, the fees in: the trade empties the coins, and the
+                      // ticket's You pay is that same figure, or names what one trade could not take.
                       _amount.text = formatAtoms('${widget.held(_pay!)}', widget.precision(_pay!));
                       _fixed = 'pay';
+                      _maxed = true;
+                      _maxOf = widget.held(_pay!);
+                      _maxAgain = false;
                       setState(() {
                         if (_ticket != null) _reset();
                       });
@@ -937,6 +1016,8 @@ class _UserComposerState extends State<UserComposer> {
               key: const ValueKey('ucWait'),
               style: Theme.of(context).textTheme.bodySmall),
         if (t.upTo != null) Text(UserWords.upTo(_amt(t.payAsset, t.upTo!)), key: const ValueKey('ucUpTo')),
+        // After Max, what one trade could not take: named, never left unsaid.
+        if (_stays > BigInt.zero) Text(UserWords.stays(_amt(t.payAsset, _stays)), key: const ValueKey('ucStays')),
         if (_moving) Text(UserWords.btcMore(widget.engine.btcMoveBlocks), key: const ValueKey('ucMoving')),
         const SizedBox(height: 12),
       ],
